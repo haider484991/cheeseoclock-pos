@@ -16,7 +16,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { AuthenticatedUser, ReportShiftLine, ReportTeamTab, Shift, UUID } from '@cheeseoclock/shared-types';
+import type { AuthenticatedUser, CashCount, ReportShiftLine, ReportTeamTab, Shift, UUID } from '@cheeseoclock/shared-types';
 import { ToastProvider } from '../../components/toast/ToastProvider';
 import { presetSessionState } from '../../components/list';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -327,6 +327,61 @@ describe('the shift history panel', () => {
     // In the close result's words (e2e, 2 Oct 2026): "Paid to outside riders (5): 4 delivery charges kept, 1 trip".
     expect(words).toContain('Cash taken out = Taken out + To riders (paid to outside riders: delivery charges kept, and trips).');
     expect(words).not.toContain('trips paid for cancelled orders');
+  });
+
+  it('shows how the drawer was counted by note under who closed it (v0.7.35), and nothing for a close typed as one figure; the other lines as before', () => {
+    // The owner's example: Rs 14,275 (5,000 × 2, 1,000 × 3, 500 × 1, 100 × 7, 10 × 4 and Rs 35 in coins).
+    const counted: CashCount = {
+      notes: [
+        { faceCents: 500_000, count: 2 },
+        { faceCents: 100_000, count: 3 },
+        { faceCents: 50_000, count: 1 },
+        { faceCents: 10_000, count: 7 },
+        { faceCents: 5_000, count: 0 },
+        { faceCents: 2_000, count: 0 },
+        { faceCents: 1_000, count: 4 },
+      ],
+      otherCents: 3_500,
+    };
+    const shifts = [
+      line({
+        ...closedLine('s3', '2026-09-25T07:00:00.000Z', '2026-09-25T20:00:00.000Z', 0),
+        expectedCashCents: 1_427_500,
+        countedCashCents: 1_427_500,
+        closingNote: 'All good',
+        countedNotes: counted,
+      }),
+      // Closed on one typed figure (before 0.7.35, or on a till still on an older version).
+      line({ ...closedLine('s2', '2026-09-24T07:00:00.000Z', '2026-09-24T20:00:00.000Z', -10_000), closingNote: 'Rs 100 short', countedNotes: null }),
+      // A shift line from a till before 0050: no key at all.
+      closedLine('s1', '2026-09-23T07:00:00.000Z', '2026-09-23T20:00:00.000Z', 0),
+    ];
+    const out = render(<TeamLeakageTab now={NOW} data={team(shifts)} />);
+    const words = text(out);
+    // Right under who closed it, before the notes typed at closing.
+    expect(words).toContain(
+      'to 26 Sep, 1:00 am · closed by Sara Counted by note: 5,000 × 2 · 1,000 × 3 · 500 × 1 · 100 × 7 · 10 × 4 · coins and other Rs 35 Closing note: All good',
+    );
+    // Only the shift counted by note says it.
+    expect(words.match(/Counted by note:/g)).toHaveLength(1);
+    expect(words).toContain('to 25 Sep, 1:00 am · closed by Sara Closing note: Rs 100 short');
+    // A long count wraps between its parts, never inside one.
+    expect(out).toContain('<span class="whitespace-nowrap">coins and other Rs 35</span>');
+    // The figures stay the ones saved at close: Float, Taken out, To riders, Expected, Counted, Result.
+    expect(words).toContain('Rs 5,000 — — Rs 14,275 Rs 14,275 Matched');
+    expect(words).toContain('Rs 5,000 — — Rs 6,000 Rs 5,900 Short Rs 100');
+    expect(words).toContain('Rs 5,000 — — Rs 6,000 Rs 6,000 Matched');
+
+    // Without the count, the panel's markup is the one it had before.
+    const before = render(<TeamLeakageTab now={NOW} data={team(shifts.map(({ countedNotes: _c, ...s }) => s))} />);
+    const block = /<div class="mt-0\.5 whitespace-normal break-words text-xs text-stone-700 dark:text-stone-300">Counted by note: .*?<\/span><\/span><\/div>/;
+    expect(out).toMatch(block);
+    expect(out.replace(block, '')).toBe(before);
+    // A count with nothing above 0 (an empty drawer): the Counted figure says it, no line.
+    const empty = render(
+      <TeamLeakageTab now={NOW} data={team([line({ ...shifts[2]!, countedNotes: { notes: counted.notes.map((n) => ({ ...n, count: 0 })), otherCents: 0 } })])} />,
+    );
+    expect(text(empty)).not.toContain('Counted by note');
   });
 
   it('an empty period says so plainly', () => {

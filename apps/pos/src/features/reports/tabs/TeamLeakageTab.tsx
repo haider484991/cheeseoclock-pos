@@ -11,7 +11,18 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportOrderStock, ReportShiftLine, ReportTeamTab } from '@cheeseoclock/shared-types';
 import { Percent, Receipt, Trash2, UsersRound } from 'lucide-react';
 import { DataTable, Panel, Section, useShowAll } from '../reportUi';
-import { fmtAgo, fmtWhen, methodLabel, percentOf, shiftCarryOverText, shiftCashOutParts, shiftNoteLines, stockCellText } from '../reportFormat';
+import {
+  COUNTED_BY_NOTE,
+  fmtAgo,
+  fmtWhen,
+  methodLabel,
+  percentOf,
+  shiftCarryOverText,
+  shiftCashOutParts,
+  shiftCountedNotes,
+  shiftNoteLines,
+  stockCellText,
+} from '../reportFormat';
 import { SHIFT_HISTORY_ANCHOR } from '../reportTabs';
 import type { ReportPeriod } from '../dateRange';
 import { shiftDrawerUseNote, shiftTestDeletedNote } from '../drawerLogFormat';
@@ -55,6 +66,27 @@ function shiftDrawerNote(s: ReportShiftLine): string {
   return note + shiftDrawerUseNote(s);
 }
 
+/**
+ * "Counted by note: 5,000 × 2 · 1,000 × 3 · … · coins and other Rs 35" under
+ * who closed the shift (v0.7.35). A long count wraps between its parts,
+ * never inside one ("coins and other Rs | 35"), as on the close result.
+ * Nothing for a close typed as one figure.
+ */
+function CountedByNoteLine({ notes }: { notes: string | null }) {
+  if (!notes) return null;
+  return (
+    <div className="mt-0.5 whitespace-normal break-words text-xs text-stone-700 dark:text-stone-300">
+      {`${COUNTED_BY_NOTE}: `}
+      {notes.split(' · ').map((part, i) => (
+        <span key={i}>
+          {i > 0 && ' · '}
+          <span className="whitespace-nowrap">{part}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** The period the shift history covers, as the page names it. */
 export type ShiftHistoryPeriod = Pick<ReportPeriod, 'dates' | 'isCurrent'>;
 
@@ -87,8 +119,9 @@ export function shiftDrawerBanner(shifts: readonly ReportShiftLine[]): { text: s
 /**
  * Staff and cash drawer: who took the orders; the shift history (0039: its
  * notes and carried-over orders; 0042/0043: each shift's own drawer log, one
- * tap from its row, and the cash of test orders deleted after it closed);
- * and the period's whole drawer log under both.
+ * tap from its row, and the cash of test orders deleted after it closed;
+ * 0050: the drawer counted note by note at its close); and the period's
+ * whole drawer log under both.
  */
 export function StaffSection({
   report,
@@ -173,6 +206,8 @@ export function StaffSection({
                     )}
                     {shiftDrawerNote(s)}
                   </div>
+                  {/* How the drawer was counted, note by note, at Close shift (v0.7.35); none for a close typed as one figure. */}
+                  <CountedByNoteLine notes={shiftCountedNotes(s)} />
                   {/* What was typed at opening and at closing, each on its own line. */}
                   {shiftNoteLines(s).map((note) => (
                     <div key={note} className="mt-0.5 whitespace-normal break-words text-xs text-stone-700 dark:text-stone-300">

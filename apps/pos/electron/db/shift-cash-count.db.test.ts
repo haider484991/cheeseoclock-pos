@@ -26,13 +26,18 @@
  *     image without the key gives NULL on a new row and leaves a stored count
  *     alone;
  *   - stored text that cannot be read is null (noted in the log), and every
- *     list still reads; getLastCount stays the total only.
+ *     list still reads; getLastCount stays the total only;
+ *   - Shift history (Reports → Team & leakage, business-report getShifts,
+ *     the tab builder and the Reports worker alike): the count for a close
+ *     counted by note, null for a close typed as one figure, a shift still
+ *     open or unreadable text; the counted cash stays the stored figure even
+ *     when the stored notes are edited to add up to something else.
  * node's own `node:sqlite` stands in for better-sqlite3 there; skipped where
  * it is missing. Made-up names and counts (the repository is public).
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cashCountInputSchema, cashCountSchema, parseCashCountJson } from '@cheeseoclock/shared-schemas';
-import { CASH_NOTE_FACE_CENTS, type CashCount } from '@cheeseoclock/shared-types';
+import { CASH_NOTE_FACE_CENTS, type CashCount, type ReportShiftLine } from '@cheeseoclock/shared-types';
 import { cashCountJson, cashCountTotalCents } from '@cheeseoclock/pos-domain';
 import type { SyncChange } from '@cheeseoclock/sync-core';
 import type { AppDatabase } from './connection.js';
@@ -426,6 +431,73 @@ live('a close counted by note (shifts.counted_notes_json, migration 0050)', () =
     const { db, shiftId } = tillWithShift();
     const closed = repo.closeShift(db, { shiftId, countedCashCents: EXAMPLE_CENTS, countedNotes: EXAMPLE }, MANAGER);
     expect(repo.getLastCount(db, DEV)).toEqual({ countedCashCents: EXAMPLE_CENTS, closedAt: closed.closedAt });
+  });
+});
+
+// ---------------------------------------------- Shift history (Reports)
+
+/** Every shift there is: Reports → Team & leakage over any period that holds them. */
+const ALL_TIME = { sinceIso: '2000-01-01T00:00:00.000Z', untilIso: '2100-01-01T00:00:00.000Z' };
+
+/** The shift history's lines as the Team tab builds them (business-report getShifts), by shift id. */
+async function historyLines(db: Db): Promise<Map<string, ReportShiftLine>> {
+  const tabs = await import('../services/analytics/report-tabs.js');
+  return new Map(tabs.buildReportTab(db as unknown as AppDatabase, 'team', ALL_TIME, new Date()).shifts.map((s) => [s.id, s]));
+}
+
+/** The same lines as the Reports worker hands them over (copied, as from its thread). */
+async function historyLinesViaWorker(db: Db): Promise<Map<string, ReportShiftLine>> {
+  const worker = await import('../services/analytics/worker.js');
+  const reply = worker.handleRunRequest(db as unknown as AppDatabase, {
+    type: 'run',
+    id: 1,
+    kind: 'team',
+    request: ALL_TIME,
+    nowIso: new Date().toISOString(),
+  });
+  if (reply.type !== 'result' || !reply.ok) throw new Error(`worker said no: ${JSON.stringify(reply)}`);
+  const shifts = structuredClone(reply.data as { shifts: ReportShiftLine[] }).shifts;
+  return new Map(shifts.map((s) => [s.id, s]));
+}
+
+live('Shift history reads the count by note (business-report getShifts, v0.7.35)', () => {
+  it('a close counted by note has its count; a close typed as one figure, a shift still open and unreadable text have none', async () => {
+    const { db, shiftId: byNote } = tillWithShift();
+    repo.closeShift(db, { shiftId: byNote, countedCashCents: EXAMPLE_CENTS, countedNotes: EXAMPLE }, MANAGER);
+    const typed = repo.openShift(db, { openingCashCents: FLOAT }, MANAGER).id;
+    repo.closeShift(db, { shiftId: typed, countedCashCents: 480_000 }, MANAGER);
+    const unreadable = repo.openShift(db, { openingCashCents: FLOAT }, MANAGER).id;
+    repo.closeShift(db, { shiftId: unreadable, countedCashCents: EXAMPLE_CENTS, countedNotes: EXAMPLE }, MANAGER);
+    db.prepare(`UPDATE shifts SET counted_notes_json = 'not json' WHERE id = ?`).run(unreadable);
+    const open = repo.openShift(db, { openingCashCents: FLOAT }, MANAGER).id;
+
+    for (const lines of [await historyLines(db), await historyLinesViaWorker(db)]) {
+      expect([...lines.keys()].sort()).toEqual([byNote, typed, unreadable, open].sort());
+      expect(lines.get(byNote)).toMatchObject({ countedCashCents: EXAMPLE_CENTS, countedNotes: EXAMPLE });
+      expect(lines.get(typed)).toMatchObject({ countedCashCents: 480_000, countedNotes: null });
+      expect(lines.get(unreadable)).toMatchObject({ countedCashCents: EXAMPLE_CENTS, countedNotes: null });
+      expect(lines.get(open)).toMatchObject({ countedCashCents: null, countedNotes: null });
+      // The stored text itself stays in the till: the screens get the count.
+      for (const line of lines.values()) expect(line).not.toHaveProperty('countedNotesJson');
+    }
+  });
+
+  it('the counted cash stays the figure saved at close, even when the stored notes are edited to add up to something else', async () => {
+    const { db, shiftId } = tillWithShift();
+    const closed = repo.closeShift(db, { shiftId, countedCashCents: EXAMPLE_CENTS, countedNotes: EXAMPLE }, MANAGER);
+    // One more Rs 5,000 note written into the text by hand: it now adds up to Rs 19,275.
+    const edited: CashCount = { ...EXAMPLE, notes: EXAMPLE.notes.map((n, i) => (i === 0 ? { ...n, count: 3 } : n)) };
+    expect(cashCountTotalCents(edited)).toBe(EXAMPLE_CENTS + 500_000);
+    db.prepare(`UPDATE shifts SET counted_notes_json = ? WHERE id = ?`).run(cashCountJson(edited), shiftId);
+
+    for (const lines of [await historyLines(db), await historyLinesViaWorker(db)]) {
+      expect(lines.get(shiftId)).toMatchObject({
+        countedNotes: edited,
+        countedCashCents: EXAMPLE_CENTS,
+        expectedCashCents: closed.expectedCashCents,
+        varianceCents: closed.varianceCents,
+      });
+    }
   });
 });
 

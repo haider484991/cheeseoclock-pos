@@ -73,6 +73,7 @@ import {
   type Pack,
   type PriceOf,
 } from '@cheeseoclock/pos-domain';
+import { parseCashCountJson } from '@cheeseoclock/shared-schemas';
 import type { AppDatabase } from '../db/connection.js';
 // Read-only modules only, none of them loading Electron: this file also runs
 // in the Reports worker thread (analytics/worker.ts). A test walks its imports.
@@ -878,9 +879,15 @@ function getDrawerOpens(db: AppDatabase, range: ReportRange): ReportDrawerOpenLi
  * no trip paid moved no money. cashMovementCount counts the cash in / out
  * typed by hand and rider tips only. A deleted test order's payouts come off
  * its cash noted after the close (each was taken out of that drawer).
+ *
+ * The note count (v0.7.35, 0050 shifts.counted_notes_json): countedNotes is
+ * the stored text read leniently (parseCashCountJson, as the shift
+ * repository reads it), null for a close typed as one figure, a shift still
+ * open or text that cannot be read. countedCashCents stays the figure saved
+ * at close; the notes are never added up again here.
  */
 function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'] {
-  return db
+  const rows = db
     .prepare(
       `SELECT s.id AS id, s.opened_at AS openedAt, s.closed_at AS closedAt,
               COALESCE(uo.full_name, 'Unknown') AS openedBy, uc.full_name AS closedBy,
@@ -931,7 +938,8 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
                   WHERE o.deleted_at IS NOT NULL AND o.delete_kind = 'test'
                     AND a.action = 'carried_over_unpaid' AND json_valid(a.after_json)
                     AND json_extract(a.after_json, '$.shiftId') = s.id)
-              ELSE 0 END AS carriedTestDeletedCount
+              ELSE 0 END AS carriedTestDeletedCount,
+              s.counted_notes_json AS countedNotesJson
          FROM shifts s
          LEFT JOIN users uo ON uo.id = s.opened_by_user_id
          LEFT JOIN users uc ON uc.id = s.closed_by_user_id
@@ -939,7 +947,9 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
         ORDER BY s.opened_at DESC, s.id DESC
         LIMIT ${REPORT_LIST_CAP}`,
     )
-    .all(range.untilIso, range.sinceIso) as BusinessReport['shifts'];
+    .all(range.untilIso, range.sinceIso) as Array<Omit<BusinessReport['shifts'][number], 'countedNotes'> & { countedNotesJson: string | null }>;
+  // The stored text stays here: the screens get the count itself.
+  return rows.map(({ countedNotesJson, ...line }) => ({ ...line, countedNotes: parseCashCountJson(countedNotesJson) }));
 }
 
 /**

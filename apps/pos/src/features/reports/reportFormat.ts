@@ -2,7 +2,7 @@
  * Plain-words labels and the small calculations the Reports page shows.
  * Pure (no React, no DOM) so they are unit-tested.
  */
-import { formatCents, priceChangeBps } from '@cheeseoclock/pos-domain';
+import { cashCountText, formatCents, priceChangeBps } from '@cheeseoclock/pos-domain';
 import { CAME_BY_LABEL } from '@cheeseoclock/shared-types';
 import type {
   BusinessReport,
@@ -347,12 +347,40 @@ export function shiftCashOutParts(s: Pick<ReportShiftLine, 'cashOutCents' | 'rid
   return { takenOutCents: Math.max(0, s.cashOutCents - toRidersCents), toRidersCents };
 }
 
-/** Everything written on a shift, one line each: its notes, then any unpaid orders carried over (print and CSV). */
+/** What Shift history, the A4 paper and the file call a close's count by note (v0.7.35). */
+export const COUNTED_BY_NOTE = 'Counted by note';
+
+/**
+ * The drawer a close counted note by note (v0.7.35, 0050), in the close
+ * result's words: "5,000 × 2 · 1,000 × 3 · 10 × 4 · coins and other Rs 35"
+ * (the file's "Counted by note" column). Null for a close typed as one
+ * figure (before 0.7.35, or on a till still on an older version), a shift
+ * still open, or a count with nothing above 0 — the Counted figure says it.
+ */
+export function shiftCountedNotes(s: Pick<ReportShiftLine, 'countedNotes'>): string | null {
+  return s.countedNotes ? cashCountText(s.countedNotes) : null;
+}
+
+/** "Counted by note: 5,000 × 2 · …": Shift history's line under who closed it, and the A4 Notes column's first line. Null when there is none. */
+export function shiftCountedNotesText(s: Pick<ReportShiftLine, 'countedNotes'>): string | null {
+  const notes = shiftCountedNotes(s);
+  return notes ? `${COUNTED_BY_NOTE}: ${notes}` : null;
+}
+
+/**
+ * Everything written on a shift, one line each (the A4 paper's Notes
+ * column): how the drawer was counted by note (v0.7.35), its notes, then any
+ * unpaid orders carried over.
+ */
 export function shiftDetailLines(
-  s: Pick<ReportShiftLine, 'openingNote' | 'closingNote' | 'carriedUnpaidCount' | 'carryOverReason' | 'closedBy' | 'carriedTestDeletedCount'>,
+  s: Pick<
+    ReportShiftLine,
+    'openingNote' | 'closingNote' | 'carriedUnpaidCount' | 'carryOverReason' | 'closedBy' | 'carriedTestDeletedCount' | 'countedNotes'
+  >,
 ): string[] {
+  const counted = shiftCountedNotesText(s);
   const carry = shiftCarryOverText(s);
-  return carry ? [...shiftNoteLines(s), carry] : shiftNoteLines(s);
+  return [...(counted ? [counted] : []), ...shiftNoteLines(s), ...(carry ? [carry] : [])];
 }
 
 /** A quantity in an ingredient's unit, with thousands separators: "12,500 g". */

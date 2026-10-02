@@ -29,6 +29,7 @@ import { formatCents, formatQty, staleLinkText } from '@cheeseoclock/pos-domain'
 import type { ReportPeriod } from './dateRange';
 import {
   CHANNEL_LABEL,
+  COUNTED_BY_NOTE,
   DRAWER_OPEN_WHY,
   MISSING_COST_WHY,
   PAYMENT_LABEL,
@@ -48,6 +49,7 @@ import {
   methodLabel,
   percentOf,
   shiftCashOutParts,
+  shiftCountedNotes,
   shiftDetailLines,
   stockCellText,
   unpaidFoodText,
@@ -420,7 +422,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     }
 
     sheet.heading('Shifts (cash drawer)');
-    sheet.push(['Opened', 'Closed', 'Opened by', 'Closed by', 'Float Rs', 'Cash put in Rs', 'Cash taken out Rs', 'To riders Rs', 'Expected Rs', 'Counted Rs', 'Short (-) / over (+) Rs', 'Cash in/out entries', 'Drawer opened with no sale', 'Opening note', 'Closing note', 'Unpaid orders carried over', 'Carry-over reason', 'Drawer used (all)', 'Test orders deleted after close Rs', 'Carried over, later deleted as tests']);
+    sheet.push(['Opened', 'Closed', 'Opened by', 'Closed by', 'Float Rs', 'Cash put in Rs', 'Cash taken out Rs', 'To riders Rs', 'Expected Rs', 'Counted Rs', 'Short (-) / over (+) Rs', 'Cash in/out entries', 'Drawer opened with no sale', 'Opening note', 'Closing note', 'Unpaid orders carried over', 'Carry-over reason', 'Drawer used (all)', 'Test orders deleted after close Rs', 'Carried over, later deleted as tests', COUNTED_BY_NOTE]);
     for (const s of r.shifts) {
       // v0.7.34: what the drawer paid outside riders for an order has its own
       // column, right after the cash taken out, which is now the rest (cash
@@ -448,6 +450,8 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
         s.drawerOpenCount ?? null,
         s.testDeletedCashCents ? rs(s.testDeletedCashCents) : null,
         s.carriedTestDeletedCount ? s.carriedTestDeletedCount : null,
+        // v0.7.35 (0050): the drawer counted note by note at close, last; empty for a close typed as one figure.
+        shiftCountedNotes(s),
       ]);
     }
 
@@ -1155,7 +1159,7 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
                 : `${s.varianceCents > 0 ? 'Over' : 'Short'} ${money(Math.abs(s.varianceCents))}`,
             String(s.cashMovementCount),
             String(s.noSaleOpens),
-            // Opening and closing notes, then any unpaid orders carried over — each on its own line.
+            // The count by note (v0.7.35), opening and closing notes, then any unpaid orders carried over — each on its own line.
             shiftDetailLines(s).map(esc).join('<br>') || '—',
           ]),
           [3, 4, 5, 6, 7, 8],

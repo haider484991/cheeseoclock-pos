@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BusinessReport, DrawerLogPage, ReportFoodCost, ReportKpis } from '@cheeseoclock/shared-types';
+import type { BusinessReport, CashCount, DrawerLogPage, ReportFoodCost, ReportKpis, ReportShiftLine } from '@cheeseoclock/shared-types';
 import { periodFor } from './dateRange';
 import {
   TEAM_EXTRA_UNREAD,
@@ -34,6 +34,9 @@ import {
   purchaseBillsText,
   purchaseHeadline,
   shiftCashOutParts,
+  shiftCountedNotes,
+  shiftCountedNotesText,
+  shiftDetailLines,
   stockCellText,
   unpaidFoodText,
   websiteVsTill,
@@ -617,7 +620,7 @@ describe('printout', () => {
     expect(rows).toContainEqual(expect.stringMatching(/,-100\.00,0,0,,(,|$)/));
   });
 
-  it('the shift CSV ends with the drawer log and deleted-test columns, in order, after the ones 0.7.21 shipped', () => {
+  it('the shift CSV has the drawer log and deleted-test columns, in order, after the ones 0.7.21 shipped', () => {
     const shift = (id: string, more: Record<string, unknown>) => ({
       id,
       openedAt: '2026-09-26T04:00:00.000Z',
@@ -650,15 +653,16 @@ describe('printout', () => {
       } as never),
     );
     const rows = csv.split(/\r?\n/);
-    // The header: 0.7.21's last two columns, then the three new ones, in this order and last.
+    // The header: 0.7.21's last two columns, then the three new ones, in this order; only
+    // v0.7.35's "Counted by note" comes after them, last.
     expect(rows).toContainEqual(
       expect.stringMatching(
-        /,Unpaid orders carried over,Carry-over reason,Drawer used \(all\),Test orders deleted after close Rs,"Carried over, later deleted as tests"$/,
+        /,Unpaid orders carried over,Carry-over reason,Drawer used \(all\),Test orders deleted after close Rs,"Carried over, later deleted as tests",Counted by note$/,
       ),
     );
-    // Each shift's figures under them, in the same order.
-    expect(rows).toContainEqual(expect.stringMatching(/,2,Rider still out,7,1250\.00,1$/));
-    expect(rows).toContainEqual(expect.stringMatching(/,2,Rider still out,,,$/));
+    // Each shift's figures under them, in the same order (neither was counted by note: the last cell is empty).
+    expect(rows).toContainEqual(expect.stringMatching(/,2,Rider still out,7,1250\.00,1,$/));
+    expect(rows).toContainEqual(expect.stringMatching(/,2,Rider still out,,,,$/));
   });
 
   it('the shift CSV has "To riders Rs" right after "Cash taken out Rs", which is the rest of the cash taken out (v0.7.34)', () => {
@@ -712,6 +716,78 @@ describe('printout', () => {
     // No rider figure (a shift line from before 0.7.34), or none paid: everything under Taken out.
     expect(shiftCashOutParts({ cashOutCents: 20_000 })).toEqual({ takenOutCents: 20_000, toRidersCents: 0 });
     expect(shiftCashOutParts({ cashOutCents: 20_000, riderChargesCents: 0 })).toEqual({ takenOutCents: 20_000, toRidersCents: 0 });
+  });
+
+  it('the drawer counted by note (v0.7.35): first of a shift’s lines, first in the A4 Notes column, and the last column of the file', () => {
+    // The owner's example, Rs 14,275: 5,000 × 2, 1,000 × 3, 500 × 1, 100 × 7, 10 × 4 and Rs 35 in coins.
+    const counted: CashCount = {
+      notes: [
+        { faceCents: 500_000, count: 2 },
+        { faceCents: 100_000, count: 3 },
+        { faceCents: 50_000, count: 1 },
+        { faceCents: 10_000, count: 7 },
+        { faceCents: 5_000, count: 0 },
+        { faceCents: 2_000, count: 0 },
+        { faceCents: 1_000, count: 4 },
+      ],
+      otherCents: 3_500,
+    };
+    const NOTES = '5,000 × 2 · 1,000 × 3 · 500 × 1 · 100 × 7 · 10 × 4 · coins and other Rs 35';
+    const shift = (id: string, more: Partial<ReportShiftLine>): ReportShiftLine => ({
+      id,
+      openedAt: '2026-09-26T04:00:00.000Z',
+      closedAt: '2026-09-26T16:00:00.000Z',
+      openedBy: 'Sara',
+      closedBy: 'Sara',
+      openingCashCents: 500000,
+      expectedCashCents: 1_427_500,
+      countedCashCents: 1_427_500,
+      varianceCents: 0,
+      cashInCents: 0,
+      cashOutCents: 0,
+      cashMovementCount: 0,
+      noSaleOpens: 0,
+      openingNote: 'Morning, Ali on register',
+      closingNote: 'All good',
+      carriedUnpaidCount: 1,
+      carryOverReason: 'Rider still out',
+      ...more,
+    });
+    const byNote = shift('s1', { countedNotes: counted });
+    const typed = shift('s2', { countedNotes: null });
+
+    expect(shiftCountedNotes(byNote)).toBe(NOTES);
+    expect(shiftCountedNotesText(byNote)).toBe(`Counted by note: ${NOTES}`);
+    // Typed as one figure, a line from a till before 0050 (no key), or nothing above 0: none.
+    expect(shiftCountedNotesText(typed)).toBeNull();
+    expect(shiftCountedNotesText({})).toBeNull();
+    expect(shiftCountedNotesText({ countedNotes: { notes: counted.notes.map((n) => ({ ...n, count: 0 })), otherCents: 0 } })).toBeNull();
+    // A newer till's row the list lacks (read leniently) still says itself.
+    expect(shiftCountedNotes({ countedNotes: { notes: [{ faceCents: 7_500, count: 1 }], otherCents: 0 } })).toBe('75 × 1');
+
+    // First of the shift's lines, then its notes and its carry-over as before.
+    const after = ['Opening note: Morning, Ali on register', 'Closing note: All good', '1 unpaid order carried over — Rider still out — approved by Sara'];
+    expect(shiftDetailLines(byNote)).toEqual([`Counted by note: ${NOTES}`, ...after]);
+    expect(shiftDetailLines(typed)).toEqual(after);
+    expect(shiftDetailLines(shift('s3', { openingNote: null, closingNote: null, carriedUnpaidCount: 0, countedNotes: counted }))).toEqual([
+      `Counted by note: ${NOTES}`,
+    ]);
+
+    // The A4 paper: the Notes column, the count on the first line.
+    const html = tabPrint('team', report({ shifts: [byNote, typed] }));
+    expect(html).toContain(`<td>Counted by note: ${NOTES}<br>Opening note: Morning, Ali on register<br>Closing note: All good<br>1 unpaid order carried over`);
+    expect(html).toContain('<td>Opening note: Morning, Ali on register<br>Closing note: All good<br>1 unpaid order carried over');
+    expect(html.match(/Counted by note:/g)).toHaveLength(1);
+
+    // The file: UTF-8 with its BOM, "Counted by note" the last column, the count quoted (it has commas); empty for the typed close.
+    const csv = tabCsv('team', report({ shifts: [byNote, typed] }));
+    expect(csv.charCodeAt(0)).toBe(0xfeff);
+    const rows = csv.split(/\r?\n/);
+    expect(rows).toContainEqual(expect.stringMatching(/,"Carried over, later deleted as tests",Counted by note$/));
+    expect(rows).toContainEqual(expect.stringMatching(new RegExp(`,1,Rider still out,,,,"${NOTES}"$`)));
+    expect(rows).toContainEqual(expect.stringMatching(/,1,Rider still out,,,,$/));
+    // The counted cash is the figure saved at close, in its own column, as before.
+    expect(rows.filter((r) => r.includes(',5000.00,0.00,0.00,0.00,14275.00,14275.00,0.00,0,0,'))).toHaveLength(2);
   });
 
   it('says how many hand opens there were in all when it prints only some', () => {

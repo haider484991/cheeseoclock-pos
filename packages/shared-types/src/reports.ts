@@ -18,6 +18,7 @@ import type { WasteReason, WasteReasonId } from './inventory.js';
 import type { DiscountSource, OrderCameBy } from './shop-settings.js';
 import type { StockCountScope, VarianceBand } from './stock-count.js';
 import type { ProfitFees, RiderCostSetting } from './profit.js';
+import type { CashCount } from './shift.js';
 
 /** Where an order came from, in the owner's words. */
 export type ReportChannel =
@@ -212,6 +213,14 @@ export interface ReportShiftLine {
    * history says it instead. Absent from a till before 0043.
    */
   carriedTestDeletedCount?: number;
+  /**
+   * The drawer counted note by note at Close shift (v0.7.35, 0050
+   * shifts.counted_notes_json), or null: a close typed as one figure, a
+   * shift still open, or stored text this till cannot read. Shift history,
+   * the A4 paper and the file show it as "Counted by note". countedCashCents
+   * stays the figure saved at close. Absent from a till before 0050.
+   */
+  countedNotes?: CashCount | null;
 }
 
 /**
