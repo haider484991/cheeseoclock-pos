@@ -171,16 +171,16 @@ export type ShopCopyRule = 'never' | 'delivery' | 'always';
  *  - Customer receipt: printed when money is taken — Pay now, or a
  *    cash-on-delivery order marked served / delivered with its payment. A
  *    cash payment pops the drawer.
- *  - Delivery bill: for delivery orders, the bill prints when the rider is
- *    assigned or the order is sent out (once per order, on either till) so
- *    it travels with the food, showing the amount to collect (or
- *    PAID). When the rider brings the cash back, only the drawer opens — the
- *    customer already has the bill (BILL - NOT PAID, pay the rider Rs X).
+ *  - Delivery bill: for delivery orders the bill prints when the order goes
+ *    out — Send out, or Assign rider — so it travels with the food and shows
+ *    the amount to collect, or PAID. It prints once per order, on either
+ *    till. When the rider brings the money back, only the drawer opens.
  *  - Shop copy: a second copy marked SHOP COPY with a "Received by" line,
  *    printed with every delivery bill (default), every receipt, or never.
  */
 export interface PrintPolicy {
   kitchenTicket: boolean;
+  /** The delivery bill when the order goes out (Send out, or Assign rider): "Print the bill when the order goes out". */
   deliveryBillOnDispatch: boolean;
   shopCopy: ShopCopyRule;
   /** Print the shop logo at the top of customer receipts (never on kitchen tickets). */

@@ -202,12 +202,12 @@ export function PrintingRulesSettings() {
         <Rule
           icon={Bike}
           title="Delivery bill goes with the rider"
-          body="For delivery orders the bill prints when a rider is assigned, so it travels with the food and shows the amount to collect — or PAID. When the rider brings the cash back and the order is marked delivered, only the drawer opens; the customer already has the receipt."
+          body="For delivery orders the bill prints when the order goes out — Send out, or Assign rider — so it travels with the food and shows the amount to collect, or PAID. It prints once per order, on either till. When the rider brings the money back, only the drawer opens."
           control={
             <Toggle
               checked={policy.deliveryBillOnDispatch}
               onChange={(v) => setPolicy({ ...policy, deliveryBillOnDispatch: v })}
-              label="Print the bill when a rider is assigned"
+              label="Print the bill when the order goes out"
             />
           }
         />

@@ -32,6 +32,10 @@ type StatusFilter = 'all' | 'active' | 'inactive';
  * Riders roster. Everyone on the till can add a rider (a cashier dispatching a
  * delivery must be able to); editing, deactivating and switching a rider back
  * on is for managers and admins — the buttons only show for them.
+ *
+ * Everyone on this list is the shop's own staff, for Assign rider (owner,
+ * 2 Oct 2026). A rider from a delivery service is never added: Send out on
+ * Live Orders handles him and what he keeps, so the page says so.
  */
 export function RidersPage() {
   const [editing, setEditing] = useState<Rider | null>(null);
@@ -110,7 +114,8 @@ export function RidersPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Riders</h1>
           <p className="mt-1 text-sm text-stone-500">
-            Delivery staff who can be assigned to orders. {activeCount} active
+            Your own delivery staff, for Assign rider. Riders from a delivery service don't need adding — use
+            Send out on Live Orders. {activeCount} active
             {riders.length - activeCount > 0 && ` · ${riders.length - activeCount} switched off`}.
           </p>
         </div>
@@ -128,7 +133,7 @@ export function RidersPage() {
             <Bike className="mx-auto mb-3 h-10 w-10 text-stone-300" />
             <p className="text-sm text-stone-500">No riders yet.</p>
             <p className="mt-1 text-xs text-stone-400">
-              Add your first delivery person to start assigning orders.
+              Add your own delivery staff here. Outside riders need nothing — use Send out.
             </p>
           </div>
         ) : (
