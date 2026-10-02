@@ -22,6 +22,8 @@ import {
   buildChannelsTab,
   channelOf,
   getBusinessReport,
+  getOrderStockAnswers,
+  getOrderStockOutcomes,
   getOfferRepeats,
   ingredientCostCents,
   pakistanHourOf,
@@ -1168,5 +1170,114 @@ describe.skipIf(!DatabaseSync)('offer repeats skip an order refunded in full (v0
     const repeats = getOfferRepeats(db, DAY);
     raw.close();
     expect(repeats).toEqual([{ day: '2026-09-25', offerName: 'Test WhatsApp 10%', phoneEnds: '1111', orderNumbers: ['N-c1', 'N-c2'], amountCents: 20000 }]);
+  });
+});
+
+/**
+ * "Was the food made?" for each cancelled or refunded order, read back from
+ * its settle rows' notes and this till's order audit rows. The cases pin
+ * getOrderStockOutcomes exactly as it answered before the answer part was
+ * split out (step 19d-1), and getOrderStockAnswers gives the same answers
+ * with no prices loaded (the shift report reads it inside the close).
+ */
+describe.skipIf(!DatabaseSync)('the stock answer of a cancelled or refunded order', () => {
+  const at = (hhmm: string) => `2026-09-25T${hhmm}:00.000Z`;
+  const IDS = ['o_wasted', 'o_put_back', 'o_against_hint', 'o_audit_wins', 'o_two_audits', 'o_no_note', 'o_audit_only', 'o_nothing'];
+
+  function seedSettles(raw: NodeDatabase): void {
+    seedBasics(raw);
+    raw
+      .prepare(
+        `INSERT INTO ingredients (id, name, unit, cost_per_unit_cents, pack_size, pack_price_cents, created_at, updated_at, device_id)
+         VALUES ('i_bun', 'Test Bun', 'pcs', 2000, NULL, NULL, ?, ?, ?)`,
+      )
+      .run(T0, T0, DEV);
+    for (const id of IDS) {
+      seedOrder(raw, {
+        id,
+        status: id === 'o_against_hint' ? 'refunded' : 'void',
+        paidAt: null,
+        createdAt: at('12:00'),
+        subtotal: 50000,
+        tax: 8000,
+        total: 58000,
+        items: [burger(1)],
+        voidedBy: 'u_sara',
+        voidReason: 'Test cancel',
+      });
+    }
+    const mv = raw.prepare(
+      `INSERT INTO stock_movements (id, ingredient_id, delta_qty, reason, ref_order_id, notes, occurred_at, resulting_qty, unit,
+         created_at, updated_at, device_id)
+       VALUES (?, 'i_bun', ?, ?, ?, ?, ?, 0, 'pcs', ?, ?, ?)`,
+    );
+    const row = (id: string, orderId: string, qty: number, reason: string, notes: string | null) =>
+      mv.run(id, qty, reason, orderId, notes, at('12:30'), T0, T0, DEV);
+    // Cooked, then cancelled as made: the rows' notes say so, no audit row here.
+    row('m1', 'o_wasted', -2, 'sale', null);
+    row('m2', 'o_wasted', 2, 'sale', 'Cancelled after cooking — moved to waste');
+    row('m3', 'o_wasted', -2, 'waste', 'Cancelled after cooking — counted as waste');
+    // Put back although it was ready: worth a look.
+    row('m4', 'o_put_back', -1, 'sale', null);
+    row('m5', 'o_put_back', 1, 'sale', 'Order cancelled before cooking — stock put back');
+    // Refunded in full as made, against the till's hint.
+    row('m6', 'o_against_hint', -1, 'sale', null);
+    row('m7', 'o_against_hint', 1, 'sale', 'Refunded after cooking — moved to waste');
+    row('m8', 'o_against_hint', -1, 'waste', 'Refunded after cooking — counted as waste');
+    // The rows say not made; this till's audit row says made (it wins).
+    row('m9', 'o_audit_wins', 1, 'sale', 'Cancelled, not made — put back');
+    // Two audit rows: the last one's answer and status are the ones kept.
+    row('m10', 'o_two_audits', 1, 'count', null);
+    // A settle row with no words, and no audit row: nobody knows.
+    row('m11', 'o_no_note', 1, 'count', null);
+    const audit = raw.prepare(
+      `INSERT INTO audit_log (id, entity_type, entity_id, action, actor_user_id, before_json, after_json, created_at)
+       VALUES (?, 'orders', ?, ?, 'u_sara', ?, ?, ?)`,
+    );
+    const said = (id: string, orderId: string, action: string, before: object, after: object) =>
+      audit.run(id, orderId, action, JSON.stringify(before), JSON.stringify(after), at('12:31'));
+    said('a1', 'o_put_back', 'stock_put_back', { status: 'ready' }, { outcome: 'not_made' });
+    said('a2', 'o_against_hint', 'stock_to_waste', { status: 'served' }, { outcome: 'made', againstHint: true });
+    said('a3', 'o_audit_wins', 'stock_to_waste', { status: 'sent_to_kitchen' }, { outcome: 'made' });
+    said('a4', 'o_two_audits', 'stock_put_back', { status: 'preparing' }, { outcome: 'not_made' });
+    said('a5', 'o_two_audits', 'stock_to_waste', {}, { outcome: 'made' });
+    // An audit row with no settle rows at all: not an order that settled its stock.
+    said('a6', 'o_audit_only', 'stock_to_waste', { status: 'ready' }, { outcome: 'made' });
+  }
+
+  it('getOrderStockOutcomes answers as it did before the split', () => {
+    const { raw, db } = openMigrated();
+    seedSettles(raw);
+    const outcomes = getOrderStockOutcomes(db, IDS);
+    raw.close();
+    expect([...outcomes.entries()].sort(([a], [b]) => (a < b ? -1 : 1))).toEqual([
+      ['o_against_hint', { outcome: 'wasted', answer: 'made', wasteCents: 2000, statusBefore: 'served', flagged: true }],
+      ['o_audit_wins', { outcome: 'returned', answer: 'made', wasteCents: 0, statusBefore: 'sent_to_kitchen', flagged: false }],
+      ['o_no_note', { outcome: 'returned', answer: null, wasteCents: 0, statusBefore: null, flagged: false }],
+      ['o_put_back', { outcome: 'returned', answer: 'not_made', wasteCents: 0, statusBefore: 'ready', flagged: true }],
+      ['o_two_audits', { outcome: 'returned', answer: 'made', wasteCents: 0, statusBefore: null, flagged: false }],
+      ['o_wasted', { outcome: 'wasted', answer: 'made', wasteCents: 4000, statusBefore: null, flagged: false }],
+    ]);
+    expect(getOrderStockOutcomes(db, []).size).toBe(0);
+  });
+
+  it('getOrderStockAnswers gives the same answers, reading only the settle rows and the audit rows (no prices)', () => {
+    const { raw, db } = openMigrated();
+    seedSettles(raw);
+    const outcomes = getOrderStockOutcomes(db, IDS);
+    const read: string[] = [];
+    const watched = { ...db, prepare: (sql: string) => (read.push(sql), db.prepare(sql)) } as unknown as AppDatabase;
+    const answers = getOrderStockAnswers(watched, IDS);
+    raw.close();
+    expect(answers).toEqual(new Map([...outcomes].map(([id, o]) => [id, o.answer])));
+    expect(answers.has('o_audit_only')).toBe(false);
+    expect(answers.has('o_nothing')).toBe(false);
+    // Two reads, by order: the settle rows and the audit rows. No ingredient, price or cost table.
+    expect(read).toHaveLength(2);
+    expect(read[0]).toMatch(/FROM stock_movements m/);
+    expect(read[1]).toMatch(/FROM audit_log/);
+    for (const sql of read) expect(sql).not.toMatch(/ingredient|price|cost|value_cents/i);
+    expect(getOrderStockAnswers(watched, []).size).toBe(0);
+    expect(read).toHaveLength(2);
   });
 });

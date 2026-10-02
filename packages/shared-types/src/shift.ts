@@ -127,9 +127,20 @@ export interface ShiftCloseCheck {
 /** Per-shift summary numbers used by the close dialog + history view. */
 export interface ShiftSummary {
   shiftId: UUID;
+  /** Orders started in this shift on this till (empty carts and unpaid ones too). */
   orderCount: number;
+  /**
+   * Orders settled on this till in this shift: their money was taken here
+   * (the shift of the order's last payment in; a paid Rs 0 order by its own
+   * shift). Refunded orders stay in paid. An order carried over and paid in
+   * the next shift counts there; one taken on the other till and paid here
+   * counts here. The close box, the close result and the shift report count
+   * the same orders.
+   */
   paidOrderCount: number;
+  /** Orders money was handed back for on this till in this shift, in full or in part, each once. */
   refundedOrderCount: number;
+  /** Orders started in this shift that were cancelled. */
   voidedOrderCount: number;
   totalRevenueCents: Cents;
   totalRefundsCents: Cents;

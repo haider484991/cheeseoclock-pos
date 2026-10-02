@@ -330,15 +330,33 @@ live("the shift's figures: the riders' payouts are a part of the cash taken out"
     recordCashMovement(shop.db, { type: 'tip_out', amountCents: 5_000, reason: 'Test rider tip' }, MANAGER);
     const linked = recordDeliveryChargeToRider(shop.db, { orderId: order.id, orderNumber: order.orderNumber, amountCents: KEEP, why: 'kept' }, CASHIER);
 
+    // With the breakdown of step 19d-1 (the hand-typed payout, the tip, the trips).
     expect(cashMovementTotals(shop.db, shop.shiftId)).toEqual({
       inCents: 100_000,
+      inCount: 1,
       outCents: 20_000 + 5_000 + KEEP,
+      payoutCents: 20_000,
+      payoutCount: 1,
+      tipCents: 5_000,
+      tipCount: 1,
       riderCents: KEEP,
       riderCount: 1,
+      riderTripCount: 0,
     });
     // A deleted payout (a test order deleted, step 18-3) no longer counts.
     shop.db.prepare(`UPDATE cash_movements SET deleted_at = ? WHERE id = ?`).run(PK['20:10'], linked);
-    expect(cashMovementTotals(shop.db, shop.shiftId)).toEqual({ inCents: 100_000, outCents: 25_000, riderCents: 0, riderCount: 0 });
+    expect(cashMovementTotals(shop.db, shop.shiftId)).toEqual({
+      inCents: 100_000,
+      inCount: 1,
+      outCents: 25_000,
+      payoutCents: 20_000,
+      payoutCount: 1,
+      tipCents: 5_000,
+      tipCount: 1,
+      riderCents: 0,
+      riderCount: 0,
+      riderTripCount: 0,
+    });
   });
 
   it('getShiftSummary: riderChargesCents Rs 200, riderChargeCount 1, expected = Rs 5,000 − Rs 200 by the same formula; a close counting exactly that is not short', async () => {

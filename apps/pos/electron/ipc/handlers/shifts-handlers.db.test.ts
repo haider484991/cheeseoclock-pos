@@ -4,6 +4,7 @@
  * the drawer exactly once; anything refused pulses nothing. The rules for
  * WHEN the pulse goes are tested in print-spooler.db.test.ts; this pins the
  * handlers' wiring, so moving or dropping a kickDrawerSoon() fails here.
+ * Also the close box's order counts as 'shifts:summary' gives them.
  *
  * Only `defineHandler` is replaced (it captures the handler instead of
  * registering it with Electron), the session and the manager check are
@@ -302,5 +303,61 @@ describe.skipIf(!DatabaseSync)('shifts handlers open the cash drawer', () => {
       channel: 'printer:failed',
       payload: { jobKind: 'drawer', retrying: false, error: { code: 'drawer_not_opened' } },
     });
+  });
+});
+
+describe.skipIf(!DatabaseSync)("shifts:summary, the close box's counts", () => {
+  it("the close box's Paid orders and Refunds count the orders settled in the shift, refunded ones still paid (step 19d-1)", async () => {
+    // Updated on purpose (step 19d-1): Paid orders used to count the orders
+    // STARTED in the shift that were paid and not refunded, whenever and
+    // wherever they were paid, and Refunds only the full ones. Now both count
+    // what the shift report counts: the orders whose money was taken in this
+    // shift (refunded ones stay in), and the orders money went back for in
+    // it, in full or in part. Before, the first shift read 2 paid · 1 refund
+    // and the second 0 · 0.
+    h.session = MANAGER;
+    const staff = { userId: 'u_cash', deviceId: DEV };
+    const boss = { userId: 'u_mgr', deviceId: DEV };
+    const { createTaxCategory } = await import('../../db/repositories/tax-category-repo.js');
+    const { createCategory } = await import('../../db/repositories/category-repo.js');
+    const { createMenuItem } = await import('../../db/repositories/menu-item-repo.js');
+    const r = await import('../../db/repositories/order-repo.js');
+    const tax = createTaxCategory(db as never, { name: 'Test GST', rateBps: 1_500 }, boss);
+    const food = createCategory(db as never, { name: 'Test Burgers', displayOrder: 1, colorHex: '#aa5500' }, boss);
+    const burger = createMenuItem(db as never, { categoryId: food.id, name: 'Test Zinger Burger', basePriceCents: 100_000, taxCategoryId: tax.id }, boss).id;
+    const ring = () => {
+      const o = r.createOrder(db as never, { mode: 'takeaway' }, staff);
+      r.addOrderItem(db as never, { orderId: o.id, menuItemId: burger, quantity: 1, modifierIds: [] }, staff);
+      return { id: o.id, total: r.findOrder(db as never, o.id)!.totalCents };
+    };
+    const summary = async (shiftId: string) =>
+      ((await call('shifts:summary', { shiftId })) as { ok: true; data: { paidOrderCount: number; refundedOrderCount: number } }).data;
+
+    const first = ((await call('shifts:open', { openingCashCents: 0 })) as { ok: true; data: { id: string } }).data.id;
+    // Carried over: rung up and ready, paid in the next shift.
+    const carried = ring();
+    r.sendOrderToKitchen(db as never, carried.id, staff);
+    r.markOrderReady(db as never, carried.id, staff);
+    // Paid by card and refunded in full; paid by card and refunded in part.
+    const full = ring();
+    r.tenderOrder(db as never, { orderId: full.id, payments: [{ method: 'card', amountCents: full.total, tenderedCents: null }] }, staff);
+    r.refundOrder(db as never, { orderId: full.id, reason: 'Test wrong order', approverUserId: 'u_mgr', foodMade: 'not_made' }, boss);
+    const part = ring();
+    r.tenderOrder(db as never, { orderId: part.id, payments: [{ method: 'card', amountCents: part.total, tenderedCents: null }] }, staff);
+    r.refundOrder(db as never, { orderId: part.id, reason: 'Test cold fries', approverUserId: 'u_mgr', amountCents: 10_000 }, boss);
+    expect(await summary(first)).toMatchObject({ paidOrderCount: 2, refundedOrderCount: 2 });
+
+    const closed = (await call('shifts:close', {
+      shiftId: first,
+      countedCashCents: 0,
+      carryOverReason: 'Test customer pays later',
+      carryOverOrderIds: [carried.id],
+    })) as { ok: boolean };
+    expect(closed.ok).toBe(true);
+    const second = ((await call('shifts:open', { openingCashCents: 0 })) as { ok: true; data: { id: string } }).data.id;
+    r.markOrderServed(db as never, { orderId: carried.id, payment: { method: 'card', amountCents: carried.total, tenderedCents: null } }, staff);
+
+    expect(await summary(first)).toMatchObject({ paidOrderCount: 2, refundedOrderCount: 2 });
+    expect(await summary(second)).toMatchObject({ paidOrderCount: 1, refundedOrderCount: 0 });
   });
 });

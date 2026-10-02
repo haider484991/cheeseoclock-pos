@@ -507,6 +507,56 @@ function countedNotesToStore(countedNotes: CashCount | null | undefined, counted
 }
 
 /**
+ * The orders SETTLED on this till in a shift (named param @shiftId): live
+ * orders with paid_at set whose latest live positive payment (ORDER BY
+ * paid_at DESC, id DESC) was taken in that shift — the payment's shift, or
+ * for a row from before payments.shift_id (migration 0016) the order's. So
+ * an order started in one shift, carried over unpaid and paid in the next
+ * counts in the next; one taken on the other till and paid here counts here
+ * only; an outside rider's order counts where the money was taken (Rider
+ * paid, or Delivered + Pay), not where it was sent or marked delivered. A
+ * refunded order stays in (the shift report is gross). Plus the paid Rs 0
+ * orders, which have no payment at all, by the order's own shift.
+ *
+ * The close box's "Paid orders", the close result and the shift report all
+ * count this set (step 19d-1). The candidates are two indexed selects joined
+ * by UNION ALL — payments by idx_payments_shift, and the order's own shift by
+ * idx_orders_shift for payments with no shift — never one OR across both
+ * tables, which scans the join; each candidate's latest payment is then one
+ * lookup on idx_payments_order. Returns one row per order: `id`.
+ */
+export const SETTLED_IN_SHIFT_SQL = `
+  SELECT o.id
+    FROM orders o
+   WHERE o.id IN (
+           SELECT p.order_id
+             FROM payments p
+            WHERE p.shift_id = @shiftId AND p.deleted_at IS NULL AND p.amount_cents > 0
+           UNION ALL
+           -- unary +: the order's own shift (idx_orders_shift), then its payments
+           -- by order — never every payment with no shift (idx_payments_shift)
+           SELECT so.id
+             FROM orders so
+             JOIN payments sp ON sp.order_id = so.id
+            WHERE so.shift_id = @shiftId AND so.deleted_at IS NULL
+              AND +sp.shift_id IS NULL AND sp.deleted_at IS NULL AND sp.amount_cents > 0
+         )
+     AND o.deleted_at IS NULL AND o.paid_at IS NOT NULL
+     AND (SELECT COALESCE(lp.shift_id, o.shift_id)
+            FROM payments lp
+           WHERE lp.order_id = o.id AND lp.deleted_at IS NULL AND lp.amount_cents > 0
+           ORDER BY lp.paid_at DESC, lp.id DESC
+           LIMIT 1) = @shiftId
+  UNION
+  SELECT z.id
+    FROM orders z
+   WHERE z.shift_id = @shiftId AND z.deleted_at IS NULL AND z.paid_at IS NOT NULL
+     AND NOT EXISTS (
+           SELECT 1 FROM payments zp
+            WHERE zp.order_id = z.id AND zp.deleted_at IS NULL AND zp.amount_cents > 0
+         )`;
+
+/**
  * Live summary for a shift — used by the Close Shift dialog so the manager
  * can see expected cash + counts before entering the drawer count.
  */
@@ -514,22 +564,36 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
   const shift = findShift(db, shiftId);
   if (!shift) throw new Error('Shift not found');
 
+  // Every order started in this shift, and the ones cancelled: by the order's own shift.
   const counts = db
     .prepare(
       `SELECT
          COUNT(*) AS orderCount,
-         SUM(CASE WHEN paid_at IS NOT NULL AND status NOT IN ('void', 'refunded') THEN 1 ELSE 0 END) AS paidOrderCount,
-         SUM(CASE WHEN status = 'refunded' THEN 1 ELSE 0 END) AS refundedOrderCount,
          SUM(CASE WHEN status = 'void' THEN 1 ELSE 0 END) AS voidedOrderCount
         FROM orders
        WHERE shift_id = ? AND deleted_at IS NULL`,
     )
-    .get(shiftId) as {
-    orderCount: number;
-    paidOrderCount: number;
-    refundedOrderCount: number;
-    voidedOrderCount: number;
-  };
+    .get(shiftId) as { orderCount: number; voidedOrderCount: number | null };
+  // Paid: the orders settled here (SETTLED_IN_SHIFT_SQL), refunded ones included.
+  const paid = db.prepare(`SELECT COUNT(*) AS n FROM (${SETTLED_IN_SHIFT_SQL})`).get({ shiftId }) as { n: number };
+  // Refunds: the orders money was handed back for in this shift, in full or in
+  // part, each once — the payments the money figures below count.
+  const refunded = db
+    .prepare(
+      `SELECT COUNT(DISTINCT order_id) AS n FROM (
+         SELECT p.order_id
+           FROM payments p
+           JOIN orders o ON o.id = p.order_id
+          WHERE p.shift_id = @shiftId AND p.deleted_at IS NULL AND p.amount_cents < 0 AND o.deleted_at IS NULL
+         UNION ALL
+         SELECT o.id
+           FROM orders o
+           JOIN payments p ON p.order_id = o.id
+          WHERE o.shift_id = @shiftId AND o.deleted_at IS NULL
+            AND +p.shift_id IS NULL AND p.deleted_at IS NULL AND p.amount_cents < 0
+       )`,
+    )
+    .get({ shiftId }) as { n: number };
 
   const byMethodRows = db
     .prepare(
@@ -560,21 +624,13 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
   // the cash taken out went to them.
   const expectedCashCents =
     shift.openingCashCents + cashSalesCents - cashRefundsCents + moves.inCents - moves.outCents;
-  // Of the riders' payouts, the trips paid (the rest are delivery charges kept).
-  const trips = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM cash_movements
-        WHERE shift_id = ? AND deleted_at IS NULL AND type = 'payout' AND order_id IS NOT NULL
-          AND substr(reason, 1, ?) = ?`,
-    )
-    .get(shiftId, TRIP_PAYOUT_REASON_START.length, TRIP_PAYOUT_REASON_START) as { n: number };
 
   return {
     shiftId: shiftId as UUID,
-    orderCount: counts.orderCount,
-    paidOrderCount: counts.paidOrderCount ?? 0,
-    refundedOrderCount: counts.refundedOrderCount ?? 0,
-    voidedOrderCount: counts.voidedOrderCount ?? 0,
+    orderCount: Number(counts.orderCount),
+    paidOrderCount: Number(paid.n),
+    refundedOrderCount: Number(refunded.n),
+    voidedOrderCount: Number(counts.voidedOrderCount ?? 0),
     totalRevenueCents: totalRevenueCents as ShiftSummary['totalRevenueCents'],
     totalRefundsCents: totalRefundsCents as ShiftSummary['totalRefundsCents'],
     netRevenueCents: (totalRevenueCents -
@@ -585,7 +641,8 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
     cashOutCents: moves.outCents as ShiftSummary['cashOutCents'],
     riderChargesCents: moves.riderCents as ShiftSummary['riderChargesCents'],
     riderChargeCount: moves.riderCount,
-    riderTripCount: Number(trips.n),
+    // Of the riders' payouts, the trips paid (the rest are delivery charges kept).
+    riderTripCount: moves.riderTripCount,
     openingCashCents: shift.openingCashCents as ShiftSummary['openingCashCents'],
     expectedCashCents: expectedCashCents as ShiftSummary['expectedCashCents'],
     byMethod,
@@ -597,31 +654,69 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
 // -----------------------------------------------------------------------------
 
 /**
- * Pay-ins and pay-outs (tip-outs count as out) recorded against a shift.
- * riderCents / riderCount: the payouts linked to an order (migration 0049) —
- * a delivery charge an outside rider kept, or a trip paid for an order then
- * cancelled. They are a part of outCents, which stays ALL the cash taken out,
- * so the expected-cash formulas built on in / out do not change.
+ * A shift's cash in and out of the drawer that is not a sale or a refund
+ * (cash_movements, live rows), in total and broken down. outCents is ALL the
+ * cash taken out, and is always payoutCents + tipCents + riderCents.
  */
-export function cashMovementTotals(
-  db: AppDatabase,
-  shiftId: string,
-): { inCents: number; outCents: number; riderCents: number; riderCount: number } {
+export interface CashMovementTotals {
+  /** Cash put in (type 'payin'): change from the bank, a top-up. */
+  inCents: number;
+  inCount: number;
+  /** All the cash taken out: payouts of every kind and rider tips. */
+  outCents: number;
+  /** Payouts typed by hand (type 'payout' with no order): suppliers, expenses, a purchase paid from the drawer. */
+  payoutCents: number;
+  payoutCount: number;
+  /** Rider tips (type 'tip_out'). */
+  tipCents: number;
+  tipCount: number;
+  /**
+   * The payouts linked to an order (migration 0049): a delivery charge an
+   * outside rider kept, or a trip paid for an order then cancelled.
+   */
+  riderCents: number;
+  riderCount: number;
+  /** How many of riderCount were a trip paid (by the payout's own words, TRIP_PAYOUT_REASON_START). */
+  riderTripCount: number;
+}
+
+/**
+ * Pay-ins and pay-outs (tip-outs count as out) recorded against a shift,
+ * with the breakdown the close result and the shift report print (one read).
+ * The riders' payouts are a part of outCents, which stays ALL the cash taken
+ * out, so the expected-cash formulas built on in / out do not change. The
+ * close result's and Shift history's "Cash taken out" is payoutCents +
+ * tipCents (outCents − riderCents).
+ */
+export function cashMovementTotals(db: AppDatabase, shiftId: string): CashMovementTotals {
   const row = db
     .prepare(
       `SELECT
          COALESCE(SUM(CASE WHEN type = 'payin' THEN amount_cents ELSE 0 END), 0) AS inCents,
+         COALESCE(SUM(CASE WHEN type = 'payin' THEN 1 ELSE 0 END), 0) AS inCount,
          COALESCE(SUM(CASE WHEN type IN ('payout', 'tip_out') THEN amount_cents ELSE 0 END), 0) AS outCents,
+         COALESCE(SUM(CASE WHEN type = 'payout' AND order_id IS NULL THEN amount_cents ELSE 0 END), 0) AS payoutCents,
+         COALESCE(SUM(CASE WHEN type = 'payout' AND order_id IS NULL THEN 1 ELSE 0 END), 0) AS payoutCount,
+         COALESCE(SUM(CASE WHEN type = 'tip_out' THEN amount_cents ELSE 0 END), 0) AS tipCents,
+         COALESCE(SUM(CASE WHEN type = 'tip_out' THEN 1 ELSE 0 END), 0) AS tipCount,
          COALESCE(SUM(CASE WHEN type = 'payout' AND order_id IS NOT NULL THEN amount_cents ELSE 0 END), 0) AS riderCents,
-         COALESCE(SUM(CASE WHEN type = 'payout' AND order_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS riderCount
+         COALESCE(SUM(CASE WHEN type = 'payout' AND order_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS riderCount,
+         COALESCE(SUM(CASE WHEN type = 'payout' AND order_id IS NOT NULL AND substr(reason, 1, ?) = ? THEN 1 ELSE 0 END), 0)
+           AS riderTripCount
         FROM cash_movements WHERE shift_id = ? AND deleted_at IS NULL`,
     )
-    .get(shiftId) as { inCents: number; outCents: number; riderCents: number; riderCount: number };
+    .get(TRIP_PAYOUT_REASON_START.length, TRIP_PAYOUT_REASON_START, shiftId) as Record<keyof CashMovementTotals, number>;
   return {
     inCents: Number(row.inCents),
+    inCount: Number(row.inCount),
     outCents: Number(row.outCents),
+    payoutCents: Number(row.payoutCents),
+    payoutCount: Number(row.payoutCount),
+    tipCents: Number(row.tipCents),
+    tipCount: Number(row.tipCount),
     riderCents: Number(row.riderCents),
     riderCount: Number(row.riderCount),
+    riderTripCount: Number(row.riderTripCount),
   };
 }
 

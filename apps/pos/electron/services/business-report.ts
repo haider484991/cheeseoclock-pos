@@ -1239,17 +1239,97 @@ function rowValue(
   return rowCost(r, pricing, takenAt).value;
 }
 
+/** The answer to "Was the food made?" for one order; null when nothing on record says. */
+type StockAnswer = ReportOrderStock['answer'];
+
+/**
+ * The settle rows of the listed orders (ONE param: their ids as JSON): what
+ * cancelling or refunding in full put back or booked as waste, looked up by
+ * order (alias `m`).
+ */
+const ORDER_SETTLE_ROWS = `
+         FROM stock_movements m
+        WHERE m.ref_order_id IN (SELECT value FROM json_each(?)) AND m.deleted_at IS NULL
+          -- unary +: look rows up by order (idx_movements_order), never by reason
+          AND (+m.reason IN ('waste', 'count') OR (+m.reason = 'sale' AND m.delta_qty > 0))`;
+
+/**
+ * One settle row's note on top of what the order's rows said so far. A
+ * "made" settle can put sealed drinks back too, so "made" wins; "not made"
+ * never wastes, so it stands only where nothing else was said.
+ */
+function withSettleNote(sofar: StockAnswer, notes: string | null): StockAnswer {
+  const said = noteKindAnswer(orderStockNoteKind(notes));
+  return said === 'made' || (said === 'not_made' && sofar === null) ? said : sofar;
+}
+
+/** This till's order-level audit rows of "Was the food made?" for the listed orders (ids as JSON), oldest first. */
+function orderStockAudits(
+  db: AppDatabase,
+  ids: string,
+): Array<{ orderId: string; before: Record<string, unknown>; after: Record<string, unknown> }> {
+  const rows = db
+    .prepare(
+      `SELECT entity_id AS orderId, before_json AS beforeJson, after_json AS afterJson
+         FROM audit_log
+        WHERE entity_type = 'orders' AND entity_id IN (SELECT value FROM json_each(?))
+          AND action IN ('stock_put_back', 'stock_to_waste')
+        ORDER BY rowid`,
+    )
+    .all(ids) as Array<{ orderId: string; beforeJson: string | null; afterJson: string | null }>;
+  return rows.map((a) => ({ orderId: a.orderId, before: safeJson(a.beforeJson), after: safeJson(a.afterJson) }));
+}
+
+/**
+ * The answers, from the settle rows' notes and then this till's audit rows
+ * (each audit row with an answer replaces it; the last one stands). Only the
+ * orders with settle rows are in the map.
+ */
+function stockAnswersOf(
+  rows: ReadonlyArray<{ orderId: string; notes: string | null }>,
+  audits: ReadonlyArray<{ orderId: string; after: Record<string, unknown> }>,
+): Map<string, StockAnswer> {
+  const out = new Map<string, StockAnswer>();
+  for (const r of rows) out.set(r.orderId, withSettleNote(out.get(r.orderId) ?? null, r.notes));
+  for (const a of audits) {
+    if (!out.has(a.orderId)) continue;
+    const said = a.after['outcome'];
+    if (said === 'made' || said === 'not_made') out.set(a.orderId, said);
+  }
+  return out;
+}
+
+/**
+ * The answer to "Was the food made?" for each listed order that settled its
+ * stock (cancelled, or refunded in full): exactly getOrderStockOutcomes's
+ * answer — the order-level audit row where this till wrote one, else what
+ * the settle rows' notes stand for — with no prices loaded and no waste
+ * valued. The shift report's cancels read it inside the close (step 19d-1:
+ * costing data is never loaded there). An order with no settle rows is not
+ * in the map. Two indexed reads (idx_movements_order, idx_audit_entity).
+ */
+export function getOrderStockAnswers(db: AppDatabase, orderIds: readonly string[]): Map<string, StockAnswer> {
+  if (orderIds.length === 0) return new Map();
+  const ids = JSON.stringify(orderIds);
+  const rows = db.prepare(`SELECT m.ref_order_id AS orderId, m.notes AS notes ${ORDER_SETTLE_ROWS}`).all(ids) as Array<{
+    orderId: string;
+    notes: string | null;
+  }>;
+  return stockAnswersOf(rows, orderStockAudits(db, ids));
+}
+
 /**
  * What cancelling / refunding in full did to each order's stock ("Was the
  * food made?", order-stock-repo.ts): put back, or wasted (and what that
  * waste cost when the order took it — rows from before costing at today's
- * prices), from the order's settle rows. The ANSWER comes from the
- * order-level audit row where this till wrote one (else from what the
- * settle rows' notes stand for — the other till's audit trail stays there),
- * with the status it was in and whether it went against the till's hint.
- * The flag follows the answer, not the rows: a correct "Made" where only
- * sealed drinks moved put stock back, and is no false alarm. Two indexed
- * reads over the listed orders (idx_movements_order, idx_audit_entity).
+ * prices), from the order's settle rows. The ANSWER is getOrderStockAnswers's
+ * (the order-level audit row where this till wrote one, else what the settle
+ * rows' notes stand for — the other till's audit trail stays there), worked
+ * out from the same two reads; with it, the status it was in and whether it
+ * went against the till's hint, from the last audit row. The flag follows
+ * the answer, not the rows: a correct "Made" where only sealed drinks moved
+ * put stock back, and is no false alarm. Two indexed reads over the listed
+ * orders (idx_movements_order, idx_audit_entity).
  */
 export function getOrderStockOutcomes(
   db: AppDatabase,
@@ -1264,10 +1344,7 @@ export function getOrderStockOutcomes(
       `SELECT m.ref_order_id AS orderId, m.reason AS reason, m.unit AS rowUnit, m.notes AS notes,
               m.ingredient_id AS ingredientId, m.delta_qty AS qty, m.value_cents AS value,
               COALESCE(m.ref_taken_at, m.occurred_at) AS takenAt
-         FROM stock_movements m
-        WHERE m.ref_order_id IN (SELECT value FROM json_each(?)) AND m.deleted_at IS NULL
-          -- unary +: look rows up by order (idx_movements_order), never by reason
-          AND (+m.reason IN ('waste', 'count') OR (+m.reason = 'sale' AND m.delta_qty > 0))`,
+         ${ORDER_SETTLE_ROWS}`,
     )
     .all(ids) as Array<{
     orderId: string;
@@ -1287,33 +1364,21 @@ export function getOrderStockOutcomes(
       statusBefore: null,
       flagged: false,
     };
-    // A "made" settle can put sealed drinks back too; "not made" never wastes.
-    const said = noteKindAnswer(orderStockNoteKind(r.notes));
-    if (said === 'made' || (said === 'not_made' && cur.answer === null)) cur.answer = said;
     if (r.reason === 'waste') {
       cur.outcome = 'wasted';
       cur.wasteCents += -(rowValue({ ...r, qty: Number(r.qty), value: r.value === null ? null : Number(r.value) }, pricing, r.takenAt) ?? 0);
     }
     out.set(r.orderId, cur);
   }
-  const audits = db
-    .prepare(
-      `SELECT entity_id AS orderId, before_json AS beforeJson, after_json AS afterJson
-         FROM audit_log
-        WHERE entity_type = 'orders' AND entity_id IN (SELECT value FROM json_each(?))
-          AND action IN ('stock_put_back', 'stock_to_waste')
-        ORDER BY rowid`,
-    )
-    .all(ids) as Array<{ orderId: string; beforeJson: string | null; afterJson: string | null }>;
-  for (const a of audits) {
-    const cur = out.get(a.orderId);
-    if (!cur) continue;
-    const before = safeJson(a.beforeJson);
-    const after = safeJson(a.afterJson);
-    const status = typeof before['status'] === 'string' ? before['status'] : null;
-    cur.statusBefore = status;
-    if (after['outcome'] === 'made' || after['outcome'] === 'not_made') cur.answer = after['outcome'];
-    cur.flagged = putBackAfterCooking(cur) || after['againstHint'] === true;
+  const audits = orderStockAudits(db, ids);
+  for (const [orderId, answer] of stockAnswersOf(rows, audits)) out.get(orderId)!.answer = answer;
+  // The status it was in, and the flag, are the last audit row's.
+  const lastAudit = new Map(audits.map((a) => [a.orderId, a]));
+  for (const [orderId, cur] of out) {
+    const a = lastAudit.get(orderId);
+    if (!a) continue;
+    cur.statusBefore = typeof a.before['status'] === 'string' ? a.before['status'] : null;
+    cur.flagged = putBackAfterCooking(cur) || a.after['againstHint'] === true;
   }
   return out;
 }
