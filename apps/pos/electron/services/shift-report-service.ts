@@ -14,6 +14,7 @@ import type {
   ShiftReport,
   ShiftReportAtClose,
   ShiftReportCancelled,
+  ShiftReportPrintResult,
   ShiftReportRules,
 } from '@cheeseoclock/shared-types';
 import { parseShiftReportJson } from '@cheeseoclock/shared-schemas';
@@ -34,6 +35,7 @@ import {
   SETTLED_IN_SHIFT_SQL,
   getShiftCloseReport,
   recordShiftReportPrint,
+  shiftReportPrintHistory,
   type ShiftCloseContext,
   type ShiftCloseReport,
   type ShiftReportPrintOutcome,
@@ -69,8 +71,8 @@ import { printSpooler } from './print-spooler.js';
  * reads no food cost, waste value, commission or profit — no ingredient,
  * recipe, price or cost table — so the close never loads costing data.
  * Printing the saved report once the close is done (shiftReportAtClose,
- * step 19f-2) puts each try on record through shift-repo's
- * recordShiftReportPrint.
+ * step 19f-2) and again later (printShiftReportAgain, step 19f-3) puts each
+ * try on record through shift-repo's recordShiftReportPrint.
  *
  * The bases (shared-types shift-report.ts):
  *  - the orders SETTLED on this till in this shift (shift-repo
@@ -446,10 +448,14 @@ interface FrozenPrint {
   report: ShiftReport;
   /** This till's switches (Settings → Printers → Shift report), read when it was asked for. */
   rules: ShiftReportRules;
-  /** The 'Printed ... by' name. */
+  /** The 'Printed ... by' name (and, on a reprint, the DUPLICATE band's). */
   printedByName: string;
   byUserId: string;
   approvedByUserId: string | null;
+  /** null for the ORIGINAL; N for a DUPLICATE 'Reprint #N'. */
+  reprintNo: number | null;
+  /** A reprint's note under the saved figures: the cash of test orders deleted since the close (signed; 0 for none). */
+  testDeletedCashCents: number;
 }
 
 /**
@@ -497,6 +503,8 @@ export function shiftReportAtClose(db: AppDatabase, shiftId: string, closer: Shi
       byUserId: closer.userId,
       // The manager's PIN or password closed it on a cashier's login.
       approvedByUserId: closer.tillSignedInUserId ? closer.userId : null,
+      reprintNo: null,
+      testDeletedCashCents: 0,
     };
     if (!printSpooler.hasReceiptPrinter()) {
       void toNoPrinterFile(job);
@@ -510,14 +518,22 @@ export function shiftReportAtClose(db: AppDatabase, shiftId: string, closer: Shi
   }
 }
 
-/** The paper's bytes at the printer's width: the saved report, this till's switches, printed now. */
+/**
+ * The paper's bytes at the printer's width: the saved report, this till's
+ * switches, printed now. A reprint says DUPLICATE 'Reprint #N' (now, by the
+ * person printing it) and notes the test orders deleted since the close.
+ */
 function renderFrozen(job: FrozenPrint, width: PrinterWidth): Uint8Array {
+  const printedAt = new Date();
+  const stamp = job.reprintNo === null ? null : { reprintNo: job.reprintNo, at: printedAt, byName: job.printedByName };
   return renderShiftReport(job.report, {
     width,
     sections: job.rules.sections,
     items: job.rules.items,
-    printedAt: new Date(),
+    printedAt,
     printedByName: job.printedByName,
+    stamp,
+    sinceClose: stamp ? { testDeletedCashCents: job.testDeletedCashCents } : null,
   });
 }
 
@@ -531,53 +547,72 @@ function receiptWidth(db: AppDatabase): PrinterWidth {
 }
 
 /**
- * The ORIGINAL at the close, on the receipt printer (printDocumentNow: in
- * turn with the queue, no print_queue row, no drawer pulse). Nothing waits
- * for it. One 'shift_report_printed' row puts the try on record ('maybe'
- * when the printer failed after the bytes may have gone out); a paper that
- * did not print is then told to the till windows (notifyShiftReportFailure),
- * so Try again finds the failed original. Never throws: every error is
- * caught and logged.
+ * One paper of the saved report sent to the receipt printer
+ * (printDocumentNow: in turn with the queue, no print_queue row, no drawer
+ * pulse), and the width it was drawn at (the printer's as set when it was
+ * never drawn). A throw is a failure like any other.
+ */
+async function sendFrozen(job: FrozenPrint): Promise<{ result: PrintResult; width: PrinterWidth }> {
+  const drawn: { width: PrinterWidth | null } = { width: null };
+  let result: PrintResult;
+  try {
+    result = await printSpooler.printDocumentNow((width) => {
+      drawn.width = width;
+      return renderFrozen(job, width);
+    });
+  } catch (e) {
+    // printDocumentNow never throws; should it ever, it is a failure like any other.
+    result = {
+      ok: false,
+      durationMs: 0,
+      error: { code: 'spooler_exception', message: e instanceof Error ? e.message : String(e), recoverable: true },
+    };
+  }
+  return { result, width: drawn.width ?? receiptWidth(job.db) };
+}
+
+/**
+ * One 'shift_report_printed' row for a try ('maybe' when the printer failed
+ * after the bytes may have gone out): the ORIGINAL, or 'Reprint #N', with
+ * the sections and the width it printed at. A row that cannot be written is
+ * logged; the paper's answer stands.
+ */
+function recordTry(job: FrozenPrint, sent: { result: PrintResult; width: PrinterWidth }): void {
+  const { db, shiftId, rules } = job;
+  const { result } = sent;
+  try {
+    recordShiftReportPrint(db, {
+      shiftId,
+      copy: job.reprintNo === null ? 'original' : 'reprint',
+      reprintNo: job.reprintNo ?? 0,
+      sections: SHIFT_REPORT_SECTIONS.map((s) => s.key).filter((k) => rules.sections[k]),
+      items: rules.items,
+      width: sent.width,
+      outcome: (result.ok ? 'ok' : result.error?.maybeSent ? 'maybe' : 'failed') satisfies ShiftReportPrintOutcome,
+      errorCode: result.ok ? null : (result.error?.code ?? 'unknown'),
+      byUserId: job.byUserId,
+      approvedByUserId: job.approvedByUserId,
+    });
+  } catch (e) {
+    log.error('Shift report print not put on record', { shiftId, error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+/**
+ * The ORIGINAL at the close, on the receipt printer. Nothing waits for it.
+ * The try goes on record (recordTry); a paper that did not print is then
+ * told to the till windows (notifyShiftReportFailure), so Try again finds
+ * the failed original. Never throws: every error is caught and logged.
  */
 async function printFrozen(job: FrozenPrint): Promise<void> {
-  const { db, shiftId, rules } = job;
+  const { shiftId } = job;
   try {
-    const drawn: { width: PrinterWidth | null } = { width: null };
-    let result: PrintResult;
-    try {
-      result = await printSpooler.printDocumentNow((width) => {
-        drawn.width = width;
-        return renderFrozen(job, width);
-      });
-    } catch (e) {
-      // printDocumentNow never throws; should it ever, it is a failure like any other.
-      result = {
-        ok: false,
-        durationMs: 0,
-        error: { code: 'spooler_exception', message: e instanceof Error ? e.message : String(e), recoverable: true },
-      };
-    }
-    const outcome: ShiftReportPrintOutcome = result.ok ? 'ok' : result.error?.maybeSent ? 'maybe' : 'failed';
-    try {
-      recordShiftReportPrint(db, {
-        shiftId,
-        copy: 'original',
-        reprintNo: 0,
-        sections: SHIFT_REPORT_SECTIONS.map((s) => s.key).filter((k) => rules.sections[k]),
-        items: rules.items,
-        width: drawn.width ?? receiptWidth(db),
-        outcome,
-        errorCode: result.ok ? null : (result.error?.code ?? 'unknown'),
-        byUserId: job.byUserId,
-        approvedByUserId: job.approvedByUserId,
-      });
-    } catch (e) {
-      log.error('Shift report print not put on record', { shiftId, error: e instanceof Error ? e.message : String(e) });
-    }
-    if (result.ok) {
-      log.info('Shift report printed', { shiftId, width: drawn.width });
+    const sent = await sendFrozen(job);
+    recordTry(job, sent);
+    if (sent.result.ok) {
+      log.info('Shift report printed', { shiftId, width: sent.width });
     } else {
-      printSpooler.notifyShiftReportFailure(shiftId, result.error);
+      printSpooler.notifyShiftReportFailure(shiftId, sent.result.error);
     }
   } catch (e) {
     log.error('Shift report not printed', { shiftId, error: e instanceof Error ? e.message : String(e) });
@@ -600,4 +635,120 @@ async function toNoPrinterFile(job: FrozenPrint): Promise<void> {
       error: e instanceof Error ? e.message : String(e),
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Printing again: Try again and Print again
+
+/** Why a shift's report cannot be printed again; 'shifts:printReport' words it (guards.ts REFUSED). */
+export type ShiftReportAgainRefusal = 'not_saved' | 'newer' | 'unreadable';
+
+/** printShiftReportAgain said no: nothing printed, nothing put on record. */
+export class ShiftReportRefused extends Error {
+  constructor(readonly reason: ShiftReportAgainRefusal) {
+    super(`Shift report not printed again: ${reason}`);
+    this.name = 'ShiftReportRefused';
+  }
+}
+
+/** Who prints the report again: the person signed in, and the manager or owner whose PIN or password let a cashier's login do it. */
+export interface ShiftReportAgainBy {
+  userId: string;
+  name: string;
+  approvedByUserId: string | null;
+}
+
+/** The answer on the "No printer" setup, where nothing prints. */
+export const NO_RECEIPT_PRINTER = 'No receipt printer is set up on this till';
+
+let againTurn: Promise<unknown> = Promise.resolve();
+
+/** One print-again at a time on this till: each reads the print log after the one before it put its try on record. */
+function inTurn<T>(work: () => Promise<T>): Promise<T> {
+  const run = againTurn.then(work, work);
+  againTurn = run.catch(() => undefined);
+  return run;
+}
+
+/**
+ * The shift report again (final plan step 19f-3): Try again on the note
+ * that it did not print, the close result's Print again and Shift history's
+ * (through 'shifts:printReport', which decides who may, and that the shift
+ * is closed, first). Awaited: it answers once the printer has (the
+ * adapters' own timeouts bound the wait).
+ *
+ * It prints the figures saved at the close (parseShiftReportJson), never
+ * worked out again, through this till's renderer with its section switches
+ * as they are NOW: a section the owner switched on since the close prints
+ * from the saved figures too (the owner, 2 Oct 2026: toggles change only
+ * what prints). Printing at close being off does not stop it.
+ *  - again false (Try again) while this till tried the ORIGINAL and none
+ *    came out (no 'ok' or 'maybe' on record): the ORIGINAL again, like a
+ *    receipt's Try again;
+ *  - otherwise a DUPLICATE 'Reprint #N', N one more than the highest that
+ *    came out or may have on this till, with the cash of test orders the
+ *    owner deleted since the close noted under the saved figures (never
+ *    taken off them).
+ * Each try goes on record (one 'shift_report_printed' row). The "No
+ * printer" setup writes the paper to its file, as at the close, puts
+ * nothing on record and answers not printed, code 'no_printer'.
+ *
+ * Refused with ShiftReportRefused (nothing printed or written): no report
+ * saved with the close ('not_saved'), one made by a newer till ('newer'),
+ * or one that cannot be read ('unreadable').
+ */
+export function printShiftReportAgain(
+  db: AppDatabase,
+  req: { shiftId: string; again: boolean },
+  by: ShiftReportAgainBy,
+): Promise<ShiftReportPrintResult> {
+  return inTurn(async () => {
+    const { shiftId } = req;
+    const stored = getShiftCloseReport(db, shiftId);
+    if (!stored) throw new ShiftReportRefused('not_saved');
+    const parsed = parseShiftReportJson(stored.json);
+    if (!parsed) {
+      log.warn('Shift report not printed again: the saved report cannot be read', { shiftId });
+      throw new ShiftReportRefused('unreadable');
+    }
+    if (!('report' in parsed)) throw new ShiftReportRefused('newer');
+
+    const history = shiftReportPrintHistory(db, shiftId);
+    const original = !req.again && history.originalTries > 0 && !history.originalPrinted;
+    const job: FrozenPrint = {
+      db,
+      shiftId,
+      report: parsed.report,
+      rules: shiftReportRules(getPrintPolicy(db)),
+      printedByName: by.name,
+      byUserId: by.userId,
+      approvedByUserId: by.approvedByUserId,
+      reprintNo: original ? null : history.reprints + 1,
+      testDeletedCashCents: original ? 0 : testDeletedSinceClose(db, shiftId),
+    };
+    const copy = original ? 'original' : 'reprint';
+    const reprintNo = job.reprintNo ?? 0;
+    if (!printSpooler.hasReceiptPrinter()) {
+      await toNoPrinterFile(job);
+      return { printed: false, copy, reprintNo, error: { code: 'no_printer', message: NO_RECEIPT_PRINTER } };
+    }
+    const sent = await sendFrozen(job);
+    recordTry(job, sent);
+    const { result } = sent;
+    if (result.ok) {
+      log.info('Shift report printed again', { shiftId, copy, reprintNo, width: sent.width });
+      return { printed: true, copy, reprintNo, error: null };
+    }
+    log.warn('Shift report not printed again', { shiftId, copy, reprintNo, error: result.error });
+    return {
+      printed: false,
+      copy,
+      reprintNo,
+      error: {
+        code: result.error?.code ?? 'unknown',
+        message: result.error?.message ?? 'Unknown print error',
+        ...(result.error?.maybeSent ? { maybeSent: true } : {}),
+      },
+    };
+  });
 }

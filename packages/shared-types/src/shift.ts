@@ -207,6 +207,32 @@ export type ClosedShift = Shift & {
   summary?: ShiftSummary;
 };
 
+/**
+ * How long after its close a manager may print a shift's report again, on
+ * the till it closed on (the close result's Print again, or Try again on
+ * the note that it did not print): 15 minutes. After that only the owner
+ * prints it, from Shift history.
+ */
+export const SHIFT_REPORT_AGAIN_MS = 15 * 60_000;
+
+/**
+ * What 'shifts:printReport' did (v0.7.35): the shift report printed again
+ * from the figures saved at the close, with this till's section switches.
+ *  - copy 'original', reprintNo 0: the close's own paper, which did not
+ *    come out, tried again (Try again);
+ *  - copy 'reprint', reprintNo N: a DUPLICATE 'Reprint #N' (Print again, and
+ *    Try again once the original came out or may have).
+ * `error` says why it did not print, in plain words (null when it printed):
+ * `maybeSent` when a paper may be in the tray all the same; code
+ * 'no_printer' on the "No printer" setup, where nothing prints.
+ */
+export interface ShiftReportPrintResult {
+  printed: boolean;
+  copy: 'original' | 'reprint';
+  reprintNo: number;
+  error: { code: string; message: string; maybeSent?: boolean } | null;
+}
+
 export type CashMovementType = 'payout' | 'payin' | 'tip_out';
 
 export interface CashMovement {

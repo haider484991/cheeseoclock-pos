@@ -12,6 +12,8 @@
  *     orders of the shift open now; a kitchen ticket only while the kitchen
  *     still has the order; the customer on a sent or paid bill never changes;
  *   - managers and the owner keep all of it;
+ *   - the shift report printed again (v0.7.35): the counter is asked for a
+ *     manager's PIN or password first, in the main process;
  *   - costs (the Costing page, the batch calculator's rupees, the recipe
  *     calculator's) are refused to the counter the same way, and the
  *     food-cost targets, the payment fees and the rider cost (costing spec
@@ -823,6 +825,17 @@ const MENU_FILES = (): Record<string, unknown> => ({
   'menuDeploy:preview': { packageId: '0b8f6c8e-8f8a-4c8a-9d2e-1c6a7d2b9e10' },
   'menuDeploy:apply': { packageId: '0b8f6c8e-8f8a-4c8a-9d2e-1c6a7d2b9e10' },
   'menuDeploy:createKey': undefined,
+});
+
+/**
+ * The shift report printed again (v0.7.35): the owner any closed shift, a
+ * manager the shift just closed on this till, the counter only with a
+ * manager's PIN or password typed on it — asked for with details
+ * `{ needs: 'manager_pin' }` — and then by that person's rules
+ * (shift-report-print.db.test.ts has the rules themselves).
+ */
+const SHIFT_REPORT_AGAIN = (): Record<string, unknown> => ({
+  'shifts:printReport': { shiftId: s.earlierShift },
 });
 
 /**
@@ -1892,6 +1905,51 @@ describe.skipIf(!Sqlite)('shift money at the counter', () => {
       expect(await call(channel, { shiftId: s.openNow })).toMatchObject({ ok: false, code: 'forbidden' });
     }
   });
+
+  it("the shift report again (v0.7.35): the counter is asked for a manager's PIN or password, a wrong one is refused as wrong, nobody signed in is 'Not logged in'; managers and the owner get past the guard; nothing prints or is written", async () => {
+    /** The whole refusal, its details too (call() keeps only the code and the words). */
+    const refusalOf = async (payload: unknown): Promise<unknown> => {
+      try {
+        const r = (await h.handlers.get('shifts:printReport')!({ db, deviceId: DEV }, payload)) as { ok: boolean; error?: unknown };
+        return r.ok ? r : r.error;
+      } catch (e) {
+        return (e as { apiError?: unknown }).apiError ?? e;
+      }
+    };
+    const before = writtenRows();
+    const spooled = h.spool.length;
+    h.session = null;
+    expect(await call('shifts:printReport', { shiftId: s.earlierShift })).toEqual({ ok: false, code: 'unauthenticated', message: 'Not logged in' });
+
+    h.session = CASHIER;
+    expect(await refusalOf({ shiftId: s.earlierShift })).toEqual({
+      code: 'forbidden',
+      message: "A manager's PIN or password is needed to print the shift report",
+      details: { needs: 'manager_pin' },
+    });
+    expect(await refusalOf({ shiftId: s.earlierShift, approverPin: '   ' })).toMatchObject({ code: 'forbidden', details: { needs: 'manager_pin' } });
+    // Nobody's PIN here (auth-service stands in): refused as a wrong one, to be asked again.
+    expect(await refusalOf({ shiftId: s.earlierShift, approverPin: '0000' })).toEqual({
+      code: 'forbidden',
+      message: "That is not a manager's PIN or password",
+      details: { needs: 'manager_pin', wrongSecret: true },
+    });
+
+    // A manager and the owner get past the guard: the earlier shift was closed with no report saved; the shift open now is open.
+    for (const who of [MANAGER, OWNER]) {
+      h.session = who;
+      expect({ who: who.role, o: await call('shifts:printReport', { shiftId: s.earlierShift }) }).toEqual({
+        who: who.role,
+        o: { ok: false, code: 'not_found', message: 'This shift was closed before the till printed shift reports' },
+      });
+      expect({ who: who.role, o: await call('shifts:printReport', { shiftId: s.openNow }) }).toEqual({
+        who: who.role,
+        o: { ok: false, code: 'precondition_failed', message: 'This shift is still open - close it first' },
+      });
+    }
+    expect(writtenRows()).toEqual(before);
+    expect(h.spool.slice(spooled)).toEqual([]);
+  });
 });
 
 /** Every list above, by name (a channel's "home"). */
@@ -1906,6 +1964,7 @@ const classification = (): Record<string, string[]> => ({
   COUNTER_ALLOWED: Object.keys(COUNTER_ALLOWED()),
   ALREADY_MANAGERS: Object.keys(ALREADY_MANAGERS()),
   MENU_FILES: Object.keys(MENU_FILES()),
+  SHIFT_REPORT_AGAIN: Object.keys(SHIFT_REPORT_AGAIN()),
   BEING_ADDED_ELSEWHERE,
 });
 

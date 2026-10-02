@@ -205,6 +205,12 @@ export const ipc = {
     close: (input: IpcRequest<'shifts:close'>) => unwrap(window.api.shifts.close(input)),
     /** Who closes, and the unpaid orders the close carries over (a cashier's login: the manager's PIN). */
     closeCheck: (input: IpcRequest<'shifts:closeCheck'>) => unwrap(window.api.shifts.closeCheck(input)),
+    /**
+     * The shift report again (again: false is Try again: the original when it
+     * did not come out). A cashier's login is refused with needs 'manager_pin'
+     * until a manager's PIN or password comes with it.
+     */
+    printReport: (input: IpcRequest<'shifts:printReport'>) => unwrap(window.api.shifts.printReport(input)),
     list: (input?: IpcRequest<'shifts:list'>) => unwrap(window.api.shifts.list(input)),
     summary: (shiftId: string) => unwrap(window.api.shifts.summary({ shiftId })),
     lastCount: () => unwrap(window.api.shifts.lastCount()),

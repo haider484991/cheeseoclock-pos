@@ -1,9 +1,9 @@
 import log from 'electron-log/main';
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
-import { ok, hasCapability } from '@cheeseoclock/shared-types';
+import { NEEDS_MANAGER_PIN, SHIFT_REPORT_AGAIN_MS, ok, hasCapability } from '@cheeseoclock/shared-types';
 import { openingFloatPrefill } from '@cheeseoclock/pos-domain';
-import type { AuthenticatedUser, ShiftSummary } from '@cheeseoclock/shared-types';
+import type { ApiError, AuthenticatedUser, Role, ShiftSummary } from '@cheeseoclock/shared-types';
 import { getCurrentSession, verifyManagerPin } from '../../services/auth-service.js';
 import {
   closeShift,
@@ -24,7 +24,14 @@ import { DrawerOpenRefused, openDrawerNoSale } from '../../services/drawer-servi
 import { closeWouldPauseWebOrders, followShiftForWebOrders } from '../../services/web-orders-shift-pause.js';
 import { requireCapability, REFUSED } from '../guards.js';
 import { readOpeningFloat } from '../../services/till-settings.js';
-import { makeShiftReport, shiftReportAtClose } from '../../services/shift-report-service.js';
+import {
+  ShiftReportRefused,
+  makeShiftReport,
+  printShiftReportAgain,
+  shiftReportAtClose,
+  type ShiftReportAgainBy,
+  type ShiftReportAgainRefusal,
+} from '../../services/shift-report-service.js';
 
 /**
  * Shifts IPC. Open/close are gated on the `shift.open` / `shift.close`
@@ -115,6 +122,67 @@ function closedShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary | nu
     return null;
   }
 }
+
+/** Who prints a shift report again, and by whose rules (shifts:printReport). */
+export interface ShiftReportPrinter extends ShiftReportAgainBy {
+  /** 'owner': any closed shift, from either till; 'manager': this till's shift, within SHIFT_REPORT_AGAIN_MS of its close. */
+  rules: 'owner' | 'manager';
+}
+
+/** A user's role as this till has it, or null (no such user, or a role it does not know). */
+function roleOf(db: AppDatabase, userId: string): Role | null {
+  const row = db.prepare(`SELECT role FROM users WHERE id = ?`).get(userId) as { role: string } | undefined;
+  return row?.role === 'admin' || row?.role === 'manager' || row?.role === 'cashier' ? row.role : null;
+}
+
+/**
+ * Who may print the shift report again (final plan step 19f-3): the owner
+ * (Reports: report.view) any closed shift; a manager (shift.close) the
+ * shift just closed on this till; a cashier's login only with a manager's
+ * or the owner's PIN or password — checked here, in the main process, with
+ * the sign-in lockout rules (verifyManagerPin) — and then by that person's
+ * rules. With none typed it is refused 'forbidden' with details
+ * `{ needs: 'manager_pin' }`, and with a wrong one `wrongSecret: true` too:
+ * the screen asks and sends it again.
+ */
+export async function shiftReportPrinter(
+  db: AppDatabase,
+  s: AuthenticatedUser,
+  approverPin: unknown,
+): Promise<ShiftReportPrinter> {
+  const me = { userId: s.id, name: s.fullName, approvedByUserId: null };
+  if (hasCapability(s.role, 'report.view')) return { ...me, rules: 'owner' };
+  if (hasCapability(s.role, 'shift.close')) return { ...me, rules: 'manager' };
+  const pin = typeof approverPin === 'string' ? approverPin : '';
+  if (pin.trim() === '') {
+    throw new IpcGuardError({ code: 'forbidden', message: REFUSED.shiftReportPin, details: { needs: NEEDS_MANAGER_PIN } });
+  }
+  let approverUserId: string;
+  try {
+    approverUserId = (await verifyManagerPin(db, pin)).approverUserId;
+  } catch (e) {
+    throw new IpcGuardError({
+      code: 'forbidden',
+      message: e instanceof Error ? e.message : 'Manager approval failed',
+      details: { needs: NEEDS_MANAGER_PIN, wrongSecret: true },
+    });
+  }
+  const role = roleOf(db, approverUserId);
+  return { ...me, approvedByUserId: approverUserId, rules: role !== null && hasCapability(role, 'report.view') ? 'owner' : 'manager' };
+}
+
+/** Is `nowMs` within SHIFT_REPORT_AGAIN_MS of the close (either side: a till clock put back a little still counts)? */
+export function withinShiftReportAgain(closedAt: string, nowMs: number): boolean {
+  const closedMs = Date.parse(closedAt);
+  return Number.isFinite(closedMs) && Math.abs(nowMs - closedMs) <= SHIFT_REPORT_AGAIN_MS;
+}
+
+/** printShiftReportAgain's refusals, in the till's words. */
+const REPORT_REFUSAL: Record<ShiftReportAgainRefusal, ApiError> = {
+  not_saved: { code: 'not_found', message: REFUSED.shiftReportNotSaved },
+  newer: { code: 'precondition_failed', message: REFUSED.shiftReportNewer },
+  unreadable: { code: 'precondition_failed', message: REFUSED.shiftReportUnreadable },
+};
 
 export function registerShiftsHandlers(ctx: HandlerContext): void {
   defineHandler('shifts:current', ctx, () => {
@@ -226,6 +294,41 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
       pausesWebsiteOrders: closeWouldPauseWebOrders(ctx.db, ctx.deviceId, shift.id),
       ...(refusedItemRefundsOwed.length > 0 ? { refusedItemRefundsOwed } : {}),
     });
+  });
+
+  // The shift report again (final plan step 19f-3): Try again (again: false)
+  // and Print again, from the figures saved at the close, with this till's
+  // section switches now. Who may: shiftReportPrinter, then the shift — it
+  // must be closed, and a manager's must be this till's, closed within the
+  // last 15 minutes (after that, the owner prints it from Shift history).
+  // Waits for the printer and says what came out; never a reason to doubt
+  // the close, which is saved whatever happens here.
+  defineHandler('shifts:printReport', ctx, async (_ctx, payload) => {
+    const s = requireSession();
+    const who = await shiftReportPrinter(ctx.db, s, payload?.approverPin);
+    const shift = typeof payload?.shiftId === 'string' ? findShift(ctx.db, payload.shiftId) : null;
+    if (!shift) throw new IpcGuardError({ code: 'not_found', message: REFUSED.shiftNotFound });
+    if (shift.closedAt === null) throw new IpcGuardError({ code: 'precondition_failed', message: REFUSED.shiftStillOpen });
+    if (who.rules === 'manager') {
+      if (shift.deviceId !== ctx.deviceId) {
+        throw new IpcGuardError({ code: 'forbidden', message: REFUSED.shiftReportOtherTill });
+      }
+      if (!withinShiftReportAgain(shift.closedAt, Date.now())) {
+        throw new IpcGuardError({ code: 'forbidden', message: REFUSED.shiftReportOlder });
+      }
+    }
+    try {
+      return ok(
+        await printShiftReportAgain(
+          ctx.db,
+          { shiftId: shift.id, again: payload.again !== false },
+          { userId: who.userId, name: who.name, approvedByUserId: who.approvedByUserId },
+        ),
+      );
+    } catch (e) {
+      if (e instanceof ShiftReportRefused) throw new IpcGuardError(REPORT_REFUSAL[e.reason]);
+      throw e;
+    }
   });
 
   defineHandler('shifts:list', ctx, (_ctx, payload) => {

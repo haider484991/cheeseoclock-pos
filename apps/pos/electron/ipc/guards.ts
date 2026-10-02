@@ -85,6 +85,19 @@ export const REFUSED = {
   settings: 'Only the owner can change the shop’s settings.',
   stockTakes: 'Only a manager or the owner can do a stock take or see what went missing.',
   profit: 'Only the owner can see profit.',
+  // The shift report printed again (shifts:printReport, v0.7.35).
+  /** A cashier's login, with no manager's PIN or password typed. */
+  shiftReportPin: "A manager's PIN or password is needed to print the shift report",
+  /** A manager, more than 15 minutes after the close. */
+  shiftReportOlder: 'Only the owner can print an older shift report - from Shift history',
+  /** A manager, a shift closed on the other till. */
+  shiftReportOtherTill: "Only the owner can print the other till's shift report - from Shift history",
+  shiftStillOpen: 'This shift is still open - close it first',
+  shiftNotFound: 'That shift was not found',
+  /** No report was saved with the close: before 0.7.35, an older till, or it could not be made. */
+  shiftReportNotSaved: 'This shift was closed before the till printed shift reports',
+  shiftReportNewer: 'This shift report was made by a newer till - update this till to print it',
+  shiftReportUnreadable: "This shift's saved report could not be read",
 } as const;
 
 /**

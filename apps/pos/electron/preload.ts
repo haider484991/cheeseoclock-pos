@@ -164,6 +164,7 @@ const api: RendererApi = {
     open: (req) => invoke('shifts:open', req),
     close: (req) => invoke('shifts:close', req),
     closeCheck: (req) => invoke('shifts:closeCheck', req),
+    printReport: (req) => invoke('shifts:printReport', req),
     list: (req) => invoke('shifts:list', req),
     summary: (req) => invoke('shifts:summary', req),
     lastCount: () => invoke('shifts:lastCount', undefined),

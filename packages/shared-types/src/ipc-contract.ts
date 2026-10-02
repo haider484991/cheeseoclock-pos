@@ -82,6 +82,7 @@ import type {
   DrawerOpenResult,
   Shift,
   ShiftCloseCheck,
+  ShiftReportPrintResult,
   ShiftSummary,
 } from './shift.js';
 import type {
@@ -990,6 +991,23 @@ export interface IpcContract {
   'shifts:closeCheck': {
     request: { shiftId: string; approverPin?: string };
     response: ApiResult<ShiftCloseCheck>;
+  };
+  /**
+   * A closed shift's report on this till's receipt printer again (v0.7.35):
+   * the figures saved at the close, never worked out again, with this till's
+   * section switches now. `again: false` (Try again) prints the ORIGINAL
+   * when this till's try at it did not come out; otherwise, and by default,
+   * it is a DUPLICATE 'Reprint #N'. The owner prints any closed shift with a
+   * saved report, from either till; a manager only this till's shift, within
+   * SHIFT_REPORT_AGAIN_MS of its close. A cashier's login needs a manager's
+   * PIN or password: refused 'forbidden' with details
+   * `{ needs: 'manager_pin' }` (and `wrongSecret: true` for a wrong one),
+   * then asked again with `approverPin`; that manager's or owner's rules
+   * apply. It waits for the printer and says what came out.
+   */
+  'shifts:printReport': {
+    request: { shiftId: string; again?: boolean; approverPin?: string };
+    response: ApiResult<ShiftReportPrintResult>;
   };
   'shifts:list': {
     request: { sinceIso?: string; limit?: number; deviceId?: string } | undefined;

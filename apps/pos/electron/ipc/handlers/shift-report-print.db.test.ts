@@ -26,6 +26,29 @@
  *       owner's section switches leave sections off the paper for every
  *       closer while the saved report keeps them all.
  *
+ * And printing it again, 'shifts:printReport' (final plan step 19f-3):
+ *   (5) Who may: a manager this till's shift within 15 minutes of its close
+ *       (the till's clock, either side), DUPLICATE Reprint #1 then #2, and
+ *       not the other till's; the owner any closed shift, one that came over
+ *       the link too, with that till's name on it; a cashier's login with a
+ *       manager's or the owner's PIN or password and then by their rules
+ *       (none: needs manager_pin; a wrong one: wrongSecret). Refused in plain
+ *       words: a shift still open, one closed with no report, a newer till's
+ *       report, one that cannot be read, an unknown shift.
+ *   (6) Try again prints the ORIGINAL after a failed one, a DUPLICATE once
+ *       it came out or may have; a reprint that does not print says why and
+ *       leaves its number to the next; two presses at once print #1 and #2;
+ *       the "No printer" setup writes the file, puts nothing on record and
+ *       says so.
+ *   (7) Frozen: after a refund and a deleted test order, a reprint's figures
+ *       are the original's to the character; only the DUPLICATE band and the
+ *       footer differ, and the footer notes the deleted cash.
+ *   (8) One chained 'shift_report_printed' row per try, failed ones too, and
+ *       none for a refusal.
+ *  (12) The switches change only what prints: ORDERS off at the close, on
+ *       for a reprint, prints from the saved report; printing at close off
+ *       still prints again.
+ *
  * Only `defineHandler` is replaced (it captures the handler instead of
  * registering it with Electron); the session and the manager check are
  * stand-ins (auth-service owns PINs and passwords), and so are the website
@@ -37,17 +60,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { escPosToText, paperMoney } from '@cheeseoclock/printer-core';
 import { parseShiftReportJson } from '@cheeseoclock/shared-schemas';
+import { SHIFT_REPORT_AGAIN_MS } from '@cheeseoclock/shared-types';
 import type {
   AuthenticatedUser,
   ClosedShift,
   PrintResult,
   PrinterConnectionConfig,
+  ShiftReportPrintResult,
   ShiftSummary,
   UUID,
 } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../../db/connection.js';
 import { DatabaseSync } from '../../db/costing-shop.fixture.js';
-import { openTill } from '../../db/two-tills.fixture.js';
+import { openTill, push } from '../../db/two-tills.fixture.js';
 import { verifyAuditChain, type AuditChainRow } from '../../db/audit-chain.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
@@ -131,6 +156,7 @@ vi.mock('../../services/auth-service.js', () => ({
   getCurrentSession: () => h.session,
   verifyManagerPin: async (_db: unknown, pin: string) => {
     if (pin === 'Manager-pass-7') return { approverUserId: 'u_mgr', approverName: 'Test Manager' };
+    if (pin === 'Owner-pass-9') return { approverUserId: 'u_admin', approverName: 'Test Owner' };
     throw new Error("That is not a manager's PIN or password");
   },
 }));
@@ -168,6 +194,7 @@ vi.mock('../../services/printer-config.js', async (importOriginal) => {
 const TILL = 'till-a';
 const FLOAT = 500_000;
 const PIN = 'Manager-pass-7';
+const OWNER_PIN = 'Owner-pass-9';
 const PRINTER: PrinterConnectionConfig = { transport: 'network', network: { host: '192.0.2.5', port: 9100 }, width: 48 };
 const session = (id: string, fullName: string, role: AuthenticatedUser['role']): AuthenticatedUser => ({
   id: id as UUID,
@@ -641,5 +668,407 @@ live('(4) the count stays blind, and the paper is the full one for every closer'
       await vi.waitFor(() => expect(printAudits(shiftId)).toHaveLength(1));
       expect(printAudits(shiftId)[0]!['sections']).toEqual(ALL_SECTIONS.filter((s) => s !== 'items' && s !== 'orders'));
     }
+  });
+});
+
+// ------------------------------------------------- printing it again (19f-3)
+
+/** Print the shift report again with `who` signed in: Print again, unless `more` says again: false (Try again). */
+async function printAgain(shiftId: string, who: AuthenticatedUser, more: Record<string, unknown> = {}): Promise<ShiftReportPrintResult> {
+  h.session = who;
+  return call<ShiftReportPrintResult>('shifts:printReport', { shiftId, ...more });
+}
+
+/** The refusal, with `who` signed in: its code, its words and any details. */
+async function printRefused(shiftId: string, who: AuthenticatedUser, more: Record<string, unknown> = {}): Promise<unknown> {
+  h.session = who;
+  return refusal('shifts:printReport', { shiftId, ...more });
+}
+
+/** The till's clock reads `ms` (Date.now: what the 15 minutes are measured with). */
+const clockAt = (ms: number) => vi.spyOn(Date, 'now').mockReturnValue(ms);
+
+/** A shift with a cash and a card sale, closed by the manager; its original paper printed and on record. */
+async function closedAndPrinted(): Promise<{ shiftId: string; closedMs: number; original: string }> {
+  const shiftId = await openShift();
+  await paid('cash');
+  await paid('card');
+  const closed = await close(shiftId, MANAGER);
+  const [original] = await settledPapers(1);
+  await vi.waitFor(() => expect(printAudits(shiftId)).toHaveLength(1));
+  return { shiftId, closedMs: Date.parse(closed.closedAt!), original: original! };
+}
+
+/** The paper's figures: from SHIFT REPORT down to its 'Printed' line (the DUPLICATE band above and the footer below left out). */
+function figuresOf(text: string): string[] {
+  const lines = text.split('\n');
+  const end = lines.findIndex((l) => l.startsWith('Printed '));
+  expect(end).toBeGreaterThan(0);
+  return lines.slice(lines.indexOf('SHIFT REPORT'), end);
+}
+
+/** The paper's footer: its 'Printed' line to the end, blank rows and the cut left out. */
+function footerOf(text: string): string[] {
+  const lines = text.split('\n');
+  return lines.slice(lines.findIndex((l) => l.startsWith('Printed '))).filter((l) => l.trim() !== '' && !l.startsWith('[cut'));
+}
+
+/** The DUPLICATE band's middle line ('Reprint #1 | dd/mm/yyyy hh:mm | by NAME'), or undefined on an original. */
+const bandOf = (text: string) => {
+  const lines = text.split('\n');
+  return lines.includes('DUPLICATE') ? lines[lines.indexOf('DUPLICATE') + 1] : undefined;
+};
+
+live('(5) printing it again: who may', () => {
+  it('a manager: this till’s shift within 15 minutes of its close (the till’s clock, either side) — DUPLICATE Reprint #1, then #2; after that refused, to a PIN on a cashier’s login too; the owner still prints it', async () => {
+    const { shiftId, closedMs } = await closedAndPrinted();
+
+    expect(await printAgain(shiftId, MANAGER)).toEqual({ printed: true, copy: 'reprint', reprintNo: 1, error: null });
+    clockAt(closedMs + SHIFT_REPORT_AGAIN_MS); // the last moment
+    expect(await printAgain(shiftId, MANAGER)).toEqual({ printed: true, copy: 'reprint', reprintNo: 2, error: null });
+    const [, first, second] = await settledPapers(3);
+    expect(bandOf(first!)?.startsWith('Reprint #1 | ')).toBe(true);
+    expect(bandOf(first!)?.endsWith(' | by Test Manager')).toBe(true);
+    expect(footerOf(first!).at(-1)).toBe('** DUPLICATE - Reprint #1 **');
+    expect(footerOf(second!).at(-1)).toBe('** DUPLICATE - Reprint #2 **');
+
+    const older = { code: 'forbidden', message: 'Only the owner can print an older shift report - from Shift history' };
+    clockAt(closedMs + SHIFT_REPORT_AGAIN_MS + 1);
+    expect(await printRefused(shiftId, MANAGER)).toEqual(older);
+    // The manager's PIN on a cashier's login: the manager's rules.
+    expect(await printRefused(shiftId, CASHIER, { approverPin: PIN })).toEqual(older);
+    // A till clock put back more than 15 minutes before the close: refused too.
+    clockAt(closedMs - SHIFT_REPORT_AGAIN_MS - 1);
+    expect(await printRefused(shiftId, MANAGER)).toEqual(older);
+    clockAt(closedMs - SHIFT_REPORT_AGAIN_MS);
+    expect(await printAgain(shiftId, MANAGER)).toMatchObject({ printed: true, reprintNo: 3 });
+
+    // The owner, and the owner's PIN on a cashier's login: any time.
+    clockAt(closedMs + 24 * 60 * 60_000);
+    expect(await printAgain(shiftId, OWNER)).toEqual({ printed: true, copy: 'reprint', reprintNo: 4, error: null });
+    expect(await printAgain(shiftId, CASHIER, { approverPin: OWNER_PIN })).toEqual({ printed: true, copy: 'reprint', reprintNo: 5, error: null });
+    await settledPapers(6);
+    expect(printAudits(shiftId).map((a) => [a['actor'], a['copy'], a['reprintNo'], a['byUserId'], a['approvedByUserId'], a['outcome']])).toEqual([
+      ['u_mgr', 'original', 0, 'u_mgr', null, 'ok'],
+      ['u_mgr', 'reprint', 1, 'u_mgr', null, 'ok'],
+      ['u_mgr', 'reprint', 2, 'u_mgr', null, 'ok'],
+      ['u_mgr', 'reprint', 3, 'u_mgr', null, 'ok'],
+      ['u_admin', 'reprint', 4, 'u_admin', null, 'ok'],
+      ['u_cash', 'reprint', 5, 'u_cash', 'u_admin', 'ok'],
+    ]);
+  });
+
+  it('a cashier’s login: asked for a manager’s PIN or password (needs manager_pin), a wrong one refused as wrong; with the manager’s it prints, by the cashier, approved by the manager', async () => {
+    const { shiftId } = await closedAndPrinted();
+
+    expect(await printRefused(shiftId, CASHIER)).toEqual({
+      code: 'forbidden',
+      message: "A manager's PIN or password is needed to print the shift report",
+      details: { needs: 'manager_pin' },
+    });
+    expect(await printRefused(shiftId, CASHIER, { approverPin: '1111' })).toEqual({
+      code: 'forbidden',
+      message: "That is not a manager's PIN or password",
+      details: { needs: 'manager_pin', wrongSecret: true },
+    });
+    await settledPapers(1);
+    expect(printAudits(shiftId)).toHaveLength(1);
+
+    expect(await printAgain(shiftId, CASHIER, { approverPin: PIN })).toEqual({ printed: true, copy: 'reprint', reprintNo: 1, error: null });
+    const [, text] = await settledPapers(2);
+    expect(bandOf(text!)?.endsWith(' | by Test Cashier')).toBe(true);
+    expect(footerOf(text!)[0]?.endsWith(' by Test Cashier')).toBe(true);
+    expect(printAudits(shiftId)[1]).toEqual({
+      actor: 'u_cash',
+      shiftId,
+      copy: 'reprint',
+      reprintNo: 1,
+      sections: ALL_SECTIONS,
+      items: 'items',
+      width: 48,
+      outcome: 'ok',
+      errorCode: null,
+      byUserId: 'u_cash',
+      approvedByUserId: 'u_mgr',
+    });
+  });
+
+  it('the other till’s shift, come over the link: a manager is refused; the owner prints it with that till’s name on it, a DUPLICATE even on Try again', async () => {
+    const b = openTill('till-b', { usersFrom: TILL, displayName: 'TEST-TILL-2 (win32)' });
+    const repo = await import('../../db/repositories/shift-repo.js');
+    const { makeShiftReport } = await import('../../services/shift-report-service.js');
+    const onB = { userId: 'u_mgr', deviceId: 'till-b' };
+    const shiftId = repo.openShift(b, { openingCashCents: FLOAT }, onB).id;
+    repo.closeShift(b, { shiftId, countedCashCents: FLOAT, notes: null }, onB, null, { makeReport: makeShiftReport(b, 'till-b') });
+    await push(b, 'till-b', db);
+    expect(repo.getShiftCloseReport(db, shiftId)).toMatchObject({ deviceId: 'till-b' });
+
+    expect(await printRefused(shiftId, MANAGER)).toEqual({
+      code: 'forbidden',
+      message: "Only the owner can print the other till's shift report - from Shift history",
+    });
+    // This till never tried that shift's original: Try again is a DUPLICATE too.
+    expect(await printAgain(shiftId, OWNER, { again: false })).toEqual({ printed: true, copy: 'reprint', reprintNo: 1, error: null });
+    const [text] = await settledPapers(1);
+    expect(text!.split('\n')).toContain('Till: TEST-TILL-2');
+    expect(text!.split('\n')).not.toContain('Till: TEST-TILL-1');
+    expect(printAudits(shiftId)).toEqual([expect.objectContaining({ actor: 'u_admin', copy: 'reprint', reprintNo: 1, outcome: 'ok' })]);
+  });
+
+  it('refused in plain words, nothing printed or put on record: a shift still open, one closed with no report saved, a newer till’s report, one that cannot be read, an unknown shift', async () => {
+    const shiftId = await openShift();
+    await paid('cash');
+    for (const who of [OWNER, MANAGER]) {
+      expect(await printRefused(shiftId, who)).toEqual({ code: 'precondition_failed', message: 'This shift is still open - close it first' });
+    }
+    h.makerThrows = true;
+    expect((await close(shiftId, MANAGER)).reportPrint).toBe('not_made');
+    h.makerThrows = false;
+    for (const who of [OWNER, MANAGER]) {
+      expect(await printRefused(shiftId, who)).toEqual({ code: 'not_found', message: 'This shift was closed before the till printed shift reports' });
+    }
+
+    const next = await openShift();
+    await close(next, MANAGER);
+    await settledPapers(1);
+    await vi.waitFor(() => expect(printAudits(next)).toHaveLength(1));
+    db.prepare(`UPDATE shifts SET close_report_json = ? WHERE id = ?`).run('{"v":2,"tillName":"TEST-TILL-9"}', next);
+    expect(await printRefused(next, OWNER)).toEqual({
+      code: 'precondition_failed',
+      message: 'This shift report was made by a newer till - update this till to print it',
+    });
+    db.prepare(`UPDATE shifts SET close_report_json = ? WHERE id = ?`).run('{"v":1,"tillName":"TEST-TILL-1"}', next);
+    expect(await printRefused(next, OWNER)).toEqual({ code: 'precondition_failed', message: "This shift's saved report could not be read" });
+    expect(await printRefused('no-such-shift', OWNER)).toEqual({ code: 'not_found', message: 'That shift was not found' });
+    h.session = null;
+    expect(await refusal('shifts:printReport', { shiftId: next })).toEqual({ code: 'unauthenticated', message: 'Not logged in' });
+
+    await settledPapers(1);
+    expect(printAudits(shiftId)).toEqual([]);
+    expect(printAudits(next)).toHaveLength(1);
+    expect(failedEvents()).toEqual([]);
+  });
+});
+
+live('(6) Try again and the printer’s answer', () => {
+  it('Try again after a failed original prints the ORIGINAL (no DUPLICATE, no failure note); once it is out, Try again is a DUPLICATE', async () => {
+    const shiftId = await openShift();
+    await paid('cash');
+    h.script.push(() => ({
+      ok: false,
+      durationMs: 1,
+      error: { code: 'network_error', message: 'connect EHOSTUNREACH 192.0.2.5:9100', recoverable: true },
+    }));
+    await close(shiftId, MANAGER);
+    await vi.waitFor(() => expect(failedEvents()).toHaveLength(1));
+    const [failed] = await settledPapers(1);
+
+    expect(await printAgain(shiftId, MANAGER, { again: false })).toEqual({ printed: true, copy: 'original', reprintNo: 0, error: null });
+    const [, original] = await settledPapers(2);
+    expect(bandOf(original!)).toBeUndefined();
+    expect(original).not.toContain('DUPLICATE');
+    expect(figuresOf(original!)).toEqual(figuresOf(failed!));
+
+    expect(await printAgain(shiftId, MANAGER, { again: false })).toEqual({ printed: true, copy: 'reprint', reprintNo: 1, error: null });
+    const [, , dup] = await settledPapers(3);
+    expect(footerOf(dup!).at(-1)).toBe('** DUPLICATE - Reprint #1 **');
+    // The Try again's answer is its reply: no second failure note.
+    expect(failedEvents()).toHaveLength(1);
+    expect(printAudits(shiftId).map((a) => [a['copy'], a['reprintNo'], a['outcome'], a['errorCode']])).toEqual([
+      ['original', 0, 'failed', 'network_error'],
+      ['original', 0, 'ok', null],
+      ['reprint', 1, 'ok', null],
+    ]);
+    expect(verifyAuditChain(auditRows())).toMatchObject({ ok: true, brokenAt: null });
+  });
+
+  it('after an original that may have come out (maybe), Try again is a DUPLICATE', async () => {
+    const shiftId = await openShift();
+    h.script.push(() => ({
+      ok: false,
+      durationMs: 5_000,
+      error: { code: 'timeout', message: 'The printer did not answer', recoverable: true, maybeSent: true },
+    }));
+    await close(shiftId, MANAGER);
+    await vi.waitFor(() => expect(printAudits(shiftId)).toEqual([expect.objectContaining({ outcome: 'maybe' })]));
+
+    expect(await printAgain(shiftId, MANAGER, { again: false })).toEqual({ printed: true, copy: 'reprint', reprintNo: 1, error: null });
+    const [, dup] = await settledPapers(2);
+    expect(bandOf(dup!)?.startsWith('Reprint #1 | ')).toBe(true);
+  });
+
+  it('(8) a reprint that does not print says why and leaves its number to the next; one that may have printed uses it up; every try is one chained row, a refusal none', async () => {
+    const { shiftId } = await closedAndPrinted();
+    h.script.push(() => ({
+      ok: false,
+      durationMs: 1,
+      error: { code: 'network_error', message: 'connect EHOSTUNREACH 192.0.2.5:9100', recoverable: true },
+    }));
+    expect(await printAgain(shiftId, MANAGER)).toEqual({
+      printed: false,
+      copy: 'reprint',
+      reprintNo: 1,
+      error: { code: 'network_error', message: 'connect EHOSTUNREACH 192.0.2.5:9100' },
+    });
+    h.script.push(() => ({
+      ok: false,
+      durationMs: 5_000,
+      error: { code: 'timeout', message: 'The printer did not answer', recoverable: true, maybeSent: true },
+    }));
+    expect(await printAgain(shiftId, MANAGER)).toEqual({
+      printed: false,
+      copy: 'reprint',
+      reprintNo: 1,
+      error: { code: 'timeout', message: 'The printer did not answer', maybeSent: true },
+    });
+    h.script.push(() => {
+      throw new Error('Test: the print worker died');
+    });
+    expect(await printAgain(shiftId, MANAGER)).toEqual({
+      printed: false,
+      copy: 'reprint',
+      reprintNo: 2,
+      error: { code: 'spooler_exception', message: 'Test: the print worker died' },
+    });
+    expect(await printAgain(shiftId, MANAGER)).toEqual({ printed: true, copy: 'reprint', reprintNo: 2, error: null });
+
+    // A refusal adds nothing.
+    expect(await printRefused(shiftId, CASHIER)).toMatchObject({ code: 'forbidden' });
+    await settledPapers(5);
+    expect(failedEvents()).toEqual([]);
+    expect(printAudits(shiftId).map((a) => [a['copy'], a['reprintNo'], a['outcome'], a['errorCode']])).toEqual([
+      ['original', 0, 'ok', null],
+      ['reprint', 1, 'failed', 'network_error'],
+      ['reprint', 1, 'maybe', 'timeout'],
+      ['reprint', 2, 'failed', 'spooler_exception'],
+      ['reprint', 2, 'ok', null],
+    ]);
+    expect(verifyAuditChain(auditRows())).toMatchObject({ ok: true, brokenAt: null });
+    expect(h.errors).toEqual([]);
+  });
+
+  it('two presses at once print one after the other: Reprint #1 and #2', async () => {
+    const { shiftId } = await closedAndPrinted();
+    const both = await Promise.all([printAgain(shiftId, MANAGER), printAgain(shiftId, MANAGER)]);
+    expect(both.map((r) => [r.printed, r.reprintNo])).toEqual([
+      [true, 1],
+      [true, 2],
+    ]);
+    const [, first, second] = await settledPapers(3);
+    expect(footerOf(first!).at(-1)).toBe('** DUPLICATE - Reprint #1 **');
+    expect(footerOf(second!).at(-1)).toBe('** DUPLICATE - Reprint #2 **');
+  });
+
+  it('the "No printer" setup: the paper goes to its file, nothing is put on record, and the reply says no printer', async () => {
+    const { DEFAULT_RECEIPT_CONFIG } = await import('../../services/printer-config.js');
+    await usePrinter(DEFAULT_RECEIPT_CONFIG);
+    const shiftId = await openShift();
+    expect((await close(shiftId, MANAGER)).reportPrint).toBe('no_printer');
+    await settledPapers(1);
+
+    expect(await printAgain(shiftId, MANAGER)).toEqual({
+      printed: false,
+      copy: 'reprint',
+      reprintNo: 1,
+      error: { code: 'no_printer', message: 'No receipt printer is set up on this till' },
+    });
+    const [, file] = await settledPapers(2);
+    expect(papers()[1]!.config.network?.host).toBe('mock');
+    expect(footerOf(file!).at(-1)).toBe('** DUPLICATE - Reprint #1 **');
+    expect(printAudits(shiftId)).toEqual([]);
+    expect(failedEvents()).toEqual([]);
+  });
+});
+
+live('(7) a reprint prints the saved figures', () => {
+  it('after a refund and a deleted test order: the same figures as the original to the character; only the DUPLICATE band and the footer differ, and the footer notes the deleted cash', async () => {
+    const shiftId = await openShift();
+    await paid('cash');
+    const refunded = await paid('cash');
+    const test = await paid('cash');
+    await paid('card');
+    await close(shiftId, MANAGER);
+    const [original] = await settledPapers(1);
+    const saved = storedShift(shiftId)['close_report_json'];
+
+    // After the close, in the next shift: one order refunded, another deleted by the owner as a test.
+    const r = await import('../../db/repositories/order-repo.js');
+    await openShift();
+    r.refundOrder(db, { orderId: refunded.id, reason: 'Test refund', approverUserId: 'u_mgr', foodMade: 'made' }, BOSS);
+    r.deleteTestOrder(
+      db,
+      { orderId: test.id, reason: 'Printer test', restock: null, expectStatus: r.findOrder(db, test.id)!.status, ownerUserId: 'u_admin' },
+      { userId: 'u_admin', deviceId: TILL },
+    );
+    expect(storedShift(shiftId)['close_report_json']).toBe(saved);
+
+    expect(await printAgain(shiftId, MANAGER)).toEqual({ printed: true, copy: 'reprint', reprintNo: 1, error: null });
+    const [, reprint] = await settledPapers(2);
+    expect(figuresOf(reprint!)).toEqual(figuresOf(original!));
+    expect(figuresOf(reprint!).some((l) => l.startsWith('ORDERS (4) '))).toBe(true);
+    expect(reprint).not.toContain('(refunded)');
+    expect(bandOf(original!)).toBeUndefined();
+    expect(bandOf(reprint!)?.startsWith('Reprint #1 | ')).toBe(true);
+
+    const deleted = paperMoney(test.total);
+    expect(footerOf(original!).slice(1)).toEqual([
+      'Sales = orders paid on this till this shift.',
+      'Figures as saved when the shift closed.',
+      '-- END OF SHIFT REPORT --',
+    ]);
+    expect(footerOf(reprint!).slice(1)).toEqual([
+      'Sales = orders paid on this till this shift.',
+      'Figures as saved when the shift closed.',
+      'Since the close: test orders deleted, cash',
+      `${deleted} (not taken off above)`,
+      '-- END OF SHIFT REPORT --',
+      '** DUPLICATE - Reprint #1 **',
+    ]);
+  });
+});
+
+live('(12) the switches change only what prints', () => {
+  it('a close printed with All orders off; the owner switches it on and prints again: a DUPLICATE with the ORDERS section from the saved report; switched off again, the next reprint leaves it off', async () => {
+    await setRules({ shiftReportSections: { orders: false } });
+    const shiftId = await openShift();
+    await paid('cash');
+    await paid('card');
+    await close(shiftId, MANAGER);
+    const [first] = await settledPapers(1);
+    expect(headings(first!)).toEqual(HEADINGS.filter((head) => head !== 'ORDERS'));
+    expect(first).toContain('Some sections are off.\nSee Settings > Printers.');
+
+    await setRules({ shiftReportSections: { orders: true } });
+    expect(await printAgain(shiftId, OWNER)).toEqual({ printed: true, copy: 'reprint', reprintNo: 1, error: null });
+    const [, all] = await settledPapers(2);
+    expect(headings(all!)).toEqual(HEADINGS);
+    expect(all!.split('\n').some((l) => l.startsWith('ORDERS (2) '))).toBe(true);
+    expect(all).not.toContain('Some sections are off.');
+
+    await setRules({ shiftReportSections: { orders: false, items: false } });
+    expect(await printAgain(shiftId, OWNER)).toMatchObject({ printed: true, reprintNo: 2 });
+    const [, , fewer] = await settledPapers(3);
+    expect(headings(fewer!)).toEqual(HEADINGS.filter((head) => head !== 'ORDERS' && head !== 'ITEMS SOLD'));
+    expect(printAudits(shiftId).map((a) => a['sections'])).toEqual([
+      ALL_SECTIONS.filter((s) => s !== 'orders'),
+      ALL_SECTIONS,
+      ALL_SECTIONS.filter((s) => s !== 'orders' && s !== 'items'),
+    ]);
+  });
+
+  it('printing at close switched off: nothing at the close, and Print again still prints (a DUPLICATE, at the printer’s width: 58 mm here)', async () => {
+    await usePrinter({ ...PRINTER, width: 32 });
+    await setRules({ shiftReportOnClose: false });
+    const shiftId = await openShift();
+    await paid('cash');
+    expect((await close(shiftId, MANAGER)).reportPrint).toBe('off');
+    await settledPapers(0);
+
+    expect(await printAgain(shiftId, MANAGER, { again: false })).toEqual({ printed: true, copy: 'reprint', reprintNo: 1, error: null });
+    const [text] = await settledPapers(1);
+    expect(text!.split('\n').filter((l) => l.length > 32)).toEqual([]);
+    expect(text!.split('\n')).toContain('DUPLICATE');
+    expect(headings(text!)).toEqual(HEADINGS);
+    expect(printAudits(shiftId)).toEqual([expect.objectContaining({ copy: 'reprint', reprintNo: 1, width: 32, outcome: 'ok' })]);
   });
 });
