@@ -196,6 +196,9 @@ const SHORT: ShiftCloseOutcome = {
   closedByName: 'Sara',
   carriedUnpaidCount: 0,
   viaManagerPin: false,
+  // The shift report's line has its own tests (shiftCloseApproval.test.tsx, G).
+  reportPrint: null,
+  reportError: null,
 };
 
 const CURRENT = ['shifts', 'current'] as const;

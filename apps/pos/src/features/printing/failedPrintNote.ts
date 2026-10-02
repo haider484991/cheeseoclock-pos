@@ -11,6 +11,11 @@ import type { PrinterFailedPayload } from '../../ipc/client';
  * note keeps its own "Try again" (the action's key is the job) — the only way
  * to still get the ORIGINAL of a paper the till prints by itself; a print
  * button would print a DUPLICATE (the owner's rule).
+ *
+ * The shift report (v0.7.35) has no job to send again: its note's "Try
+ * again" (key 'shift-report:<shiftId>') asks the till to print that shift's
+ * report again, and the till prints the ORIGINAL while none came out. It
+ * stays until closed, so it still works after the close result is gone.
  */
 export interface FailedPrintNote {
   title: string;
@@ -23,7 +28,45 @@ function kindWords(jobKind: string): string {
   return jobKind === 'kitchen' ? 'kitchen ticket' : jobKind === 'drawer' ? 'cash drawer' : 'receipt';
 }
 
-export function failedPrintNote(payload: PrinterFailedPayload, tryAgain: (jobId: string) => void): FailedPrintNote {
+/** The note's title when the shift report did not print. */
+export const SHIFT_REPORT_FAILED_TITLE = 'Shift report did not print';
+/** After the printer's words: what to do about it. */
+export const SHIFT_REPORT_FAILED_NEXT = 'Press Try again, or the owner prints it from Shift history.';
+/** The same, on a note with no Try again (the note did not name the shift). */
+export const SHIFT_REPORT_FAILED_OWNER = 'The owner can print it from Shift history.';
+
+/** The printer's words as a sentence, so the next one reads on from it. */
+function sentence(message: string): string {
+  const m = message.trim();
+  return /[.!?]$/.test(m) ? m : `${m}.`;
+}
+
+/**
+ * The note for a shift report that did not print ('printer:failed' with
+ * jobKind 'shift_report': no job, the shift instead). "Try again" calls
+ * `tryShiftReportAgain` with the shift.
+ */
+function shiftReportNote(payload: PrinterFailedPayload, tryShiftReportAgain?: (shiftId: string) => void): FailedPrintNote {
+  const shiftId = payload.shiftId;
+  const canTry = !!shiftId && !!tryShiftReportAgain;
+  const why = sentence(payload.error?.message || 'Could not print the shift report');
+  return {
+    title: SHIFT_REPORT_FAILED_TITLE,
+    description: `${why} ${canTry ? SHIFT_REPORT_FAILED_NEXT : SHIFT_REPORT_FAILED_OWNER}`,
+    // It stays until closed: the close result may be gone by then.
+    variant: 'error',
+    ...(canTry && shiftId && tryShiftReportAgain
+      ? { action: { label: 'Try again', key: `shift-report:${shiftId}`, onClick: () => tryShiftReportAgain(shiftId) } }
+      : {}),
+  };
+}
+
+export function failedPrintNote(
+  payload: PrinterFailedPayload,
+  tryAgain: (jobId: string) => void,
+  tryShiftReportAgain?: (shiftId: string) => void,
+): FailedPrintNote {
+  if (payload.jobKind === 'shift_report') return shiftReportNote(payload, tryShiftReportAgain);
   const what = payload.what?.trim() || null;
   const description =
     payload.error?.message ??

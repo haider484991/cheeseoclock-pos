@@ -7,7 +7,7 @@ import { answerManagerSecret, approvalPaperNote, useManagerApprovalStore } from 
 
 /**
  * The manager's PIN or password for something the counter can't do alone —
- * printing a paid receipt again, for now. Mounted once at the root, next to
+ * printing a paid receipt or the shift report again. Mounted once at the root, next to
  * ConfirmHost; asked with askManagerSecret() (managerApproval.ts).
  */
 export function ManagerApprovalHost() {
@@ -26,7 +26,7 @@ export function ManagerApprovalHost() {
             Manager approval
           </Dialog.Title>
           <Dialog.Description className="mt-2 text-sm text-stone-600 dark:text-stone-400">{ask.message}</Dialog.Description>
-          <p className="mt-2 text-xs text-stone-500">{approvalPaperNote(ask.printNo)}</p>
+          <p className="mt-2 text-xs text-stone-500">{ask.paperNote ?? approvalPaperNote(ask.printNo)}</p>
           <form
             className="mt-4"
             onSubmit={(e) => {

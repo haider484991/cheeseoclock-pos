@@ -21,6 +21,11 @@
  *      only, always by note): eight rows, a pad beside them, the total the
  *      till adds up, still blind. Leaving a started count asks first; the
  *      result shows the notes under Counted.
+ *   G. (v0.7.35) The shift report prints at every close (owner, 2 Oct
+ *      2026): the result says what became of it — printing, with Print
+ *      again; did not print, in amber, with Try again; off, with Print it;
+ *      no printer; not made — on the PIN result too, which still shows no
+ *      figures. The result's figures are the close's own (its reply).
  *
  * Radix's dialog is stood in for by plain elements (a server render has no
  * portal). Every name and amount is made up.
@@ -62,12 +67,24 @@ import {
   MANAGER_CLOSES_LABEL,
   PIN_CLOSE_RESULT_NOTE,
   REFUSED_ITEMS_OWED_NOTE,
+  SHIFT_REPORT_NO_PRINTER,
+  SHIFT_REPORT_NOT_MADE,
+  SHIFT_REPORT_OFF,
+  SHIFT_REPORT_PRINTING,
+  shiftReportLine,
   STOP_CLOSING_QUESTION,
   UnpaidCarryOver,
 } from './ShiftWidget';
 import { CLEAR_ALL_QUESTION, NOTE_COUNTER_FIRST_ROW, NoteCounter, noteCounterKeyAction } from './NoteCounter';
 import { noteCounterInitial, noteCounterKey, noteCounterToCount, type NoteCounterState } from './noteCounterState';
-import type { ShiftCloseOutcome } from './shiftCloseOutcome';
+import {
+  dismissShiftCloseOutcome,
+  noteShiftReportFailed,
+  PIN_CLOSE_RESULT_MS,
+  showShiftCloseOutcome,
+  useShiftCloseOutcome,
+  type ShiftCloseOutcome,
+} from './shiftCloseOutcome';
 import { CLOSE_PAUSES_WEBSITE_NOTE, CLOSE_PAUSES_WEBSITE_TEXT } from './webOrdersPause';
 
 // What the last dialog was given to close itself with (Root's onOpenChange,
@@ -116,19 +133,40 @@ vi.mock('../../components/confirm/ConfirmHost', async (importOriginal) => ({
 }));
 
 // What each render asked the till for (a cashier's login must not ask for the shift's money).
-const asked = vi.hoisted(() => ({ calls: [] as string[] }));
+// `closeReply` / `printReply`: what Close shift and the shift report's print answer (unset: no answer yet).
+const asked = vi.hoisted(() => ({
+  calls: [] as string[],
+  closeReply: null as unknown,
+  printReply: null as unknown,
+  printRequests: [] as unknown[],
+}));
 vi.mock('../../ipc/client', () => {
   const record = (name: string) => (..._args: unknown[]) => {
     asked.calls.push(name);
     return new Promise(() => {});
   };
+  class IpcError extends Error {
+    readonly code: string;
+    readonly details?: Record<string, unknown>;
+    constructor(e: { code: string; message: string; details?: Record<string, unknown> }) {
+      super(e.message);
+      this.code = e.code;
+      if (e.details) this.details = e.details;
+    }
+  }
   return {
+    IpcError,
     ipc: {
       shifts: {
         summary: record('summary'),
         closeCheck: record('closeCheck'),
-        close: record('close'),
+        close: (...args: unknown[]) => (asked.closeReply ? Promise.resolve(asked.closeReply) : record('close')(...args)),
         openDrawer: record('openDrawer'),
+        printReport: (request: unknown) => {
+          asked.calls.push('printReport');
+          asked.printRequests.push(request);
+          return asked.printReply ? Promise.resolve(asked.printReply) : new Promise(() => {});
+        },
       },
       alerts: {
         getWatch: record('getWatch'),
@@ -137,6 +175,62 @@ vi.mock('../../ipc/client', () => {
     onAlertWatchChanged: () => () => {},
   };
 });
+
+// A server render reads a zustand store's server snapshot, which is the
+// store's INITIAL state (nobody signed in, no close result). The till's
+// window reads each store as it is now, and so do these renders (the close
+// box keeps the result for the login that closed it).
+vi.mock('zustand', async (importOriginal) => {
+  const z = await importOriginal<typeof import('zustand')>();
+  type Hook = ((select?: (state: unknown) => unknown) => unknown) & { getState: () => unknown };
+  const live = (hook: Hook) =>
+    Object.assign((select: (state: unknown) => unknown = (state) => state) => select(hook.getState()), hook);
+  const make = (init: unknown) => live(z.create(init as Parameters<typeof z.create>[0]) as unknown as Hook);
+  return { ...z, create: (init?: unknown) => (init === undefined ? make : make(init)) };
+});
+
+// Each Button as rendered, with its words and its tap; and every toast.
+const seen = vi.hoisted(() => ({
+  buttons: [] as Array<{ words: string; tap: (() => void) | undefined; disabled: boolean }>,
+  toasts: [] as Array<{ title: string; description?: string; variant?: string }>,
+}));
+vi.mock('@cheeseoclock/ui', async (importOriginal) => {
+  const ui = await importOriginal<typeof import('@cheeseoclock/ui')>();
+  const React = await import('react');
+  const words = (n: unknown): string =>
+    typeof n === 'string' || typeof n === 'number'
+      ? String(n)
+      : Array.isArray(n)
+        ? n.map(words).join('')
+        : React.isValidElement(n)
+          ? words((n.props as { children?: unknown }).children)
+          : '';
+  type Props = React.ComponentProps<typeof ui.Button>;
+  const Button = React.forwardRef<HTMLButtonElement, Props>(function Button(props, ref) {
+    const onClick = props.onClick;
+    seen.buttons.push({
+      words: words(props.children).trim(),
+      tap: onClick ? () => onClick({ preventDefault() {}, stopPropagation() {} } as never) : undefined,
+      disabled: props.disabled === true,
+    });
+    return React.createElement(ui.Button, { ...props, ref });
+  });
+  return { ...ui, Button };
+});
+vi.mock('../../components/toast/ToastProvider', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../components/toast/ToastProvider')>();
+  const toast = (t: { title: string; description?: string; variant?: string }) => {
+    seen.toasts.push(t);
+  };
+  return { ...real, useToast: () => ({ toast }) };
+});
+
+/** The last rendered Button with these words. */
+function tapButton(words: string): void {
+  const hit = [...seen.buttons].reverse().find((b) => b.words === words);
+  if (!hit?.tap) throw new Error(`No button "${words}" to tap`);
+  hit.tap();
+}
 
 function signIn(role: AuthenticatedUser['role']) {
   useSessionStore.setState({ user: { id: 'u1' as UUID, fullName: 'Test', role, sessionId: 's1' as UUID }, status: 'authenticated' });
@@ -193,8 +287,14 @@ beforeAll(() => {
 afterAll(() => vi.restoreAllMocks());
 afterEach(() => {
   asked.calls.length = 0;
+  asked.closeReply = null;
+  asked.printReply = null;
+  asked.printRequests.length = 0;
+  seen.buttons.length = 0;
+  seen.toasts.length = 0;
   confirmAsk.calls.length = 0;
   confirmAsk.answer = false;
+  dismissShiftCloseOutcome();
   useSessionStore.setState({ user: null, status: 'idle' });
 });
 
@@ -274,6 +374,8 @@ describe('B. the manager sees Over / Short after the count, until Done', () => {
     closedByName: 'Sara Manager',
     carriedUnpaidCount: 2,
     viaManagerPin: false,
+    reportPrint: null,
+    reportError: null,
   };
   it('Expected, Counted, Short, who closed it and what was carried over', () => {
     const words = text(render(<CloseShiftResultDialog outcome={outcome} onDone={() => {}} />));
@@ -790,6 +892,8 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
       closedByName: 'Sara Manager',
       carriedUnpaidCount: 0,
       viaManagerPin: false,
+      reportPrint: null,
+      reportError: null,
     };
     const line = '5,000 × 2 · 1,000 × 3 · 500 × 1 · 100 × 7 · 10 × 4 · coins and other Rs 35';
     const own = text(render(<CloseShiftResultDialog outcome={closed} onDone={() => {}} />));
@@ -809,5 +913,229 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
       expect(words).toContain('Counted Rs 14,275');
       expect(words).not.toContain('×');
     }
+  });
+});
+
+describe('G. (v0.7.35) the shift report at the close: the result’s line and its buttons, and the close’s own figures', () => {
+  const MANAGER_CHECK: ShiftCloseCheck = { closerName: 'Sara Manager', viaManagerPin: false, unpaidOrders: [], pausesWebsiteOrders: false };
+  /** The takings as the close box read them when it opened: 24 paid orders, Rs 12,000 cash sales. */
+  const BOX_SUMMARY = {
+    shiftId: 'shift-1',
+    paidOrderCount: 24,
+    refundedOrderCount: 1,
+    openingCashCents: 500_000,
+    cashSalesCents: 1_200_000,
+    cashRefundsCents: 0,
+    cashInCents: 0,
+    cashOutCents: 0,
+    riderChargesCents: 0,
+    riderChargeCount: 0,
+    riderTripCount: 0,
+  } as unknown as ShiftSummary;
+  /** As the close saved them: a Rs 1,500 cash payment came in while the drawer was being counted. */
+  const CLOSE_SUMMARY = { ...BOX_SUMMARY, paidOrderCount: 25, cashSalesCents: 1_350_000 } as ShiftSummary;
+  /** The till's reply to Close shift (a manager signed in): the shift, its report, the takings read after the close. */
+  const REPLY = {
+    id: 'shift-1',
+    closedAt: '2026-10-02T20:00:00.000Z',
+    expectedCashCents: 1_850_000,
+    countedCashCents: 1_850_000,
+    countedNotes: null,
+    varianceCents: 0,
+    closedByName: 'Sara Manager',
+    carriedUnpaidCount: 0,
+    reportPrint: 'printing',
+    summary: CLOSE_SUMMARY,
+  };
+  const OFF = 'The printer is off, offline, out of paper or its lid is open.';
+  const closed = (more: Partial<ShiftCloseOutcome> = {}): ShiftCloseOutcome => ({
+    sessionId: 's1',
+    shiftId: 'shift-1',
+    expectedCents: 1_850_000,
+    countedCents: 1_850_000,
+    countedNotes: null,
+    varianceCents: 0,
+    summary: CLOSE_SUMMARY,
+    closedByName: 'Sara Manager',
+    carriedUnpaidCount: 0,
+    viaManagerPin: false,
+    reportPrint: 'printing',
+    reportError: null,
+    ...more,
+  });
+  const shown = () => useShiftCloseOutcome.getState().outcome;
+  /** The result as on screen now (the buttons it drew are the last ones in seen.buttons). */
+  const result = (outcome: ShiftCloseOutcome | null = shown()) => {
+    if (!outcome) throw new Error('No close result');
+    seen.buttons.length = 0;
+    return render(<CloseShiftResultDialog outcome={outcome} onDone={() => {}} />);
+  };
+  const LINE_BUTTONS = ['Print again', 'Try again', 'Print it'];
+  const lineButtons = () => seen.buttons.filter((b) => LINE_BUTTONS.includes(b.words)).map((b) => b.words);
+
+  it('after a close: "Shift report printing", with Print again; the figures are the close’s own, not the box’s older ones', async () => {
+    expect(SHIFT_REPORT_PRINTING).toBe('Shift report printing - keep it with the cash.');
+    signIn('manager');
+    asked.closeReply = REPLY;
+    const box = text(
+      render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} />, [
+        [['shifts', 'summary', 'shift-1'], BOX_SUMMARY],
+        [['shifts', 'closeCheck', 'shift-1'], MANAGER_CHECK],
+      ]),
+    );
+    expect(box).toContain('Paid orders 24');
+    // A static render cannot type the count: the button's own tap sends the close.
+    tapButton('Close shift');
+    await vi.waitFor(() => expect(shown()).not.toBeNull());
+    expect(shown()).toMatchObject({ shiftId: 'shift-1', expectedCents: 1_850_000, summary: CLOSE_SUMMARY, reportPrint: 'printing', reportError: null });
+
+    const words = text(result());
+    expect(words).toContain('Paid orders 25');
+    expect(words).toContain('Cash sales Rs 13,500');
+    expect(words).not.toContain('Rs 12,000');
+    expect(words).toContain('Expected cash Rs 18,500');
+    // Under the closed-by line, with its button.
+    expect(words).toContain(`Closed by Sara Manager. ${SHIFT_REPORT_PRINTING} Print again Done`);
+    expect(lineButtons()).toEqual(['Print again']);
+  });
+
+  it('a manager’s PIN on the cashier’s login: the same line and button, and still no figures', async () => {
+    signIn('cashier');
+    // Even were the reply to carry takings, the PIN result never shows them.
+    asked.closeReply = { ...REPLY, expectedCashCents: null };
+    render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={VIA_PIN} />);
+    tapButton('Close shift');
+    await vi.waitFor(() => expect(shown()).not.toBeNull());
+    expect(shown()).toMatchObject({ viaManagerPin: true, expectedCents: null, summary: null, reportPrint: 'printing' });
+
+    const words = text(result());
+    expect(words).toContain(`${SHIFT_REPORT_PRINTING} Print again`);
+    expect(words).toContain('Counted Rs 18,500');
+    expect(words).not.toMatch(/Expected|Cash sales|Paid orders|Cash taken out|Opening float/);
+    expect(words).toContain(PIN_CLOSE_RESULT_NOTE);
+    expect(lineButtons()).toEqual(['Print again']);
+  });
+
+  it('a printer:failed note for this shift: the amber line and Try again, which asks for the original (again: false)', async () => {
+    signIn('manager');
+    showShiftCloseOutcome(closed());
+    noteShiftReportFailed('shift-1', OFF);
+    const out = result();
+    expect(text(out)).toContain(`Closed by Sara Manager. The shift report did not print: ${OFF} Try again Done`);
+    expect(out).toContain('text-amber-700');
+    expect(lineButtons()).toEqual(['Try again']);
+
+    asked.printReply = { printed: true, copy: 'original', reprintNo: 0, error: null };
+    tapButton('Try again');
+    await vi.waitFor(() => expect(seen.toasts).toHaveLength(1));
+    expect(asked.printRequests).toEqual([{ shiftId: 'shift-1', again: false }]);
+    expect(seen.toasts[0]).toMatchObject({ title: 'Shift report sent to the printer.', variant: 'success' });
+    // It came out: the amber line goes.
+    expect(shown()!.reportError).toBeNull();
+    expect(text(result())).toContain(`${SHIFT_REPORT_PRINTING} Print again`);
+  });
+
+  it('a failure for another shift changes nothing', () => {
+    signIn('manager');
+    showShiftCloseOutcome(closed());
+    const before = shown();
+    noteShiftReportFailed('shift-2', OFF);
+    expect(shown()).toBe(before);
+    expect(text(result())).not.toContain('did not print');
+  });
+
+  it('Print again prints a DUPLICATE and says so; one that does not come out turns the line amber, with Try again', async () => {
+    signIn('manager');
+    showShiftCloseOutcome(closed());
+    result();
+    asked.printReply = { printed: true, copy: 'reprint', reprintNo: 1, error: null };
+    tapButton('Print again');
+    await vi.waitFor(() => expect(seen.toasts).toHaveLength(1));
+    expect(asked.printRequests).toEqual([{ shiftId: 'shift-1', again: true }]);
+    expect(seen.toasts[0]).toMatchObject({ title: 'Shift report sent to the printer - it says DUPLICATE.', variant: 'success' });
+    expect(shown()!.reportError).toBeNull();
+
+    result();
+    asked.printReply = { printed: false, copy: 'reprint', reprintNo: 2, error: { code: 'offline', message: OFF } };
+    tapButton('Print again');
+    await vi.waitFor(() => expect(seen.toasts).toHaveLength(2));
+    expect(seen.toasts[1]).toMatchObject({
+      title: 'The shift report did not print',
+      description: `${OFF} Check the receipt printer, then try again.`,
+      variant: 'error',
+    });
+    expect(text(result())).toContain(`The shift report did not print: ${OFF} Try again`);
+  });
+
+  it('off: says so, with Print it (a DUPLICATE); no printer and not made: the words, no button; an older reply: no line', async () => {
+    expect(SHIFT_REPORT_OFF).toBe('Printing the shift report is off (Settings → Printers).');
+    expect(SHIFT_REPORT_NO_PRINTER).toBe('No receipt printer is set up - no shift report printed.');
+    expect(SHIFT_REPORT_NOT_MADE).toBe('The shift report could not be made. The close is saved.');
+    signIn('manager');
+
+    showShiftCloseOutcome(closed({ reportPrint: 'off' }));
+    expect(text(result())).toContain(`Closed by Sara Manager. ${SHIFT_REPORT_OFF} Print it Done`);
+    expect(lineButtons()).toEqual(['Print it']);
+    asked.printReply = { printed: true, copy: 'reprint', reprintNo: 1, error: null };
+    tapButton('Print it');
+    await vi.waitFor(() => expect(seen.toasts).toHaveLength(1));
+    expect(asked.printRequests).toEqual([{ shiftId: 'shift-1', again: true }]);
+
+    for (const [reportPrint, words] of [
+      ['no_printer', SHIFT_REPORT_NO_PRINTER],
+      ['not_made', SHIFT_REPORT_NOT_MADE],
+    ] as const) {
+      showShiftCloseOutcome(closed({ reportPrint }));
+      expect(text(result())).toContain(`Closed by Sara Manager. ${words} Done`);
+      expect(lineButtons()).toEqual([]);
+    }
+
+    showShiftCloseOutcome(closed({ reportPrint: null }));
+    const none = text(result());
+    expect(none).toContain('Closed by Sara Manager. Done');
+    expect(none).not.toMatch(/shift report/i);
+    expect(shiftReportLine({ reportPrint: null, reportError: null })).toBeNull();
+    // A failure is said whatever the close said first.
+    expect(shiftReportLine({ reportPrint: 'off', reportError: OFF })).toEqual({
+      text: `The shift report did not print: ${OFF}`,
+      amber: true,
+      button: { label: 'Try again', again: false },
+    });
+  });
+
+  it('"Cash taken out" is one row — payouts and rider tips — beside the outside riders’ row, as on the paper', () => {
+    // The owner's sample paper: Cash taken out -3,750 (rider tips -600 among it), Paid to outside riders (8) -1,800.
+    const summary = { ...CLOSE_SUMMARY, cashOutCents: 555_000, riderChargesCents: 180_000, riderChargeCount: 8, riderTripCount: 0 } as ShiftSummary;
+    const words = text(result(closed({ summary })));
+    expect(words.match(/Cash taken out/g)).toHaveLength(1);
+    expect(words).toContain('Cash taken out − Rs 3,750');
+    expect(words).toContain('Paid to outside riders (8): 8 delivery charges kept − Rs 1,800');
+    expect(words).not.toMatch(/tips/i);
+  });
+
+  it('the PIN result still goes by itself after a minute when its line has changed', () => {
+    vi.useFakeTimers();
+    try {
+      signIn('cashier');
+      showShiftCloseOutcome(closed({ viaManagerPin: true, expectedCents: null, summary: null }));
+      noteShiftReportFailed('shift-1', OFF);
+      expect(shown()!.reportError).toBe(OFF);
+      vi.advanceTimersByTime(PIN_CLOSE_RESULT_MS - 1);
+      expect(shown()).not.toBeNull();
+      vi.advanceTimersByTime(1);
+      expect(shown()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a failure that comes in before the result is up is shown on it, once', () => {
+    signIn('manager');
+    noteShiftReportFailed('shift-9', OFF);
+    showShiftCloseOutcome(closed({ shiftId: 'shift-9' }));
+    expect(shown()!.reportError).toBe(OFF);
+    dismissShiftCloseOutcome();
+    showShiftCloseOutcome(closed({ shiftId: 'shift-9' }));
+    expect(shown()!.reportError).toBeNull();
   });
 });

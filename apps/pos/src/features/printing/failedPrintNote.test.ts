@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addToast, toastDuration, type ToastItem } from '../../components/toast/toastQueue';
-import { failedPrintNote } from './failedPrintNote';
+import { failedPrintNote, SHIFT_REPORT_FAILED_NEXT, SHIFT_REPORT_FAILED_OWNER, SHIFT_REPORT_FAILED_TITLE } from './failedPrintNote';
 
 const OFF = { code: 'offline', message: 'The printer is off, offline, out of paper or its lid is open.' };
 
@@ -42,5 +42,65 @@ describe('the failed-print note', () => {
     expect(failedPrintNote({ jobKind: 'kitchen', retrying: true }, () => {}).title).toBe('Printer not responding — kitchen ticket will retry');
     expect(failedPrintNote({ jobId: 'j', jobKind: 'drawer', error: OFF }, () => {}).action).toBeUndefined();
     expect(failedPrintNote({ jobKind: 'receipt' }, () => {})).toEqual({ title: 'Print failed', description: 'Could not print receipt', variant: 'error' });
+  });
+});
+
+describe('the shift report did not print (v0.7.35)', () => {
+  // As the till sends it (print-spooler notifyShiftReportFailure): no job, no order — the shift.
+  const failed = { jobKind: 'shift_report', shiftId: 'shift-7', what: 'Shift report', error: OFF, retrying: false };
+
+  it('says so, and what to do; "Try again" is keyed to the shift and asks for that shift’s report', () => {
+    const jobs: string[] = [];
+    const shifts: string[] = [];
+    const n = failedPrintNote(
+      failed,
+      (id) => jobs.push(id),
+      (id) => shifts.push(id),
+    );
+    expect(SHIFT_REPORT_FAILED_TITLE).toBe('Shift report did not print');
+    expect(SHIFT_REPORT_FAILED_NEXT).toBe('Press Try again, or the owner prints it from Shift history.');
+    expect(n).toMatchObject({
+      title: 'Shift report did not print',
+      description: `${OFF.message} Press Try again, or the owner prints it from Shift history.`,
+      // It stays until closed: it still works after the close result is gone.
+      variant: 'error',
+    });
+    expect(n.action).toMatchObject({ label: 'Try again', key: 'shift-report:shift-7' });
+    n.action!.onClick();
+    expect(shifts).toEqual(['shift-7']);
+    // Never a print job sent again: the shift report has none.
+    expect(jobs).toEqual([]);
+  });
+
+  it('two shifts stay two notes; the printer’s words get a full stop', () => {
+    const toItem = (shiftId: string): ToastItem => {
+      const n = failedPrintNote({ ...failed, shiftId }, () => {}, () => {});
+      return { id: shiftId, ...n, duration: toastDuration(n.variant) };
+    };
+    const list = addToast(addToast([], toItem('shift-7')), toItem('shift-8'));
+    expect(list.map((t) => t.action?.key)).toEqual(['shift-report:shift-7', 'shift-report:shift-8']);
+    expect(failedPrintNote({ ...failed, error: { code: 'timeout', message: 'Printer did not answer' } }, () => {}, () => {}).description).toBe(
+      `Printer did not answer. ${SHIFT_REPORT_FAILED_NEXT}`,
+    );
+  });
+
+  it('with no shift named, or no way to try: no button, and the owner’s way instead', () => {
+    for (const n of [failedPrintNote({ ...failed, shiftId: undefined }, () => {}, () => {}), failedPrintNote(failed, () => {})]) {
+      expect(n).toEqual({ title: SHIFT_REPORT_FAILED_TITLE, description: `${OFF.message} ${SHIFT_REPORT_FAILED_OWNER}`, variant: 'error' });
+    }
+    expect(SHIFT_REPORT_FAILED_OWNER).toBe('The owner can print it from Shift history.');
+  });
+
+  it('receipts and kitchen tickets are as they were', () => {
+    const shifts: string[] = [];
+    const receipt = failedPrintNote({ jobId: 'job-41', jobKind: 'receipt', what: 'Receipt for Order #0041', error: OFF }, () => {}, (id) => shifts.push(id));
+    expect(receipt).toMatchObject({ title: 'Receipt for Order #0041 did not print', description: OFF.message, variant: 'error' });
+    expect(receipt.action).toMatchObject({ label: 'Try again', key: 'job-41' });
+    const kitchen = failedPrintNote({ jobId: 'job-42', jobKind: 'kitchen', what: 'Kitchen ticket for Order #0042', error: OFF }, () => {}, (id) => shifts.push(id));
+    expect(kitchen).toMatchObject({ title: 'Kitchen ticket for Order #0042 did not print', description: OFF.message });
+    expect(kitchen.action?.key).toBe('job-42');
+    receipt.action!.onClick();
+    kitchen.action!.onClick();
+    expect(shifts).toEqual([]);
   });
 });

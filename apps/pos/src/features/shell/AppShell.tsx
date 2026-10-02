@@ -11,6 +11,8 @@ import { useToast } from '../../components/toast/ToastProvider';
 import { useQueryClient } from '@tanstack/react-query';
 import { DRAWER_NOT_OPENED_CODE, DRAWER_UNSURE_CODE } from '@cheeseoclock/shared-types';
 import { failedPrintNote } from '../printing/failedPrintNote';
+import { noteShiftReportFailed } from './shiftCloseOutcome';
+import { printShiftReportAndSay } from './shiftReportPrint';
 
 export function AppShell() {
   const user = useSessionStore((s) => s.user);
@@ -50,6 +52,20 @@ export function AppShell() {
   // Surface any spooler failure as a toast — sales are already saved.
   useEffect(() => {
     return onPrinterFailed((payload) => {
+      // The shift report did not print (v0.7.35; the close is saved): the
+      // close result says so with Try again, and so does a note that stays
+      // until closed. Try again prints the original while none came out.
+      if (payload.jobKind === 'shift_report') {
+        if (payload.shiftId) noteShiftReportFailed(payload.shiftId, payload.error?.message || 'The printer did not take it');
+        toast(
+          failedPrintNote(
+            payload,
+            () => {},
+            (shiftId) => void printShiftReportAndSay(shiftId, false, toast),
+          ),
+        );
+        return;
+      }
       // The cash drawer: say plainly what to do at the counter.
       if (payload.error?.code === DRAWER_NOT_OPENED_CODE || payload.error?.code === DRAWER_UNSURE_CODE) {
         const unsure = payload.error.code === DRAWER_UNSURE_CODE;

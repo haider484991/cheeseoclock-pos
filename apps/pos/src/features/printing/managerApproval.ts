@@ -17,6 +17,11 @@ export interface ManagerAsk {
    * rule, 27 Sep 2026); 0 means it is the first paper of its kind.
    */
   printNo: number | null;
+  /**
+   * What the paper will say, when the asker knows better than printNo (the
+   * shift report, v0.7.35); null: the receipt words (approvalPaperNote).
+   */
+  paperNote: string | null;
   resolve: (secret: string | null) => void;
 }
 
@@ -27,11 +32,12 @@ export function askManagerSecret(
   message: string,
   error: string | null = null,
   printNo: number | null = null,
+  paperNote: string | null = null,
 ): Promise<string | null> {
   return new Promise((resolve) => {
     // A second question replaces an open one; the first counts as cancelled.
     useManagerApprovalStore.getState().ask?.resolve(null);
-    useManagerApprovalStore.setState({ ask: { message, error, printNo, resolve } });
+    useManagerApprovalStore.setState({ ask: { message, error, printNo, paperNote, resolve } });
   });
 }
 

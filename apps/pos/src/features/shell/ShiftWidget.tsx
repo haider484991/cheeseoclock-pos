@@ -3,7 +3,20 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn, NumberPad } from '@cheeseoclock/ui';
-import { Banknote, BookOpenCheck, ChevronRight, Clock, History, Inbox, Lock, PauseCircle, ShieldCheck, Wallet, X } from 'lucide-react';
+import {
+  Banknote,
+  BookOpenCheck,
+  ChevronRight,
+  Clock,
+  History,
+  Inbox,
+  Lock,
+  PauseCircle,
+  Printer,
+  ShieldCheck,
+  Wallet,
+  X,
+} from 'lucide-react';
 import { cashCountText, cashCountTotalCents, formatCents } from '@cheeseoclock/pos-domain';
 import type {
   CashCount,
@@ -48,6 +61,7 @@ import {
   useShiftCloseOutcome,
   type ShiftCloseOutcome,
 } from './shiftCloseOutcome';
+import { printShiftReportAndSay } from './shiftReportPrint';
 import {
   CLOSE_PAUSES_WEBSITE_NOTE,
   CLOSE_PAUSES_WEBSITE_TEXT,
@@ -642,7 +656,9 @@ export function CloseShiftDialog({
   // A blind count: what the drawer should hold is shown only once the count
   // is in (CloseShiftResultDialog). Showing it first let a cashier type the
   // expected figure and hide a shortage (audit 2026-09-25). On a cashier's
-  // login (a manager's PIN) the shift's totals are not fetched at all.
+  // login (a manager's PIN) the shift's totals are not fetched at all. Used
+  // only in this box (the counts over the rows): the result shows the
+  // figures the close itself saved (its reply).
   const summaryQ = useQuery({
     queryKey: ['shifts', 'summary', shiftId],
     queryFn: () => ipc.shifts.summary(shiftId),
@@ -712,7 +728,9 @@ export function CloseShiftDialog({
       // The result first, then the refresh that turns the pill to "Open
       // shift": the result is kept outside the pill (shiftCloseOutcome.ts),
       // so it stays up until Done. On a manager's PIN (a cashier's login)
-      // the till sends no expected cash, and none is shown.
+      // the till sends no expected cash and no takings, and none are shown.
+      // The takings are the close's own (its reply, read after the close):
+      // the box's figures from when it opened stay in the box.
       if (sessionId) {
         showShiftCloseOutcome({
           sessionId,
@@ -721,10 +739,12 @@ export function CloseShiftDialog({
           countedCents: shift.countedCashCents ?? 0,
           countedNotes: shift.countedNotes ?? null,
           varianceCents: shift.varianceCents ?? 0,
-          summary: summary ?? null,
+          summary: viaPin ? null : (shift.summary ?? null),
           closedByName: shift.closedByName ?? check?.closerName ?? null,
           carriedUnpaidCount: shift.carriedUnpaidCount ?? 0,
           viaManagerPin: viaPin,
+          reportPrint: shift.reportPrint ?? null,
+          reportError: null,
         });
       }
       void qc.invalidateQueries({ queryKey: ['shifts'] });
@@ -1086,6 +1106,11 @@ export function ridersPaidLabel(count: number, trips: number): string {
  * the shift book, and a manager has no other screen to find them again.
  * On a manager's PIN (a cashier's login): no expected cash, and it goes by
  * itself after a minute (shiftCloseOutcome.ts).
+ *
+ * v0.7.35: the figures are the ones the close saved (its reply), and a line
+ * under "Closed by" says what became of the shift report, with Print again
+ * or Try again (shiftReportLine) — on the PIN result too, which still shows
+ * no figures.
  */
 export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftCloseOutcome; onDone: () => void }) {
   const { summary } = outcome;
@@ -1191,6 +1216,8 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
             </p>
           )}
 
+          <ShiftReportStatus outcome={outcome} />
+
           {outcome.viaManagerPin && (
             <p className="mt-2 text-xs text-stone-500 dark:text-stone-400">{PIN_CLOSE_RESULT_NOTE}</p>
           )}
@@ -1203,6 +1230,99 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+/** The close result's line about the shift report (v0.7.35), by what became of the paper at the close. */
+export const SHIFT_REPORT_PRINTING = 'Shift report printing - keep it with the cash.';
+export const SHIFT_REPORT_OFF = 'Printing the shift report is off (Settings → Printers).';
+export const SHIFT_REPORT_NO_PRINTER = 'No receipt printer is set up - no shift report printed.';
+export const SHIFT_REPORT_NOT_MADE = 'The shift report could not be made. The close is saved.';
+/** A paper that did not print: the printer's words follow. */
+export const SHIFT_REPORT_FAILED_LINE = 'The shift report did not print:';
+
+export interface ShiftReportLine {
+  text: string;
+  /** It did not print: said in amber. */
+  amber: boolean;
+  /**
+   * The line's button: `again` true prints a DUPLICATE (Print again, Print
+   * it); false is Try again (the ORIGINAL while none came out).
+   */
+  button: { label: 'Print again' | 'Try again' | 'Print it'; again: boolean } | null;
+}
+
+/**
+ * What the close result says about the shift report (final plan step 19g-1):
+ * a failure first, in amber, with Try again; else by what the close said —
+ * printing (Print again), off (Print it), no printer, not made. Null when
+ * the till said nothing about it.
+ */
+export function shiftReportLine(outcome: Pick<ShiftCloseOutcome, 'reportPrint' | 'reportError'>): ShiftReportLine | null {
+  if (outcome.reportError !== null) {
+    return {
+      text: `${SHIFT_REPORT_FAILED_LINE} ${outcome.reportError}`,
+      amber: true,
+      button: { label: 'Try again', again: false },
+    };
+  }
+  switch (outcome.reportPrint) {
+    case 'printing':
+      return { text: SHIFT_REPORT_PRINTING, amber: false, button: { label: 'Print again', again: true } };
+    case 'off':
+      return { text: SHIFT_REPORT_OFF, amber: false, button: { label: 'Print it', again: true } };
+    case 'no_printer':
+      return { text: SHIFT_REPORT_NO_PRINTER, amber: false, button: null };
+    case 'not_made':
+      return { text: SHIFT_REPORT_NOT_MADE, amber: false, button: null };
+    default:
+      return null;
+  }
+}
+
+/**
+ * The shift report's line under "Closed by", with its button. The till
+ * decides who may print it and what it says (a cashier's login is asked for
+ * a manager's PIN or password in the app; a manager's own login only within
+ * 15 minutes of the close); the toast says what came out.
+ */
+function ShiftReportStatus({ outcome }: { outcome: ShiftCloseOutcome }) {
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const line = shiftReportLine(outcome);
+  if (!line) return null;
+  const button = line.button;
+  const press = async (again: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await printShiftReportAndSay(outcome.shiftId, again, toast);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div
+      role="status"
+      className={cn(
+        'mt-2 flex items-center gap-2 text-xs',
+        line.amber ? 'font-semibold text-amber-700 dark:text-amber-300' : 'text-stone-600 dark:text-stone-300',
+      )}
+    >
+      <Printer className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <p className="min-w-0 flex-1">{line.text}</p>
+      {button && (
+        <Button
+          variant={line.amber ? 'secondary' : 'ghost'}
+          size="sm"
+          className="shrink-0"
+          disabled={busy}
+          onClick={() => void press(button.again)}
+        >
+          {busy ? 'Printing…' : button.label}
+        </Button>
+      )}
+    </div>
   );
 }
 
