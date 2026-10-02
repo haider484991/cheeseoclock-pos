@@ -1,4 +1,4 @@
-import { PICKUP_DISCOUNT_PERCENT } from '@cheeseoclock/shared-types';
+import { PICKUP_DISCOUNT_PERCENT, webOrderPickupPercent } from '@cheeseoclock/shared-types';
 
 /**
  * The website cancels an order it has not seen confirmed this long after the
@@ -32,14 +32,20 @@ export function isStaleWebOrder(createdAt: string, maxAgeMs: number, now: number
 
 /**
  * The pick-up percent the customer was shown, read back from the order the
- * site sent (discount ÷ subtotal). The till used its own constant, so an order
- * placed just before an update changed the offer was billed at a price the
- * customer never saw. Orders from a site that predates the field fall back to
- * the constant; the result is kept to a sane 0–50%.
+ * site sent: the discount ÷ the lines it was worked on, which leave out the
+ * lines the website flagged `noDiscount` (shared-types webOrderPickupPercent,
+ * NO DISCOUNT ON VALUE DEALS). Discount ÷ subtotal read Rs 150 off a Rs 1,500
+ * pizza next to a Rs 2,600 deal as 4%. The till used its own constant, so an
+ * order placed just before an update changed the offer was billed at a price
+ * the customer never saw. Orders from a site that predates the field fall
+ * back to the constant; the result is kept to a sane 0–50%. A pick-up of
+ * flagged lines only reads 0.
  */
-export function pickupPercentOf(web: { fulfilment?: string; discountCents?: number; subtotalCents: number }): number {
-  if (web.fulfilment !== 'pickup') return 0;
-  if (typeof web.discountCents !== 'number' || !(web.subtotalCents > 0)) return PICKUP_DISCOUNT_PERCENT;
-  const pct = Math.round((web.discountCents * 100) / web.subtotalCents);
-  return Math.max(0, Math.min(50, pct));
+export function pickupPercentOf(web: {
+  fulfilment?: string;
+  discountCents?: number;
+  subtotalCents: number;
+  items?: ReadonlyArray<{ unitPriceCents: number; quantity: number; noDiscount?: boolean }>;
+}): number {
+  return webOrderPickupPercent(web) ?? PICKUP_DISCOUNT_PERCENT;
 }

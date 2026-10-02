@@ -15,7 +15,9 @@
  *   - an older website, a refusal, or a fee item hidden by an older till:
  *     nothing more by itself, the owner's Publish still sends the menu
  *     without the block, and Settings says why;
- *   - "Publish the menu by itself" (off by default) sends it 5 s after a change.
+ *   - "Publish the menu by itself" (off by default) sends it 5 s after a change;
+ *   - a website older than v0.7.34 that drops the value-deals mark: Settings
+ *     says it needs its update.
  *
  * A real database built from every migration (node:sqlite; skipped where it
  * is missing), the real repositories and the real bridge, with `fetch`
@@ -890,6 +892,47 @@ live('a website older than the tills (its deploy failed or was rolled back): the
     expect(r.olderWebsite).toBe(true);
     expect(menus()[0]!.categories.flatMap((c) => c.items).find((i) => i.posItemId === items.pizza)?.pickupOnly).toBe(true);
     expect(publishStatus()).toMatchObject({ state: 'unsupported', message: bridgeMod.OLDER_WEBSITE_DROPS });
+  });
+
+  it('a Publish with value deals (never discounted): a website older than v0.7.34 drops the mark and still takes its pick-up % off them — Settings says so; once it says it keeps the mark, nothing is said', async () => {
+    const db = await till();
+    zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
+    const { createCategory } = await import('../db/repositories/category-repo.js');
+    const tax = String((db.prepare(`SELECT id FROM tax_categories WHERE deleted_at IS NULL`).get() as Row)['id']);
+    const deals = createCategory(db as AppDatabase, { name: 'Value Deals', displayOrder: 3, colorHex: '#aa0055' }, OWNER);
+    const bigTwo = menuRepo.createMenuItem(db as AppDatabase, { categoryId: deals.id, name: 'Big Two', basePriceCents: 360_000, taxCategoryId: tax }, OWNER).id;
+    // storedAnswer is a website of v0.7.30 to v0.7.33: it keeps the messages and says nothing of the mark.
+    const r = await bridge().publishMenu();
+    expect(menus()[0]!.categories.flatMap((c) => c.items).find((i) => i.posItemId === bigTwo)?.noDiscount).toBe(true);
+    expect(r).not.toHaveProperty('olderWebsite');
+    expect(publishStatus()).toMatchObject({ state: 'unsupported', message: bridgeMod.OLDER_WEBSITE_KEEPS_DEALS });
+    // The website updated: it answers noDiscountItems, and the owner's Publish clears the note.
+    answerMenu = (body) => {
+      const a = storedAnswer(body);
+      return { status: a.status, json: { ok: true, data: { ...(a.json as { data: Row }).data, noDiscountItems: true } } };
+    };
+    await bridge().publishMenu();
+    expect(publishStatus()).toMatchObject({ state: 'published' });
+  });
+
+  it('what only v0.7.34 keeps: an item no discount comes off (`noDiscount: true`) — nothing else', () => {
+    const { carriesNoDiscount } = bridgeMod;
+    const item = (noDiscount?: boolean) => ({
+      posItemId: 'i',
+      name: 'Test',
+      description: null,
+      basePriceCents: 100,
+      taxRateBps: 0,
+      imageUrl: null,
+      sortOrder: 0,
+      modifierGroups: [],
+      ...(noDiscount === undefined ? {} : { noDiscount }),
+    });
+    const menuWith = (...its: Array<ReturnType<typeof item>>) => ({ categories: [{ posCategoryId: 'c', name: 'Test', displayOrder: 0, items: its }] });
+    expect(carriesNoDiscount(menuWith(item(), item(true)))).toBe(true);
+    expect(carriesNoDiscount(menuWith(item(), item(false)))).toBe(false);
+    expect(carriesNoDiscount(menuWith(item()))).toBe(false);
+    expect(carriesNoDiscount({ categories: [] })).toBe(false);
   });
 
   it('nothing only v0.7.30 keeps (every item on the website, the messages at their defaults): an older website loses nothing, and nothing is said', async () => {

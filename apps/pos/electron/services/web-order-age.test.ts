@@ -39,6 +39,20 @@ describe('pickupPercentOf', () => {
     expect(pickupPercentOf({ fulfilment: 'pickup', subtotalCents: 200_000 })).toBe(PICKUP_DISCOUNT_PERCENT);
     expect(pickupPercentOf({ fulfilment: 'pickup', subtotalCents: 100, discountCents: 100 })).toBe(50);
   });
+  it('reads the % off the lines it was worked on: a flagged deal is left out of the base (not Rs 150 of Rs 4,100 = 4%)', () => {
+    const deal = { unitPriceCents: 260_000, quantity: 1, noDiscount: true };
+    const pizza = { unitPriceCents: 150_000, quantity: 1 };
+    expect(pickupPercentOf({ fulfilment: 'pickup', subtotalCents: 410_000, discountCents: 15_000, items: [deal, pizza] })).toBe(10);
+    // The same order from a website older than the mark (no flag) was discounted over every line.
+    expect(pickupPercentOf({ fulfilment: 'pickup', subtotalCents: 410_000, discountCents: 41_000, items: [{ ...deal, noDiscount: undefined }, pizza] })).toBe(10);
+  });
+  it('is 0 for a pick-up of flagged lines only (no discount row), never the till constant', () => {
+    const items = [
+      { unitPriceCents: 260_000, quantity: 1, noDiscount: true },
+      { unitPriceCents: 120_000, quantity: 2, noDiscount: true },
+    ];
+    expect(pickupPercentOf({ fulfilment: 'pickup', subtotalCents: 500_000, discountCents: 0, items })).toBe(0);
+  });
 });
 
 describe('WEBSITE_UNCONFIRMED_TTL_MS', () => {

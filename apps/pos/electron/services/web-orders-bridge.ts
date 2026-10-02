@@ -20,6 +20,7 @@ import { MenuPackageService, WebsiteNotReadyError, setMenuPackageService } from 
 import { sealSecret } from './secret-seal.js';
 import { SYNC_SNAPSHOT_KEYS } from '../db/repositories/sync-repo.js';
 import { deliveryChargeItemForWebOrder } from '../db/repositories/delivery-zones-repo.js';
+import { noDiscountOf } from '../db/repositories/category-repo.js';
 import {
   createOrder,
   addOrderItem,
@@ -74,6 +75,7 @@ import {
 import { dumpDatabase, rebuildDatabase, type RowSink, type RowSource } from './cloud-copy-rows.js';
 import {
   PUBLISHED_IMAGE_MAX_CHARS,
+  categoryNeverDiscounted,
   compareSettingsStamp,
   compareShopStamp,
   feeItemsForBlock,
@@ -200,6 +202,20 @@ export const UNSUPPORTED_WEBSITE_SHOP =
  */
 export const OLDER_WEBSITE_DROPS =
   'The website is older than this till: it left out the website messages and “Pick-up only” (a delivery with a pick-up-only item is not refused). It needs its update — then press “Publish menu to website” once.';
+
+/**
+ * Settings → Online orders, when the publish carried items no discount comes off (NO DISCOUNT ON
+ * VALUE DEALS) and the website did not say it keeps them (PublishMenuResult.noDiscountItems): it
+ * dropped the mark and still takes its pick-up % off value deals. Totals still agree — the till
+ * follows what the customer was shown.
+ */
+export const OLDER_WEBSITE_KEEPS_DEALS =
+  'The website is older than this till: it still takes the pick-up discount off value deals. It needs its update — then press “Publish menu to website” once.';
+
+/** Does this menu carry an item the website must keep no discount off (`noDiscount: true`)? */
+export function carriesNoDiscount(menu: Pick<PublishedMenu, 'categories'>): boolean {
+  return menu.categories.some((c) => c.items.some((i) => i.noDiscount === true));
+}
 
 /**
  * Does this publish carry something only a website of v0.7.30 on keeps? A website message off its
@@ -1713,6 +1729,12 @@ class WebOrdersBridge {
       // site that predates pickup carry no fulfilment and are deliveries.
       const pickup = web.fulfilment === 'pickup';
       const pickupPercent = pickupPercentOf(web);
+      // A pick-up with ANY line the website flagged no discount (NO DISCOUNT ON
+      // VALUE DEALS) was priced by those flags: its lines take the website's
+      // flags and its % leaves them alone. Every other web order (a delivery,
+      // nothing marked, a website older than the mark, which discounted every
+      // line) takes the till's own categories, under a % over every line.
+      const followSite = pickup && web.items.some((l) => l.noDiscount === true);
       const order = db.transaction(() => {
         // 1. Local order shell (delivery or takeaway, source web).
         const tag = pickup ? '[web pick-up]' : '[web]';
@@ -1780,6 +1802,9 @@ class WebOrdersBridge {
               // Placed at the fee the website showed: a Save that has since moved the area to another
               // fee switched this one off, and the order still carries it (the customer's price).
               allowSwitchedOffDeliveryCharge: true,
+              // The website's flag, true or false, on a pick-up it priced by its flags (followSite);
+              // otherwise absent, so the till's own category decides (a delivery charge is never marked).
+              ...(followSite ? { noDiscount: line.noDiscount === true } : {}),
             },
             actor,
           );
@@ -1793,7 +1818,9 @@ class WebOrdersBridge {
         // WEBSITE's rule, frozen on the row (the % over every line the site
         // priced, as lib/pricing priceOrder does), never the till's
         // "discount also comes off the delivery charge" switch: the till
-        // takes off exactly what the customer was shown.
+        // takes off exactly what the customer was shown. On a pick-up the
+        // website priced by its flags the rule leaves those lines alone; a
+        // pick-up of flagged lines only reads 0% and gets no discount row.
         if (pickup && pickupPercent > 0) {
           applyDiscount(
             db,
@@ -1805,7 +1832,7 @@ class WebOrdersBridge {
               approverUserId: actor.userId,
             },
             actor,
-            { rule: websiteDiscountRule(false) },
+            { rule: websiteDiscountRule(followSite) },
           );
         }
 
@@ -1834,7 +1861,8 @@ class WebOrdersBridge {
       })();
 
       // 5. Kitchen ticket (per Settings → Printer) so the team sees paper for
-      //    web orders too; the bill prints when the rider is assigned.
+      //    web orders too; the bill prints when the order goes out (Send out,
+      //    or Assign rider).
       printSpooler.onOrderEvent(order.id, 'sent_to_kitchen');
       this.importedTotal += 1;
 
@@ -2232,6 +2260,11 @@ class WebOrdersBridge {
       const olderWebsite =
         data?.websiteMessages !== true && carriesWebsiteMessages(sentBlock ? sb.block : null, menu);
       if (olderWebsite) this.noteSettings(sb.stamp, 'unsupported', OLDER_WEBSITE_DROPS);
+      // …and one older than v0.7.34 dropped the items no discount comes off: its pick-up % still
+      // comes off value deals. Said last, over the note above: the same update and Publish fix both.
+      if (data?.noDiscountItems !== true && carriesNoDiscount(menu)) {
+        this.noteSettings(sb.stamp, 'unsupported', OLDER_WEBSITE_KEEPS_DEALS);
+      }
 
       log.info('Menu published to website', {
         categories: menu.categories.length,
@@ -2700,6 +2733,12 @@ export function buildPublishedMenu(db: AppDatabase): PublishedMenu {
  * what it was. A delivery charge (an area's fee item, or named like one) is
  * ALWAYS published, whatever its item's or category's website setting: the
  * settings block's fee check needs it. Empty categories are dropped as before.
+ *
+ * No discount on value deals (migration 0047; web-bridge.ts, NO DISCOUNT ON
+ * VALUE DEALS): each item of a category never discounted (what the owner
+ * set, else its name — Value Deals) goes with `noDiscount: true`, never a
+ * delivery charge. The key is absent on every other item, so with nothing
+ * marked the menu is byte-for-byte what it was.
  */
 export function buildPublishedMenuReport(db: AppDatabase): { menu: PublishedMenu; photosLeftOut: PhotoLeftOut[] } {
   const branding = getReceiptBranding(db);
@@ -2708,11 +2747,11 @@ export function buildPublishedMenuReport(db: AppDatabase): { menu: PublishedMenu
 
   const categories = db
     .prepare(
-      `SELECT id, name, display_order, is_on_website FROM categories
+      `SELECT id, name, display_order, is_on_website, no_discount FROM categories
         WHERE deleted_at IS NULL AND is_active = 1
         ORDER BY display_order`,
     )
-    .all() as Array<{ id: string; name: string; display_order: number; is_on_website: number }>;
+    .all() as Array<{ id: string; name: string; display_order: number; is_on_website: number; no_discount: unknown }>;
 
   const items = (
     db
@@ -2823,6 +2862,9 @@ export function buildPublishedMenuReport(db: AppDatabase): { menu: PublishedMenu
           })),
           // Only when true: every other item goes exactly as before (no key).
           ...(i.web === 'pickup_only' && !i.isFee ? { pickupOnly: true } : {}),
+          ...(!i.isFee && categoryNeverDiscounted({ name: c.name, noDiscount: noDiscountOf(c.no_discount) })
+            ? { noDiscount: true }
+            : {}),
         })),
     }))
     .filter((c) => c.items.length > 0);

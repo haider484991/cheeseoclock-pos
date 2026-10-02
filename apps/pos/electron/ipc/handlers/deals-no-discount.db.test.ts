@@ -16,16 +16,23 @@
  *     discount matching the tablet);
  *   - after payment the snapshot, the FBR invoice, food cost and profit split
  *     it the same way, part refunds by each line's net; a discount a v0.7.33
- *     till re-worked over the deals is read back from the stored bill.
+ *     till re-worked over the deals is read back from the stored bill;
+ *   - a website order (the bridge's own import, the site's API stood in for)
+ *     follows the website: a pick-up with flagged lines takes its flags and a
+ *     % that leaves them alone; a pick-up of deals only gets no discount row;
+ *     an older website's pick-up and every delivery take the till's own
+ *     categories — and the till's total is always what the customer was shown.
  *
  * Only `defineHandler` (captured), the signed-in session and the manager
- * check (auth-service, counted), the printer spooler and the FBR worker are
- * stood in for. node's own `node:sqlite` stands in for better-sqlite3 (built
- * for Electron); skipped where it is missing. Every name, id and amount is
- * made up.
+ * check (auth-service, counted), the printer spooler, the FBR worker and the
+ * new-order alerts (recorded) are stood in for. node's own `node:sqlite`
+ * stands in for better-sqlite3 (built for Electron); skipped where it is
+ * missing. Every name, id and amount is made up.
  */
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AuthenticatedUser, ChannelOffer, OrderSnapshot, UUID } from '@cheeseoclock/shared-types';
+import type { AuthenticatedUser, ChannelOffer, OrderSnapshot, UUID, WebOrder } from '@cheeseoclock/shared-types';
 import { mapOrderToFbrPayload, mapRefundToFbrDebitNote, type FbrSellerInfo } from '@cheeseoclock/fbr-core';
 import { DatabaseSync, openMigrated } from '../../db/costing-shop.fixture.js';
 
@@ -36,6 +43,9 @@ const h = vi.hoisted(() => ({
   handlers: new Map<string, (ctx: unknown, payload: unknown) => unknown>(),
   session: null as unknown,
   pinChecks: 0,
+  /** What the bridge told the new-order alerts: each order received, each import that failed. */
+  received: [] as Array<Record<string, unknown>>,
+  failed: [] as Array<Record<string, unknown>>,
 }));
 
 const MANAGER_SECRET = 'Test-manager-7';
@@ -83,6 +93,12 @@ vi.mock('../../services/print-spooler.js', () => ({
 }));
 vi.mock('../../services/fbr-worker.js', () => ({
   fbrWorker: { kick: () => {}, resetAdapter: () => {} },
+}));
+vi.mock('../../services/order-alerts-hub.js', () => ({
+  orderAlerts: {
+    orderReceived: (r: Record<string, unknown>) => h.received.push(r),
+    importFailed: (f: Record<string, unknown>) => h.failed.push(f),
+  },
 }));
 
 const live = describe.skipIf(!DatabaseSync);
@@ -162,6 +178,8 @@ beforeEach(async () => {
   h.handlers.clear();
   h.session = null;
   h.pinChecks = 0;
+  h.received = [];
+  h.failed = [];
   db = openMigrated({});
   menu = await seedTill(db);
   (await import('./orders-handlers.js')).registerOrdersHandlers({ db, deviceId: DEV } as never);
@@ -512,5 +530,160 @@ live('after payment: Reports, FBR and refunds split it as the till did', () => {
       foodCost: { 'Test Fajita Pizza': 135_000, 'Big Two': 324_000 },
       foodSales: 510_000 - 51_000,
     });
+  });
+});
+
+live('website orders: the bridge follows what the website showed the customer', () => {
+  type PricedLine = { lineTotalCents: number; taxRateBps: number; noDiscount?: boolean };
+  type PriceOrder = (lines: PricedLine[], pct?: number) => { subtotalCents: number; discountCents: number; taxCents: number; totalCents: number };
+  /** The website's own pricing (apps/web lib/pricing priceOrder), loaded by path: what the customer was shown. */
+  async function websitePricing(): Promise<PriceOrder> {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const url = pathToFileURL(join(here, '..', '..', '..', '..', 'web', 'src', 'lib', 'pricing.ts')).href;
+    return ((await import(/* @vite-ignore */ url)) as { priceOrder: PriceOrder }).priceOrder;
+  }
+  /** A line as the website stores it: [item, quantity, the website's no-discount flag]. */
+  type WebLine = [keyof typeof menu, number, true?];
+  /** A website order as the site sends it, its figures worked by the website's own maths (its flags, its %). */
+  async function webOrder(id: string, fulfilment: 'pickup' | 'delivery', lines: WebLine[], pct: number): Promise<WebOrder> {
+    const priceOrder = await websitePricing();
+    const items = lines.map(([key, quantity, flagged]) => ({
+      posItemId: menu[key],
+      name: key,
+      quantity,
+      unitPriceCents: Number((db.prepare(`SELECT base_price_cents FROM menu_items WHERE id = ?`).get(menu[key]) as Row)['base_price_cents']),
+      modifiers: [],
+      notes: null,
+      ...(flagged ? { noDiscount: true } : {}),
+    }));
+    const shown = priceOrder(
+      items.map((i) => ({ lineTotalCents: i.unitPriceCents * i.quantity, taxRateBps: 1_500, ...(i.noDiscount ? { noDiscount: true } : {}) })),
+      fulfilment === 'pickup' ? pct : 0,
+    );
+    return {
+      id,
+      status: 'new',
+      customerName: 'Web Customer',
+      customerPhone: '03111234567',
+      addressLine: fulfilment === 'pickup' ? 'Collect from the shop' : 'Flat 2, Web Road',
+      area: fulfilment === 'pickup' ? null : 'Test Area',
+      notes: null,
+      fulfilment,
+      items,
+      subtotalCents: shown.subtotalCents,
+      discountCents: shown.discountCents,
+      taxCents: shown.taxCents,
+      totalCents: shown.totalCents,
+      paymentMethod: 'cod',
+      createdAt: new Date().toISOString(),
+      posOrderId: null,
+      posOrderNumber: null,
+    };
+  }
+  const importRow = (webOrderId: string) =>
+    db.prepare(`SELECT pos_order_id, status, attempts, last_error FROM web_order_imports WHERE web_order_id = ?`).get(webOrderId) as Row | undefined;
+  /** The bridge's own import (web-orders-bridge importOne), the site's API stood in for: imported at the first try. */
+  async function importWebOrder(web: WebOrder): Promise<string> {
+    const { webOrdersBridge } = await import('../../services/web-orders-bridge.js');
+    const bridge = webOrdersBridge as unknown as {
+      db: unknown;
+      deviceId: string;
+      systemUserId: string | null;
+      api: (...a: unknown[]) => Promise<Response>;
+      importOne: (cfg: unknown, web: WebOrder) => Promise<void>;
+    };
+    bridge.db = db;
+    bridge.deviceId = DEV;
+    bridge.systemUserId = null;
+    bridge.api = async () => new Response(JSON.stringify({ ok: true, data: { acked: true } }), { status: 200 });
+    await bridge.importOne({}, web);
+    const row = importRow(web.id);
+    expect(row).toMatchObject({ status: 'imported', attempts: 1, last_error: null });
+    expect(h.failed).toEqual([]);
+    return String(row?.['pos_order_id']);
+  }
+  /** Each line's frozen mark (order_items.no_discount), by the name it was sold under. */
+  const marks = (orderId: string) =>
+    Object.fromEntries(
+      (db.prepare(`SELECT menu_item_name AS name, no_discount AS nd FROM order_items WHERE order_id = ? AND deleted_at IS NULL`).all(orderId) as Row[]).map(
+        (r) => [r['name'], r['nd']],
+      ),
+    );
+  /** What the bridge told the screens: the till's total, and no "the total changed". */
+  const receivedWithoutMismatch = (orderId: string, totalCents: number) => {
+    expect(h.received).toHaveLength(1);
+    expect(h.received[0]).toMatchObject({ orderId, totalCents });
+    expect(h.received[0]).not.toHaveProperty('totalMismatch');
+  };
+
+  it('a new website’s pick-up of Big Two (flagged) and a pizza at 10%: Rs 150 off the pizza only, frozen to leave the deal alone — the website’s total, no “total changed”', async () => {
+    const web = await webOrder('web-new-mixed', 'pickup', [['bigTwo', 1, true], ['pizza', 1]], 10);
+    // 10% of the Rs 1,500 pizza; tax 15% of Rs 3,600 + Rs 1,350.
+    expect(web).toMatchObject({ subtotalCents: 510_000, discountCents: 15_000, taxCents: 74_250, totalCents: 569_250 });
+    const orderId = await importWebOrder(web);
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 510_000, discount_cents: 15_000, tax_cents: 74_250, total_cents: 569_250 });
+    expect(marks(orderId)).toEqual({ 'Big Two': 1, 'Test Fajita Pizza': 0 });
+    const [row] = liveDiscounts(orderId);
+    expect(row).toMatchObject({ source: null, value: 10, amount_cents: 15_000, approved_by_user_id: 'u_admin' });
+    expect(ruleOf(row)).toEqual({ kind: 'discount_base', v: 1, alsoOffDeliveryCharge: true, from: 'website', skipsNoDiscountLines: true });
+    receivedWithoutMismatch(orderId, 569_250);
+    const s = await snap(orderId);
+    expect(s.discounts).toMatchObject([{ skipsNoDiscountLines: true }]);
+    expect(fbrLines(s)).toEqual({
+      'Test Fajita Pizza': { net: 1_350, tax: 202.5, discount: 150 },
+      'Big Two': { net: 3_600, tax: 540, discount: undefined },
+    });
+  });
+
+  it('a pick-up of flagged deals only reads 0%: no discount row, imported at the first try (no retry), the totals equal', async () => {
+    const web = await webOrder('web-new-deals', 'pickup', [['bigTwo', 2, true]], 10);
+    expect(web).toMatchObject({ subtotalCents: 720_000, discountCents: 0, taxCents: 108_000, totalCents: 828_000 });
+    const discountRows = () => (db.prepare(`SELECT COUNT(*) AS n FROM order_discounts`).get() as Row)['n'];
+    const before = discountRows();
+    const orderId = await importWebOrder(web);
+    expect(discountRows()).toBe(before);
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 720_000, discount_cents: 0, tax_cents: 108_000, total_cents: 828_000 });
+    expect(marks(orderId)).toEqual({ 'Big Two': 1 });
+    receivedWithoutMismatch(orderId, 828_000);
+  });
+
+  it('a website older than the mark (no flags): the deal takes the till’s category and the % covers every line, as that website priced it — totals equal; the till’s own discounts would still leave the deal out', async () => {
+    const web = await webOrder('web-old-mixed', 'pickup', [['bigTwo', 1], ['pizza', 1]], 10);
+    // 10% of Rs 5,100; tax 15% of Rs 4,590.
+    expect(web).toMatchObject({ subtotalCents: 510_000, discountCents: 51_000, taxCents: 68_850, totalCents: 527_850 });
+    const orderId = await importWebOrder(web);
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 510_000, discount_cents: 51_000, tax_cents: 68_850, total_cents: 527_850 });
+    expect(marks(orderId)).toEqual({ 'Big Two': 1, 'Test Fajita Pizza': 0 });
+    // The website's rule as before this release: every line, no skipping key.
+    expect(ruleOf(liveDiscounts(orderId)[0])).toEqual({ kind: 'discount_base', v: 1, alsoOffDeliveryCharge: true, from: 'website' });
+    receivedWithoutMismatch(orderId, 527_850);
+    const s = await snap(orderId);
+    expect(s.discounts).toMatchObject([{ skipsNoDiscountLines: false }]);
+    expect(fbrLines(s)['Big Two']).toEqual({ net: 3_240, tax: 486, discount: 360 });
+    // The line keeps the till's mark: a till discount (F3, an offer) is worked on the pizza alone.
+    const { discountBaseCents } = await import('@cheeseoclock/pos-domain');
+    expect(discountBaseCents(s.items, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: true })).toBe(150_000);
+  });
+
+  it('a web delivery with a deal (flagged, as a new website stores it): no discount; the deal line is 1 by the till’s category, the charge 0', async () => {
+    const web = await webOrder('web-delivery-deal', 'delivery', [['bigTwo', 1, true], ['pizza', 1], ['charge', 1]], 0);
+    expect(web).toMatchObject({ subtotalCents: 530_000, discountCents: 0, totalCents: 609_500 });
+    const orderId = await importWebOrder(web);
+    expect(liveDiscounts(orderId)).toEqual([]);
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 530_000, discount_cents: 0, tax_cents: 79_500, total_cents: 609_500 });
+    expect(marks(orderId)).toEqual({ 'Big Two': 1, 'Test Fajita Pizza': 0, 'Delivery Charge (Rs 200)': 0 });
+    receivedWithoutMismatch(orderId, 609_500);
+  });
+
+  it('on a pick-up priced by its flags the website’s flags win over the till’s categories (the owner changed them after the last Publish): the customer’s price', async () => {
+    const { updateCategory } = await import('../../db/repositories/category-repo.js');
+    const categoryOf = (itemId: string) => String((db.prepare(`SELECT category_id FROM menu_items WHERE id = ?`).get(itemId) as Row)['category_id']);
+    updateCategory(db as never, { id: categoryOf(menu.bigTwo), noDiscount: false }, OWNER_ACTOR);
+    updateCategory(db as never, { id: categoryOf(menu.pizza), noDiscount: true }, OWNER_ACTOR);
+    const web = await webOrder('web-new-stale', 'pickup', [['bigTwo', 1, true], ['pizza', 1]], 10);
+    const orderId = await importWebOrder(web);
+    expect(marks(orderId)).toEqual({ 'Big Two': 1, 'Test Fajita Pizza': 0 });
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 510_000, discount_cents: 15_000, tax_cents: 74_250, total_cents: 569_250 });
+    receivedWithoutMismatch(orderId, web.totalCents);
   });
 });

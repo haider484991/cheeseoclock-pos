@@ -13,7 +13,11 @@
  *   - an edit of anything else, a menu file import, and a row image from a
  *     v0.7.29 till (without the columns) leave the flags as they are; a new
  *     row from such a till is on the website;
- *   - a fresh start says what it resets.
+ *   - a fresh start says what it resets;
+ *   - no discount on value deals (migration 0047): with every category set
+ *     to discounted the publish is byte-for-byte v0.7.33's; with nothing set
+ *     only the Value Deals items gain `noDiscount: true`; a delivery charge
+ *     never carries it.
  *
  * Only `defineHandler` (captured), the signed-in session, the printer
  * spooler and the FBR worker are stood in for. node's own `node:sqlite`
@@ -353,6 +357,71 @@ live('the defaults: the website gets exactly the menu it got before', () => {
     const cats = await data<Category[]>('menu:listCategories');
     expect(new Set(items.map((i) => i.webAvailability))).toEqual(new Set(['on']));
     expect(new Set(cats.map((c) => c.isOnWebsite))).toEqual(new Set([true]));
+  });
+});
+
+live('no discount on value deals: what the website gets (migration 0047; web-bridge.ts, NO DISCOUNT ON VALUE DEALS)', () => {
+  /** The owner's Value Deals as a menu file import makes it: nothing set, so its name decides. */
+  async function addValueDeals(): Promise<string> {
+    const x = db as never;
+    const mgr = { userId: 'u_mgr', deviceId: DEV };
+    const { createCategory } = await import('../../db/repositories/category-repo.js');
+    const { createMenuItem } = await import('../../db/repositories/menu-item-repo.js');
+    const deals = createCategory(x, { name: 'Value Deals', displayOrder: 4, colorHex: '#aa0055' }, mgr);
+    const deal = (name: string, cents: number, sortOrder: number) =>
+      createMenuItem(x, { categoryId: deals.id, name, basePriceCents: cents, taxCategoryId: menu.tax, sortOrder }, mgr);
+    deal('Big Two', 360_000, 4);
+    deal('Family Feast', 520_000, 5);
+    deal('Perfect Pair', 240_000, 6);
+    return deals.id;
+  }
+  const markedNames = (m: PublishedMenu) => m.categories.flatMap((c) => c.items.filter((i) => i.noDiscount === true).map((i) => i.name));
+
+  it('every category set to discounted (an explicit 0, the owner’s): the publish is byte-for-byte v0.7.33’s (at the website defaults, v0.7.29’s above) — no noDiscount key anywhere', async () => {
+    await addValueDeals();
+    h.session = OWNER;
+    for (const c of await data<Category[]>('menu:listCategories')) await data('menu:updateCategory', { id: c.id, noDiscount: false });
+    expect(db.prepare(`SELECT DISTINCT no_discount AS n FROM categories`).all()).toEqual([{ n: 0 }]);
+    const { getReceiptBranding } = await import('../../services/printer-config.js');
+    const { menu: now } = await published();
+    const then = v0729PublishedMenu(db as AppDatabase, getReceiptBranding);
+    expect(JSON.stringify({ ...now, publishedAt: 'x' })).toBe(JSON.stringify({ ...then, publishedAt: 'x' }));
+    expect(JSON.stringify(now)).not.toContain('noDiscount');
+  });
+
+  it('nothing set: Value Deals is never discounted by its name — only Big Two, Family Feast and Perfect Pair gain `noDiscount: true`, everything else byte-for-byte as before', async () => {
+    const dealsId = await addValueDeals();
+    expect(db.prepare(`SELECT DISTINCT no_discount AS n FROM categories`).all()).toEqual([{ n: null }]);
+    const { getReceiptBranding } = await import('../../services/printer-config.js');
+    const { menu: now } = await published();
+    const then = v0729PublishedMenu(db as AppDatabase, getReceiptBranding);
+    const marked: PublishedMenu = {
+      ...then,
+      categories: then.categories.map((c) => (c.posCategoryId === dealsId ? { ...c, items: c.items.map((i) => ({ ...i, noDiscount: true })) } : c)),
+    };
+    expect(JSON.stringify({ ...now, publishedAt: 'x' })).toBe(JSON.stringify({ ...marked, publishedAt: 'x' }));
+    expect(markedNames(now)).toEqual(['Big Two', 'Family Feast', 'Perfect Pair']);
+  });
+
+  it('a delivery charge never carries it — in a category the owner made never discounted, or put among the deals; the owner’s mark on any other category does', async () => {
+    const dealsId = await addValueDeals();
+    const { createMenuItem } = await import('../../db/repositories/menu-item-repo.js');
+    createMenuItem(
+      db as never,
+      { categoryId: dealsId, name: 'Delivery Charge (Rs 300)', basePriceCents: 30_000, taxCategoryId: menu.tax, sortOrder: 9 },
+      { userId: 'u_mgr', deviceId: DEV },
+    );
+    h.session = OWNER;
+    await data('menu:updateCategory', { id: menu.fees, noDiscount: true });
+    await data('menu:updateCategory', { id: menu.drinks, noDiscount: true });
+    const { menu: m } = await published();
+    const charges = m.categories.flatMap((c) => c.items).filter((i) => /^Delivery Charge/.test(i.name));
+    expect(charges.map((i) => [i.name, 'noDiscount' in i])).toEqual([
+      ['Delivery Charge (Rs 200)', false],
+      ['Delivery Charge (Rs 250)', false],
+      ['Delivery Charge (Rs 300)', false],
+    ]);
+    expect(markedNames(m)).toEqual(['Test Drink', 'Big Two', 'Family Feast', 'Perfect Pair']);
   });
 });
 
