@@ -1110,6 +1110,15 @@ export interface DiscountBaseRule {
    * and it stays v 1 (an older till reads the rest of it).
    */
   skipsNoDiscountLines?: true;
+  /**
+   * A Free order (v0.7.36; user 3 Oct 2026, with the owner's Edit-order
+   * update): 100% off every line, the value deals and the delivery charge
+   * included — the one exception to "value deals never get a discount",
+   * given only with a manager's PIN and a reason. Written only when true.
+   * An older till reads the rest of the rule (every line, delivery charge
+   * included) and works out exactly the same bill.
+   */
+  freeOrder?: true;
 }
 
 /**

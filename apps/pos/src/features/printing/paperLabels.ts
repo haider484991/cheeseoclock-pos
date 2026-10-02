@@ -47,6 +47,7 @@ const DOCUMENT_WORDS: Record<PrintedDocument, string> = {
   refund: 'REFUND',
   kitchen: 'KITCHEN TICKET',
   kitchen_cancel: 'KITCHEN CANCELLED',
+  kitchen_change: 'KITCHEN CHANGE',
 };
 
 const REASON_WORDS: Record<string, string> = {
@@ -79,7 +80,7 @@ export function paperTime(iso: string, sameDayAs?: string): string {
 /** What the paper said at the top: "Original", "DUPLICATE Reprint #1", "RE-SENT"… */
 function markWords(line: OrderPaperLine): string {
   if (line.label === 'May have printed') return 'May have printed (the printer failed mid-way)';
-  const kitchen = line.document === 'kitchen' || line.document === 'kitchen_cancel';
+  const kitchen = line.document === 'kitchen' || line.document === 'kitchen_cancel' || line.document === 'kitchen_change';
   if (!line.duplicate || kitchen) return line.label;
   return `DUPLICATE ${line.label}`;
 }

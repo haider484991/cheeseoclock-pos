@@ -192,6 +192,12 @@ export interface OrderDiscount {
    * 0.7.34, the foodpanda deal and a manager's discount on a foodpanda order.
    */
   skipsNoDiscountLines?: boolean;
+  /**
+   * A Free order (v0.7.36; pos-domain freeOrderRule): 100% off every line,
+   * the value deals and the delivery charge included, given with a manager's
+   * PIN and a reason (`reason`). Absent = any other discount.
+   */
+  freeOrder?: boolean;
 }
 
 export interface Payment {

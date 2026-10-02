@@ -56,9 +56,11 @@ export type ReceiptCopy = 'customer' | 'shop';
 /**
  * A paper the till printed for an order, as kept in the print log
  * (document_prints): the customer receipt (PAID), a bill (NOT PAID), a refund
- * slip, a cancelled-order slip, the kitchen ticket, the kitchen CANCELLED slip.
+ * slip, a cancelled-order slip, the kitchen ticket, the kitchen CANCELLED slip,
+ * and (v0.7.36) the kitchen's ADDED / REMOVED slip of an Edit order — one
+ * series per edit (doc key `kitchen_change:<n>`).
  */
-export type PrintedDocument = 'receipt' | 'bill' | 'refund' | 'void' | 'kitchen' | 'kitchen_cancel';
+export type PrintedDocument = 'receipt' | 'bill' | 'refund' | 'void' | 'kitchen' | 'kitchen_cancel' | 'kitchen_change';
 
 /**
  * What a print button did:

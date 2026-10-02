@@ -13,6 +13,7 @@ export * from './ingredient-category.js';
 export * from './stock-level.js';
 export * from './order-stock.js';
 export * from './counter-access.js';
+export * from './order-edit.js';
 export * from './choice-validation.js';
 export * from './ingredient-price.js';
 export * from './recipe-expand.js';

@@ -211,6 +211,21 @@ export function tillDiscountRule(alsoOffDeliveryCharge: boolean, skipsNoDiscount
 }
 
 /**
+ * The rule frozen on a Free order (v0.7.36): every line, the value deals and
+ * the delivery charge included, marked `freeOrder` so the screens and papers
+ * can say so. Given at 100% with a manager's PIN and a reason only. An older
+ * till reads it as "every line, delivery charge included" — the same bill.
+ */
+export function freeOrderRule(): DiscountBaseRule {
+  return { ...tillDiscountRule(true, false), freeOrder: true };
+}
+
+/** Is the rule frozen on a discount row a Free order's (freeOrderRule)? */
+export function isFreeOrderRule(ruleJson: string | null | undefined): boolean {
+  return parseDiscountBaseRule(ruleJson)?.freeOrder === true;
+}
+
+/**
  * The website's rule, frozen on a web order's discount (the pick-up %): the
  * website prices it over the lines it sent (apps/web lib/pricing
  * priceOrder), so the till takes off exactly what the customer was shown,
@@ -243,6 +258,8 @@ export function parseDiscountBaseRule(json: string | null | undefined): Discount
     from: r['from'] === 'website' ? 'website' : 'till',
     // Kept only when it is exactly true: anything else is a rule from before 0.7.34.
     ...skipsField(r['skipsNoDiscountLines'] === true),
+    // A Free order's mark (v0.7.36), kept only when exactly true; a till's own rule only.
+    ...(r['freeOrder'] === true && r['from'] !== 'website' ? { freeOrder: true as const } : {}),
   };
 }
 

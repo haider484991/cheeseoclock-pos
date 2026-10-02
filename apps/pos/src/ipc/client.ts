@@ -144,6 +144,10 @@ export const ipc = {
     /** A manager's PIN or password is needed to take the shop's foodpanda deal off. */
     clearDiscount: (orderId: string, approverPin?: string) =>
       unwrap(window.api.orders.clearDiscount(approverPin ? { orderId, approverPin } : { orderId })),
+    /** Edit order: the order the kitchen has, as these changes would leave it (nothing is written). */
+    previewEdit: (input: IpcRequest<'orders:previewEdit'>) => unwrap(window.api.orders.previewEdit(input)),
+    /** Edit order: save the changes (the kitchen gets an ADDED / REMOVED slip). */
+    saveEdit: (input: IpcRequest<'orders:saveEdit'>) => unwrap(window.api.orders.saveEdit(input)),
     setMode: (input: IpcRequest<'orders:setMode'>) => unwrap(window.api.orders.setMode(input)),
     /** The delivery area changed: the main process puts that area's delivery charge on (or swaps / takes it off). */
     setDeliveryArea: (input: IpcRequest<'orders:setDeliveryArea'>) => unwrap(window.api.orders.setDeliveryArea(input)),

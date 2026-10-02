@@ -125,7 +125,13 @@ export function reprintApproval(i: ReprintApprovalInput): ReprintApproval {
   const rules = i.rules ?? DEFAULT_REPRINT_RULES;
   if (hasCapability(i.role, REPRINT_ANY_CAPABILITY)) return FREE;
   // Nothing of cash value on it: a bill says NOT PAID, a cancelled order NOTHING TO PAY.
-  if (i.document === 'bill' || i.document === 'void' || i.document === 'kitchen' || i.document === 'kitchen_cancel') {
+  if (
+    i.document === 'bill' ||
+    i.document === 'void' ||
+    i.document === 'kitchen' ||
+    i.document === 'kitchen_cancel' ||
+    i.document === 'kitchen_change'
+  ) {
     return FREE;
   }
   const paper = i.document === 'refund' ? 'refund slip' : 'receipt';

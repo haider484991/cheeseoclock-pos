@@ -40,6 +40,7 @@ import type {
 import type { AnyTillSettingCard, OpeningFloatPrefill, SetTillSettingRequest, TillSettingKey } from './till-settings.js';
 import type { TillPowerStatus } from './till-power.js';
 import type { FoodMade, OrderStockStatus, StockSettlement } from './order-stock.js';
+import type { OrderEditOp, OrderEditPreview, OrderEditSaved, OrderEditSaveInput } from './order-edit.js';
 import type {
   DeletedTestsPage,
   DeleteTestOrderRequest,
@@ -649,8 +650,38 @@ export interface IpcContract {
       value: number;
       reason?: string | null;
       approverPin?: string;
+      /**
+       * A Free order (v0.7.36): 100% off every line, the value deals and the
+       * delivery charge included. Needs a manager's PIN (always) and a
+       * reason; `discountType`/`value` must be percent 100.
+       */
+      free?: boolean;
     };
     response: ApiResult<OrderSnapshot>;
+  };
+  /**
+   * Edit order (v0.7.36): the order the kitchen already has, as `ops` would
+   * leave it — worked out inside a transaction that is rolled back, so
+   * nothing is written, printed or synced. With no ops: the order as it is
+   * and the version an edit starts from. Refused for an order that can't be
+   * changed now (pos-domain orderEditBlock), in its words.
+   */
+  'orders:previewEdit': {
+    request: { orderId: string; ops: OrderEditOp[] };
+    response: ApiResult<OrderEditPreview>;
+  };
+  /**
+   * Save an edit (v0.7.36): the same ops for real, in one transaction, only
+   * while the order is still at `baseVersion` (else "it was changed on the
+   * other till"). A manager's PIN when something the kitchen has comes off,
+   * the discount is over the limit, or for a Free order; a reason when
+   * something comes off or for a Free order; "Was the food made?" for each
+   * line the kitchen had that goes down or comes off. The kitchen gets an
+   * ADDED / REMOVED slip after the commit.
+   */
+  'orders:saveEdit': {
+    request: OrderEditSaveInput;
+    response: ApiResult<OrderEditSaved>;
   };
   'orders:clearDiscount': {
     /**

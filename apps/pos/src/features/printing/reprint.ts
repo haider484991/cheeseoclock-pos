@@ -71,7 +71,7 @@ export function failedRetryToast(document: 'bill' | 'receipt' | 'void', requeued
  */
 export function reprintToast(r: ReprintResult): string {
   if (r.status === 'merged') return 'Already printing — no second copy was made.';
-  if (r.document === 'kitchen' || r.document === 'kitchen_cancel') {
+  if (r.document === 'kitchen' || r.document === 'kitchen_cancel' || r.document === 'kitchen_change') {
     // Say what the paper says: the kitchen is told by the cashier too.
     if (r.resent) return 'Kitchen ticket re-sent — the kitchen should check the rail before cooking';
     return r.duplicate ? 'Kitchen ticket sent — marked REPRINT' : 'Kitchen ticket sent to printer';
