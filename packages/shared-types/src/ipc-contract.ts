@@ -835,9 +835,16 @@ export interface IpcContract {
    * then keeps nothing on this order (no payout at Send out, none at
    * Delivered). The till checks it again; with no such order it refuses
    * and nothing is sent. Absent or false: the order's own charge, as before.
+   *
+   * `payRiderForTrip` (an add-on that now goes alone, OrderSnapshot.goesAlone):
+   * true pays the outside rider the area's charge for this trip from the
+   * drawer, with a manager's PIN or password (`approverPin`, as a cancel's
+   * trip payout has): one payout linked to the order and one drawer row, and
+   * the drawer opens. The till checks it again; on an order that does not go
+   * alone it refuses and nothing is sent. Absent or false: nothing is paid.
    */
   'orders:sendOut': {
-    request: { orderId: string; riderAlreadyPaid?: boolean };
+    request: { orderId: string; riderAlreadyPaid?: boolean; payRiderForTrip?: boolean; approverPin?: string };
     response: ApiResult<OrderSnapshot>;
   };
   'orders:assignRider': {

@@ -291,6 +291,23 @@ export interface OrderSnapshot {
    */
   addOnTo?: { orderId: UUID; orderNumber: OrderNumber } | null;
   /**
+   * An add-on delivery that now goes alone: the till left this order's
+   * delivery charge off because it went with the same customer's delivery
+   * `orderNumber` (its delivery_area audit row recorded charged
+   * 'add_on_off'), and that delivery is no longer here — cancelled,
+   * refunded, delivered or closed, or deleted — while this one is still in
+   * the kitchen or Ready. It makes its own trip with no delivery charge on
+   * its bill: Send out and Assign rider say so ('#0042 is no longer here:
+   * this order goes alone with no delivery charge.'), and Send out can pay
+   * the outside rider `feeCents` for the trip from the drawer (the area's
+   * charge that was left off; 0 when it was not recorded). Null when the
+   * charge is on the bill, or that delivery is still in the shop or out.
+   * Filled on a counter delivery still in the kitchen or Ready; absent on
+   * every other order. Only the till that rang it knows (the audit row never
+   * syncs).
+   */
+  goesAlone?: { orderId: UUID; orderNumber: OrderNumber; feeCents: Cents } | null;
+  /**
    * Once a day per phone (order-edit #12: cancel first, then ring again):
    * the order of this customer's phone, started today and still in the
    * kitchen, Ready or out for delivery, that holds the once-a-day offer this

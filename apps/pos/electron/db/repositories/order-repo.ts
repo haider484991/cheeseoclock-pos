@@ -1378,6 +1378,8 @@ interface RecordedDeliveryArea {
   goesWith: DeliveryGoesWith | null;
   /** 'normal' in rows before v0.7.34. */
   charged: DeliveryCharged;
+  /** The area's fee then (its after-image feeCents), when its target was a fee; null otherwise. */
+  feeCents: number | null;
 }
 
 /** The area as recorded: trimmed, inner spaces collapsed, at most 200 characters; null for none. */
@@ -1410,15 +1412,19 @@ function recordedDeliveryArea(db: AppDatabase, orderId: string): RecordedDeliver
     .get(orderId, DELIVERY_AREA_ACTION) as { after_json: string | null } | undefined;
   if (!row) return null;
   try {
-    const after = JSON.parse(row.after_json ?? 'null') as { area?: unknown; goesWith?: unknown; charged?: unknown } | null;
+    const after = JSON.parse(row.after_json ?? 'null') as
+      | { area?: unknown; goesWith?: unknown; charged?: unknown; feeCents?: unknown }
+      | null;
     const charged = after?.charged;
+    const fee = after?.feeCents;
     return {
       area: typeof after?.area === 'string' ? after.area : null,
       goesWith: readGoesWith(after?.goesWith),
       charged: charged === 'add_on_off' || charged === 'put_back' ? charged : 'normal',
+      feeCents: typeof fee === 'number' && Number.isInteger(fee) && fee > 0 ? fee : null,
     };
   } catch {
-    return { area: null, goesWith: null, charged: 'normal' };
+    return { area: null, goesWith: null, charged: 'normal', feeCents: null };
   }
 }
 
@@ -1479,6 +1485,44 @@ function addOnToOf(db: AppDatabase, orderId: string): AddOnTo | null {
   const recorded = recordedDeliveryArea(db, orderId);
   const g = recorded?.charged === 'add_on_off' ? recorded.goesWith : null;
   return g ? { orderId: g.orderId as AddOnTo['orderId'], orderNumber: g.orderNumber as AddOnTo['orderNumber'] } : null;
+}
+
+type GoesAlone = NonNullable<OrderSnapshot['goesAlone']>;
+
+/** Where the delivery an add-on goes with is still waiting to go together, or out with it (samePhoneDelivery's 'gone' line). */
+const STILL_GOES_WITH: readonly OrderStatus[] = ['sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery'];
+
+/**
+ * OrderSnapshot.goesAlone: an add-on delivery (its last DELIVERY_AREA_ACTION
+ * row recorded the charge left off for `goesWith`, charged 'add_on_off')
+ * that still has no delivery charge on its bill, while the delivery it went
+ * with is no longer here — cancelled, refunded, delivered, closed, or
+ * deleted (anything but in the kitchen, Ready or out for delivery). It makes
+ * its own trip with no charge: Send out says so and can pay the outside
+ * rider the area's fee recorded then (feeCents) for it. Null otherwise. The
+ * add-on rule settles itself while the order is a cart (addOnTo), so this
+ * is only asked of one already sent. The audit row never syncs: only the
+ * till that rang it knows.
+ */
+function goesAloneOf(
+  db: AppDatabase,
+  orderId: string,
+  items: ReadonlyArray<{ readonly menuItemName?: string | null; readonly lineTotalCents: number }>,
+): GoesAlone | null {
+  const recorded = recordedDeliveryArea(db, orderId);
+  const first = recorded?.charged === 'add_on_off' ? recorded.goesWith : null;
+  if (!first || !recorded) return null;
+  // A charge put on since (by hand): the bill pays this trip as usual.
+  if (deliveryChargeLinesCents({ items }) > 0) return null;
+  const row = db.prepare(`SELECT status, deleted_at FROM orders WHERE id = ?`).get(first.orderId) as
+    | { status: OrderStatus; deleted_at: string | null }
+    | undefined;
+  if (row && row.deleted_at === null && STILL_GOES_WITH.includes(row.status)) return null;
+  return {
+    orderId: first.orderId as GoesAlone['orderId'],
+    orderNumber: first.orderNumber as GoesAlone['orderNumber'],
+    feeCents: (recorded.feeCents ?? 0) as GoesAlone['feeCents'],
+  };
 }
 
 /** The area of the address saved on the order (delivery_address_snapshot), or null. */
@@ -3812,6 +3856,14 @@ export function getOrderSnapshot(
   // as deliveryChargeForArea last settled it (its charge left off). Every other snapshot reads as before.
   const asksAddOn = order.mode === 'delivery' && order.status === 'open' && order.source === 'pos';
 
+  // An add-on whose first delivery is no longer here (cancelled, refunded, delivered): a counter
+  // delivery the kitchen still has says it goes alone with no delivery charge. Every other snapshot
+  // reads as before.
+  const asksGoesAlone =
+    order.mode === 'delivery' &&
+    order.source === 'pos' &&
+    (order.status === 'sent_to_kitchen' || order.status === 'preparing' || order.status === 'ready');
+
   // Once a day per phone: an open counter order says which live order of the same phone holds the
   // offer it would get ('Cancel #0042 first to keep the offer'). Every other snapshot reads as before.
   const asksOfferHeld = order.status === 'open' && offerCanApplyTo(order);
@@ -3841,6 +3893,7 @@ export function getOrderSnapshot(
         : {}),
     ...(asksRiderPaidEarlier ? { riderPaidEarlier: riderPaidEarlierFor(db, orderId, typedPhone) } : {}),
     ...(asksAddOn ? { addOnTo: addOnToOf(db, orderId) } : {}),
+    ...(asksGoesAlone ? { goesAlone: goesAloneOf(db, orderId, items) } : {}),
     ...(asksOfferHeld ? { offerHeldBy: offerHeldByFor(db, order, typedPhone, discountRows.length > 0) } : {}),
     ...(refusedItem ? { refusedItem } : {}),
   };
@@ -4097,12 +4150,24 @@ export function markOrderReady(
  * and none at Delivered) and the 'send_out' audit row names that order
  * (riderAlreadyPaidOn). The bill still carries its charge: the customer got
  * the first one back with the refund.
+ *
+ * An add-on that now goes alone (OrderSnapshot.goesAlone: its charge was
+ * left off for the same customer's first delivery, which is no longer here):
+ * it goes out with no delivery charge, so he keeps 0. `payRiderForTrip`
+ * (the box's 'Pay the rider Rs 200 for this trip', ticked, with the manager
+ * who allowed it) pays him the area's fee for this trip from the drawer, as
+ * a cancel's wasted trip does: checked again here (no such add-on, or no fee
+ * recorded: NO_TRIP_TO_PAY; no shift open on this till: NO_SHIFT_FOR_TRIP;
+ * nothing written either way), then one payout linked to the order
+ * (recordDeliveryChargeToRider, why 'trip', 'went alone') and one drawer
+ * 'payout' row for it in this same transaction; the 'send_out' audit row
+ * says tripPaidCents and wentAloneFrom. Left out, nothing is paid.
  */
 export function sendOutOrder(
   db: AppDatabase,
   orderId: string,
   actor: Actor & { userId: string },
-  opts: { riderAlreadyPaid?: boolean } = {},
+  opts: { riderAlreadyPaid?: boolean; payRiderForTrip?: { approverUserId: string } } = {},
 ): OrderWithDrawer {
   let result!: OrderWithDrawer;
   const from: OrderStatus[] = ['sent_to_kitchen', 'preparing', 'ready'];
@@ -4132,6 +4197,18 @@ export function sendOutOrder(
     if (prepaid && keeps > 0 && from.includes(order.status) && getCurrentShift(db, actor.deviceId) === null) {
       throw new Error(`No shift is open on this till — open a shift to give the rider his ${formatCents(keeps)} delivery charge`);
     }
+    // An add-on going alone: his trip, when the box said to pay it. Checked
+    // only on an order Send out can take (else setOrderStatus's words).
+    const alone = snapshot.goesAlone ?? null;
+    const tripCents = opts.payRiderForTrip && alone && keeps === 0 ? (alone.feeCents as number) : 0;
+    if (opts.payRiderForTrip && from.includes(order.status)) {
+      if (tripCents <= 0) throw new Error(NO_TRIP_TO_PAY);
+      if (getCurrentShift(db, actor.deviceId) === null) throw new Error(NO_SHIFT_FOR_TRIP);
+    }
+    const extra = {
+      ...(paidEarlier ? { riderAlreadyPaidOn: paidEarlier.orderNumber } : {}),
+      ...(tripCents > 0 && alone ? { wentAloneFrom: alone.orderNumber, tripPaidCents: tripCents } : {}),
+    };
     const sent = setOrderStatus(
       db,
       orderId,
@@ -4144,10 +4221,32 @@ export function sendOutOrder(
       ],
       actor,
       'send_out',
-      paidEarlier ? { riderAlreadyPaidOn: paidEarlier.orderNumber } : undefined,
+      Object.keys(extra).length > 0 ? extra : undefined,
     );
     // settleOutsideRider reads the frozen keep from the order as it is now.
-    const drawerOpenId = prepaid ? settleOutsideRider(db, sent, null, actor) : null;
+    let drawerOpenId = prepaid ? settleOutsideRider(db, sent, null, actor) : null;
+    // His trip (he keeps 0, so the line above paid nothing): the payout and the drawer's one row for it.
+    if (tripCents > 0 && opts.payRiderForTrip) {
+      const approver = opts.payRiderForTrip.approverUserId;
+      const approvedByUserId = approver === actor.userId ? null : approver;
+      const payoutId = recordDeliveryChargeToRider(
+        db,
+        { orderId: sent.id, orderNumber: sent.orderNumber, amountCents: tripCents, why: 'trip', tripWhy: 'went_alone', approvedByUserId },
+        actor,
+      );
+      drawerOpenId = recordDrawerOpen(
+        db,
+        {
+          kind: 'payout',
+          reason: findCashMovement(db, payoutId)?.reason ?? null,
+          orderId: sent.id,
+          cashMovementId: payoutId,
+          amountCents: -tripCents,
+          approvedByUserId,
+        },
+        actor,
+      ).id;
+    }
     result = { ...sent, drawerOpenId };
   });
   tx();

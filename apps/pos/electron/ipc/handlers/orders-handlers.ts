@@ -702,18 +702,39 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   // A prepaid order (owner Q2): the repository paid his delivery charge from
   // the drawer in the same transaction, and the drawer opens for that row
   // after the commit (no row, no pulse).
-  defineHandler('orders:sendOut', ctx, (_ctx, payload) => {
+  // An add-on that now goes alone: 'Pay the rider Rs 200 for this trip'
+  // ticked pays his trip from the drawer, with a manager's PIN or password as
+  // a cancel's trip payout has (the repository checks there is a trip to pay).
+  defineHandler('orders:sendOut', ctx, async (_ctx, payload) => {
     const s = requireOrderCreate();
     let drawerOpenId: string | null;
     // One trip, one fee: only a true says the rider was already paid on another
     // order of this customer (the repository checks it again).
     const riderAlreadyPaid = payload.riderAlreadyPaid === true;
+    // Only a true asks to pay the trip; it needs the manager's approval first.
+    let payRiderForTrip: { approverUserId: string } | null = null;
+    if (payload.payRiderForTrip === true) {
+      if (typeof payload.approverPin !== 'string' || !payload.approverPin.trim()) {
+        throw new IpcGuardError({ code: 'forbidden', message: "A manager's PIN or password is needed to pay the rider for the trip" });
+      }
+      try {
+        payRiderForTrip = { approverUserId: (await verifyManagerPin(ctx.db, payload.approverPin)).approverUserId };
+      } catch (e) {
+        throw new IpcGuardError({
+          code: 'forbidden',
+          message: e instanceof Error ? e.message : 'Manager approval failed',
+        });
+      }
+    }
     try {
       drawerOpenId = sendOutOrder(
         ctx.db,
         payload.orderId,
         { userId: s.id, deviceId: ctx.deviceId },
-        riderAlreadyPaid ? { riderAlreadyPaid } : {},
+        {
+          ...(riderAlreadyPaid ? { riderAlreadyPaid } : {}),
+          ...(payRiderForTrip ? { payRiderForTrip } : {}),
+        },
       ).drawerOpenId;
     } catch (e) {
       throw new IpcGuardError({

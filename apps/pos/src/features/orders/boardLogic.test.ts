@@ -13,6 +13,7 @@ import {
   cardLineDetails,
   cardLines,
   compareOrderClock,
+  goesAloneLine,
   isOutWithOutsideRider,
   matchesBoardSearch,
   nextBoardAction,
@@ -445,6 +446,34 @@ describe('the same customer’s other delivery on Live Orders (step 18-11)', () 
     // Charged: its box opens anyway (the drawer pays the rider).
     const paidCharged = { order: { totalCents: 80_500, paidAt: '2026-10-02T14:00:00.000Z' }, items: items(true) };
     expect(sendOutAsks(paidCharged, { orderId: 'o42', orderNumber: '20261002-0042', out: true })).toBe(true);
+  });
+
+  // Review fixes C: #0042 cancelled, refunded or delivered before this add-on went out.
+  const ALONE = { orderId: 'o42', orderNumber: '20261002-0042', feeCents: 20_000 } as unknown as NonNullable<OrderSnapshot['goesAlone']>;
+
+  it('goesAloneLine: "#0042 is no longer here: this order goes alone with no delivery charge." with the fee to pay him', () => {
+    expect(goesAloneLine({ items: items(false), goesAlone: ALONE })).toEqual({
+      text: '#0042 is no longer here: this order goes alone with no delivery charge.',
+      tripCents: 20_000,
+    });
+    // Another delivery of the same customer already out: it still goes alone.
+    expect(goesAloneLine({ items: items(false), goesAlone: ALONE }, { orderId: 'o44', orderNumber: '20261002-0044', out: true })).not.toBeNull();
+    // No fee recorded: the words, nothing to pay.
+    expect(goesAloneLine({ items: items(false), goesAlone: { ...ALONE, feeCents: 0 as never } })?.tripCents).toBe(0);
+  });
+
+  it('goesAloneLine: nothing while another delivery of the customer is still here (they go together), with a charge on the bill, or with none going alone', () => {
+    expect(goesAloneLine({ items: items(false), goesAlone: ALONE }, { orderId: 'o44', orderNumber: '20261002-0044', out: false })).toBeNull();
+    expect(goesAloneLine({ items: items(true), goesAlone: ALONE })).toBeNull();
+    expect(goesAloneLine({ items: items(false), goesAlone: null })).toBeNull();
+    expect(goesAloneLine({ items: items(false) })).toBeNull();
+  });
+
+  it('sendOutAsks: a paid add-on going alone opens the box (its line and the trip tick), never one tap', () => {
+    const paidNoCharge = { order: { totalCents: 57_500, paidAt: '2026-10-02T14:00:00.000Z' }, items: items(false) };
+    expect(sendOutAsks(paidNoCharge)).toBe(false);
+    expect(sendOutAsks({ ...paidNoCharge, goesAlone: ALONE })).toBe(true);
+    expect(sendOutAsks({ ...paidNoCharge, goesAlone: null })).toBe(false);
   });
 });
 

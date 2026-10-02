@@ -2,17 +2,23 @@ import { useMemo, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
-import { Bike, Phone, Plus, Undo2, X } from 'lucide-react';
+import { Bike, Phone, Plus, Undo2, Users, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
-import { isOutWithOutsideRider } from './boardLogic';
+import { goesAloneLine, isOutWithOutsideRider, type SamePhoneDelivery } from './boardLogic';
 
 interface Props {
   snap: OrderSnapshot;
   onClose: () => void;
   onAssigned: () => void;
+  /**
+   * The same customer's other delivery on Live Orders (samePhoneDelivery),
+   * read by the board as it is now; null or left out for none. Only for the
+   * add-on line (goesAloneLine).
+   */
+  sameCustomer?: SamePhoneDelivery | null;
 }
 
 /** "Back to Ready" on an order sent out with no rider named: its hover words. */
@@ -37,8 +43,14 @@ export function backToReadyNote(keepCents: number): string {
  * back off them, and one sent out with no rider named can go Back to Ready —
  * only while the rider has not left: Back to Ready forgets what an outside
  * rider keeps, so a cancel after it could no longer pay him for his trip.
+ *
+ * An add-on that now goes alone (goesAloneLine: the same customer's first
+ * delivery was cancelled, refunded or delivered before this one went out):
+ * the amber line "#0042 is no longer here: this order goes alone with no
+ * delivery charge." — only the words: one of the shop's own riders brings
+ * back the full bill, so nothing is paid out here.
  */
-export function AssignRiderDialog({ snap, onClose, onAssigned }: Props) {
+export function AssignRiderDialog({ snap, onClose, onAssigned, sameCustomer = null }: Props) {
   const [addingNew, setAddingNew] = useState(false);
   const [newName, setNewName] = useState('');
   const [newPhone, setNewPhone] = useState('');
@@ -50,6 +62,8 @@ export function AssignRiderDialog({ snap, onClose, onAssigned }: Props) {
   const sentOut = isOutWithOutsideRider(snap);
   // What Back to Ready would lose: the trip the cancel box can pay him (none when he keeps nothing).
   const tripKeepCents = sentOut ? (snap.order.riderKeepsCents ?? 0) : 0;
+  // An add-on whose first delivery is no longer here: it goes alone with no delivery charge.
+  const alone = goesAloneLine(snap, sameCustomer);
 
   const ridersQ = useQuery({
     queryKey: ['riders', 'active'],
@@ -149,6 +163,13 @@ export function AssignRiderDialog({ snap, onClose, onAssigned }: Props) {
               <X className="h-4 w-4" />
             </button>
           </header>
+
+          {alone && (
+            <p className="mb-3 flex items-center gap-2 rounded-xl bg-amber-100 px-4 py-3 text-sm font-semibold text-amber-900 ring-1 ring-amber-300 dark:bg-amber-950/50 dark:text-amber-100 dark:ring-amber-800">
+              <Users className="h-4 w-4 shrink-0" aria-hidden="true" />
+              {alone.text}
+            </p>
+          )}
 
           {!addingNew ? (
             <>

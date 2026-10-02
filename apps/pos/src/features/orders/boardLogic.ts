@@ -311,20 +311,57 @@ export function sameCustomerLine(
   return null;
 }
 
+/** What Send out and Assign rider say about an add-on that now goes alone (goesAloneLine). */
+export interface GoesAloneLine {
+  text: string;
+  /** What 'Pay the rider … for this trip' pays from the drawer: the area's charge left off (0: not offered). */
+  tripCents: number;
+}
+
+/**
+ * An add-on delivery that now goes alone (OrderSnapshot.goesAlone: its
+ * delivery charge was left off for the same customer's first delivery, and
+ * that one is no longer here — cancelled, refunded, delivered or closed):
+ * "#0042 is no longer here: this order goes alone with no delivery charge."
+ * Null when the bill has a delivery charge after all, or when another
+ * delivery of the same customer is still in the shop (`sameCustomer`,
+ * samePhoneDelivery, not out: they can go together, and "send them together"
+ * says so). Send out offers to pay the outside rider `tripCents` for the
+ * trip; Assign rider (one of the shop's own riders) only says it.
+ */
+export function goesAloneLine(
+  snap: {
+    readonly items: ReadonlyArray<{ readonly menuItemName?: string | null; readonly lineTotalCents: number }>;
+    goesAlone?: OrderSnapshot['goesAlone'];
+  },
+  sameCustomer: SamePhoneDelivery | null = null,
+): GoesAloneLine | null {
+  const alone = snap.goesAlone ?? null;
+  if (!alone || deliveryChargeLinesCents(snap) > 0) return null;
+  if (sameCustomer && !sameCustomer.out) return null;
+  const n = alone.orderNumber.split('-').pop() ?? alone.orderNumber;
+  return {
+    text: `#${n} is no longer here: this order goes alone with no delivery charge.`,
+    tripCents: Math.max(0, alone.feeCents as number),
+  };
+}
+
 /**
  * Whether a Ready delivery's Send out asks first (SendOutDialog: "Has the
  * rider paid the shop?", or the drawer paying a prepaid order's rider).
  * Only an order already paid whose rider keeps nothing goes in one tap:
  * nothing to ask, and no money moves — and only when the box would have no
  * line about the same customer's other delivery (`sameCustomer`,
- * samePhoneDelivery; sameCustomerLine) and none about a rider already paid
- * for this trip (riderPaidEarlierChoice: that bill has a charge, so its box
- * always opens anyway).
+ * samePhoneDelivery; sameCustomerLine), none about an add-on that now goes
+ * alone (goesAloneLine) and none about a rider already paid for this trip
+ * (riderPaidEarlierChoice: that bill has a charge, so its box always opens
+ * anyway).
  */
 export function sendOutAsks(
   snap: Parameters<typeof sendOutSplit>[0] & {
     order: Pick<Order, 'paidAt'>;
     riderPaidEarlier?: OrderSnapshot['riderPaidEarlier'];
+    goesAlone?: OrderSnapshot['goesAlone'];
   },
   sameCustomer: SamePhoneDelivery | null = null,
 ): boolean {
@@ -332,7 +369,8 @@ export function sendOutAsks(
     snap.order.paidAt === null ||
     sendOutSplit(snap).keepsCents > 0 ||
     riderPaidEarlierChoice(snap) !== null ||
-    sameCustomerLine(sameCustomer, snap) !== null
+    sameCustomerLine(sameCustomer, snap) !== null ||
+    goesAloneLine(snap, sameCustomer) !== null
   );
 }
 

@@ -125,6 +125,13 @@ interface CheckoutState {
    * (and takeaway) orders. Validates the customer/address inline, calls
    * sendToKitchen, returns the snapshot. After this the order shows on the
    * Live Orders board.
+   *
+   * Once a day per phone (order-edit #12): when the phone Send just saved
+   * shows that a live order of this customer holds today's offer, and the
+   * cart was not already saying so, nothing is sent: the cart now says
+   * 'Cancel #0042 first to keep the offer' and this rejects with
+   * OfferHeldBack. Send again goes without the offer (or with it, once #0042
+   * was cancelled or refunded).
    */
   sendToKitchen: () => Promise<OrderSnapshot>;
   /** Refetch the current order snapshot — used after side mutations like attachCustomer. */
@@ -147,6 +154,37 @@ function touch(lineId: string | null | undefined): LineTouch | null {
  */
 function heldOfferMayBeFree(snap: OrderSnapshot): boolean {
   return snap.order.status === 'open' && !!snap.offerHeldBy;
+}
+
+/**
+ * The cart said this delivery goes with the same customer's #0042, so its
+ * delivery charge was left off ('Goes with #0042: no second delivery
+ * charge'). #0042 may have gone out, or been cancelled, since: Pay and Send
+ * save the customer again even with nothing changed, and the save settles
+ * the add-on rule again (a first delivery gone out means a new trip, charged)
+ * before the order is sent or paid. Not at the payment itself.
+ */
+function addOnMayHaveGone(snap: OrderSnapshot): boolean {
+  return snap.order.status === 'open' && !!snap.addOnTo;
+}
+
+/** Pay's and Send's customer save runs again with nothing changed while the cart's words may be out of date. */
+function savesAgain(snap: OrderSnapshot): boolean {
+  return heldOfferMayBeFree(snap) || addOnMayHaveGone(snap);
+}
+
+/**
+ * Send stopped before the kitchen: the phone it just saved shows that a live
+ * order of this customer holds today's once-a-day offer, which the cart was
+ * not saying yet. The cart says it now; `held` is that order.
+ */
+export class OfferHeldBack extends Error {
+  readonly held: NonNullable<OrderSnapshot['offerHeldBy']>;
+  constructor(held: NonNullable<OrderSnapshot['offerHeldBy']>) {
+    super(`#${held.orderNumber.split('-').pop()} has this customer's offer today`);
+    this.name = 'OfferHeldBack';
+    this.held = held;
+  }
 }
 
 /** The chip an order shows: its own came-by when it is one of the counter's three. */
@@ -200,16 +238,22 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
    * Commit any inline customer fields onto the order before it is handed off.
    * Runs inside a queued job: nothing it calls may itself wait on `run`.
    * `again`: save it even when nothing changed since the last save, so the
-   * main process works the owner's offer out again (each save does).
+   * main process works the owner's offer and the add-on rule out again (each
+   * save does). Resolves with the order as the till answered the save, or
+   * null when nothing was saved (or the save failed).
    */
-  async function commitCustomer(orderId: string, purpose: string, opts: { again?: boolean } = {}): Promise<void> {
+  async function commitCustomer(
+    orderId: string,
+    purpose: string,
+    opts: { again?: boolean } = {},
+  ): Promise<OrderSnapshot | null> {
     // Lazy-imported to avoid a circular dep with the checkout feature.
     const { commitCustomerToOrder, formAfterCommit } = await import('../features/checkout/CustomerInlinePanel');
     const { getCustomerFormSnapshot, setCustomerForm } = await import('../features/checkout/useCustomerForm');
     const form = getCustomerFormSnapshot();
     const mode = get().mode;
     const sig = JSON.stringify({ orderId, mode, form });
-    if (sig === committed && !opts.again) return;
+    if (sig === committed && !opts.again) return null;
     try {
       const saved = await commitCustomerToOrder(orderId, mode, form);
       // The form now points at the customer and address it saved, so a later
@@ -223,9 +267,11 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
       } else {
         committed = sig;
       }
+      return saved?.snapshot ?? null;
     } catch (e) {
       // Don't block the sale on customer-write failure — surface via log.
       console.warn(`Customer commit failed (proceeding with ${purpose}):`, e);
+      return null;
     }
   }
 
@@ -454,7 +500,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         if (!snap || snap.order.status !== 'open') return snap;
         // The saved address brings its area's delivery charge with it (the main process, in the
         // same transaction): Pay shows the final bill.
-        await commitCustomer(snap.order.id, 'pay', { again: heldOfferMayBeFree(snap) });
+        await commitCustomer(snap.order.id, 'pay', { again: savesAgain(snap) });
         const next = await ipc.orders.get(snap.order.id);
         if (next) set({ snapshot: next });
         return next ?? snap;
@@ -480,7 +526,16 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
       return run(async () => {
         const snap = get().snapshot;
         if (!snap) throw new Error('No open order to send');
-        await commitCustomer(snap.order.id, 'send to kitchen', { again: heldOfferMayBeFree(snap) });
+        const saved = await commitCustomer(snap.order.id, 'send to kitchen', { again: savesAgain(snap) });
+        // The phone just saved shows a live order of this customer holding today's offer, and the
+        // cart was not saying so (it only knew the phone saved before): stop here, so the cart says
+        // 'Cancel #0042 first to keep the offer' before the order is locked at full price. Send
+        // again goes without it; the cart already saying it (the same order) goes too.
+        const held = saved && saved.order.id === snap.order.id && saved.order.status === 'open' ? (saved.offerHeldBy ?? null) : null;
+        if (held && held.orderId !== snap.offerHeldBy?.orderId) {
+          if (get().snapshot?.order.id === saved?.order.id) set({ snapshot: saved });
+          throw new OfferHeldBack(held);
+        }
         const next = await ipc.orders.sendToKitchen(snap.order.id);
         set({ snapshot: next });
         return next;

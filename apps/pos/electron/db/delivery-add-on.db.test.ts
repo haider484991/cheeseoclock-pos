@@ -30,6 +30,22 @@
  *   - 'orders:setDeliveryArea' carries the panel's phone (trimmed, at most
  *     30 characters); 'customers:attachToOrder' answers with addOnTo;
  *   - the add-on sent out freezes rider_keeps_cents 0 while #A keeps Rs 200.
+ * An add-on that now goes alone (review fixes C, 2 Oct 2026): #A cancelled,
+ * refunded, or delivered (by one of the shop's own riders, or paid to an
+ * outside rider) after the add-on #B was sent, before #B's Send out:
+ *   - #B's snapshot says goesAlone #A with the area's Rs 200 (null while #A
+ *     is in the shop or out, once the charge is put back, or for a charge
+ *     put on by hand; absent on carts and on orders already out);
+ *   - Send out with nothing ticked writes no payout and no drawer row (he
+ *     keeps 0, as before);
+ *   - 'Pay the rider Rs 200 for this trip': one payout linked to #B ('Trip
+ *     paid to the outside rider — Order #0002 went alone', audited why
+ *     'trip', tripWhy 'went_alone'), one drawer 'payout' row for −Rs 200 with
+ *     the manager who allowed it, the 'send_out' audit says so; the shift
+ *     expects Rs 200 less, and a close counting that is not short;
+ *   - refused (nothing written, #B still Ready) when #B does not go alone or
+ *     no shift is open; on the IPC it needs a manager's PIN or password, and
+ *     the drawer opens once for that row.
  *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for
  * Electron); skipped where it is missing. Only `defineHandler` (captured),
@@ -47,6 +63,10 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (ctx: unknown, payload: unknown) => Promise<unknown>>(),
   session: null as AuthenticatedUser | null,
+  /** Manager PINs the stand-in accepts, and whose they are (none unless a test adds one). */
+  managerPins: new Map<string, string>(),
+  /** The drawer pulses the handlers asked for (kickDrawerSoon's drawer row ids). */
+  kicks: [] as string[],
 }));
 
 vi.mock('electron-log/main', () => ({
@@ -87,12 +107,25 @@ vi.mock('../ipc/registry.js', () => {
 // Who is signed in: auth-service's job, stood in for here.
 vi.mock('../services/auth-service.js', () => ({
   getCurrentSession: () => h.session,
-  verifyManagerPin: async () => {
+  verifyManagerPin: async (_db: unknown, pin: string) => {
+    const approverUserId = h.managerPins.get(pin);
+    if (approverUserId) return { approverUserId, approverName: 'Test Manager' };
     throw new Error("That is not a manager's PIN or password");
   },
 }));
+// No printer here: the drawer pulses are only noted, the papers ignored.
 vi.mock('../services/print-spooler.js', () => ({
-  printSpooler: new Proxy({}, { get: () => () => undefined }),
+  printSpooler: new Proxy(
+    {},
+    {
+      get:
+        (_t, method) =>
+        (...args: unknown[]) => {
+          if (method === 'kickDrawerSoon') h.kicks.push(String(args[0]));
+          return undefined;
+        },
+    },
+  ),
   drawerFailureText: () => '',
 }));
 vi.mock('../services/fbr-worker.js', () => ({
@@ -122,6 +155,7 @@ const PK = {
   '19:30': '2026-10-02T14:30:00.000Z',
   '19:40': '2026-10-02T14:40:00.000Z',
   '19:50': '2026-10-02T14:50:00.000Z',
+  '19:55': '2026-10-02T14:55:00.000Z',
 } as const;
 type Clock = keyof typeof PK;
 const at = (t: Clock) => vi.setSystemTime(new Date(PK[t]));
@@ -1270,5 +1304,317 @@ live("'orders:setDeliveryArea' carries the panel's phone; 'customers:attachToOrd
     expect(s.addOnTo).toEqual(goesWith(a));
     expect(s.items.map((i) => i.menuItemName)).toEqual(['Test Pizza']);
     expect(s.order.totalCents).toBe(FOOD_ONLY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// An add-on that now goes alone (review fixes C): #A no longer here at #B's Send out.
+// ---------------------------------------------------------------------------
+
+const shifts = () => import('./repositories/shift-repo.js');
+
+/** How #A leaves after the add-on #B was sent (at 19:50). */
+type Gone = 'cancelled' | 'refunded' | 'delivered' | 'delivered_paid';
+
+/**
+ * #A (where it starts: Ready, or paid in the kitchen to be refunded), then
+ * the add-on #B for the same phone: its charge left off for #A, the
+ * customer saved (Send's save), sent to the kitchen and Ready.
+ */
+async function addOnSent(shop: Shop, gone: Gone) {
+  const r = await repo();
+  const a = await first(shop, gone === 'refunded' ? 'paid_in_kitchen' : 'ready');
+  const b = await addOn(shop, '03001234567');
+  await saveCustomer(shop, b, '03001234567', AREA);
+  r.sendOrderToKitchen(shop.db, b, CASHIER);
+  r.markOrderReady(shop.db, b, CASHIER);
+  expect(charges(shop.db, b)).toEqual([]);
+  expect(lastAreaAudit(shop.db, b)?.after).toMatchObject({ goesWith: goesWith(a), charged: 'add_on_off', feeCents: 20_000 });
+  return { a, b };
+}
+
+/** #A leaves the shop's hands at 19:50, the way `gone` says. */
+async function goAway(shop: Shop, a: { id: string }, gone: Gone) {
+  const r = await repo();
+  at('19:50');
+  if (gone === 'cancelled') {
+    r.voidOrder(
+      shop.db,
+      { orderId: a.id, reason: 'Customer changed order', approverUserId: MANAGER.userId, foodMade: 'not_made' },
+      MANAGER,
+    );
+  } else if (gone === 'refunded') {
+    r.refundOrder(
+      shop.db,
+      { orderId: a.id, reason: 'Customer changed order', approverUserId: MANAGER.userId, foodMade: 'not_made' },
+      MANAGER,
+    );
+  } else if (gone === 'delivered') {
+    // One of the shop's own riders took it, and someone tapped Delivered.
+    r.assignRiderToOrder(shop.db, a.id, shop.rider, CASHIER);
+    r.markOrderDelivered(shop.db, { orderId: a.id }, CASHIER);
+  } else {
+    // An outside rider took it alone, and brought the money back: delivered and paid.
+    r.sendOutOrder(shop.db, a.id, CASHIER);
+    const total = r.findOrder(shop.db, a.id)!.totalCents as number;
+    r.markOrderDelivered(
+      shop.db,
+      { orderId: a.id, payment: { method: 'cash', amountCents: total }, riderKeepsCents: 20_000 },
+      CASHIER,
+    );
+  }
+  const status = { cancelled: 'void', refunded: 'refunded', delivered: 'delivered', delivered_paid: 'paid' }[gone];
+  expect(r.findOrder(shop.db, a.id)?.status).toBe(status);
+}
+
+/** Everything a Send out could have written for #B: its payouts, its drawer rows, all sync and audit rows. */
+const moneyLedger = (db: AppDatabase, orderId: string) => ({
+  payouts: count(db, `cash_movements WHERE order_id = '${orderId}'`),
+  drawer: count(db, `drawer_opens WHERE order_id = '${orderId}'`),
+  sync: count(db, 'sync_queue'),
+  audit: count(db, 'audit_log'),
+});
+
+const sendOutAfter = (db: AppDatabase, orderId: string) =>
+  JSON.parse(
+    String(
+      (
+        db
+          .prepare(`SELECT after_json FROM audit_log WHERE entity_type = 'orders' AND entity_id = ? AND action = 'send_out' ORDER BY rowid DESC LIMIT 1`)
+          .get(orderId) as Row
+      )['after_json'],
+    ),
+  ) as Row;
+
+const WENT_ALONE: Gone[] = ['cancelled', 'refunded', 'delivered', 'delivered_paid'];
+
+live('an add-on that now goes alone: #A no longer here at Send out (review fixes C)', () => {
+  for (const gone of WENT_ALONE) {
+    it(`#A ${gone.replace('_', ' and ')} after #B was sent: #B's snapshot says it goes alone (Rs 200); Send out with nothing ticked pays nothing`, async () => {
+      const shop = await till();
+      const r = await repo();
+      const { a, b } = await addOnSent(shop, gone);
+      // Still with #A in the shop: nothing to say yet.
+      expect(r.getOrderSnapshot(shop.db, b)).toHaveProperty('goesAlone', null);
+
+      await goAway(shop, a, gone);
+      expect(r.getOrderSnapshot(shop.db, b)?.goesAlone).toEqual({ orderId: a.id, orderNumber: a.orderNumber, feeCents: 20_000 });
+
+      // Not ticked: sent out as before — he keeps 0, no payout, no drawer row, no trip in the audit.
+      const before = moneyLedger(shop.db, b);
+      at('19:55');
+      const sent = r.sendOutOrder(shop.db, b, CASHIER);
+      expect(sent.drawerOpenId).toBeNull();
+      expect(keeps(shop.db, b)).toBe(0);
+      const after = moneyLedger(shop.db, b);
+      expect({ payouts: after.payouts, drawer: after.drawer }).toEqual({ payouts: before.payouts, drawer: before.drawer });
+      expect(after.payouts).toBe(0);
+      expect(sendOutAfter(shop.db, b)).not.toHaveProperty('tripPaidCents');
+      expect(sendOutAfter(shop.db, b)).not.toHaveProperty('wentAloneFrom');
+      // Out now: the snapshot no longer asks.
+      expect(r.getOrderSnapshot(shop.db, b)).not.toHaveProperty('goesAlone');
+    });
+  }
+
+  for (const gone of ['cancelled', 'delivered'] as const) {
+    it(`#A ${gone}: 'Pay the rider Rs 200 for this trip' pays him from the drawer — one payout linked to #B, one drawer row, the manager named; the shift expects Rs 200 less and closes even`, async () => {
+      const shop = await till();
+      const r = await repo();
+      const { getCurrentShift, getShiftSummary, closeShift } = await shifts();
+      const { a, b } = await addOnSent(shop, gone);
+      await goAway(shop, a, gone);
+      const shiftId = getCurrentShift(shop.db, TILL_A)!.id;
+      const expectedBefore = getShiftSummary(shop.db, shiftId).expectedCashCents;
+      const before = moneyLedger(shop.db, b);
+
+      at('19:55');
+      const sent = r.sendOutOrder(shop.db, b, CASHIER, { payRiderForTrip: { approverUserId: MANAGER.userId } });
+
+      expect(r.findOrder(shop.db, b)).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: 0, paidAt: null });
+      const short = `#${String(r.findOrder(shop.db, b)!.orderNumber).split('-').pop()}`;
+      const reason = `Trip paid to the outside rider — Order ${short} went alone`;
+      const payouts = shop.db
+        .prepare(`SELECT id, type, amount_cents, reason, order_id, approved_by_user_id FROM cash_movements WHERE order_id = ?`)
+        .all(b) as Row[];
+      expect(payouts).toEqual([
+        { id: expect.any(String), type: 'payout', amount_cents: 20_000, reason, order_id: b, approved_by_user_id: MANAGER.userId },
+      ]);
+      expect(sent.drawerOpenId).toEqual(expect.any(String));
+      expect(
+        shop.db.prepare(`SELECT kind, reason, order_id, cash_movement_id, amount_cents, user_id, approved_by_user_id FROM drawer_opens WHERE id = ?`).get(sent.drawerOpenId),
+      ).toEqual({
+        kind: 'payout',
+        reason,
+        order_id: b,
+        cash_movement_id: payouts[0]!['id'],
+        amount_cents: -20_000,
+        user_id: CASHIER.userId,
+        approved_by_user_id: MANAGER.userId,
+      });
+      // Exactly one payout and one drawer row, each synced and audited with the order's send out.
+      const after = moneyLedger(shop.db, b);
+      expect({ payouts: after.payouts - before.payouts, drawer: after.drawer - before.drawer }).toEqual({ payouts: 1, drawer: 1 });
+      const written = writtenAfter(shop.db, before.sync, before.audit);
+      expect(written.audit.map((x) => `${String(x.entityType)}:${String(x.action)}`)).toEqual([
+        'orders:send_out',
+        'cash_movements:delivery_charge_to_rider',
+        'drawer_opens:drawer_payout',
+      ]);
+      expect(written.sync.map((x) => `${String(x.entityType)}:${String(x.op)}`)).toEqual(
+        expect.arrayContaining(['orders:upsert', 'cash_movements:upsert', 'drawer_opens:upsert']),
+      );
+      const payoutAudit = JSON.parse(
+        String(
+          (shop.db.prepare(`SELECT after_json FROM audit_log WHERE action = 'delivery_charge_to_rider' AND entity_id = ?`).get(payouts[0]!['id']) as Row)[
+            'after_json'
+          ],
+        ),
+      ) as Row;
+      expect(payoutAudit).toMatchObject({ why: 'trip', tripWhy: 'went_alone', amountCents: 20_000, orderId: b });
+      expect(sendOutAfter(shop.db, b)).toMatchObject({ wentAloneFrom: a.orderNumber, tripPaidCents: 20_000, riderKeepsCents: 0 });
+      expect(r.getOrderSnapshot(shop.db, b)!.deliveryChargeToRider).toEqual({ amountCents: 20_000, at: PK['19:55'], why: 'trip' });
+
+      // The drawer: Rs 200 less than before, and a close counting exactly that is not short.
+      const s = getShiftSummary(shop.db, shiftId);
+      expect(s.expectedCashCents).toBe(expectedBefore - 20_000);
+      expect(s).toMatchObject({ riderChargesCents: 20_000, riderChargeCount: 1 });
+      // The rider brings back the food money later (Delivered + Pay, cash): no second payout for him.
+      const total = r.findOrder(shop.db, b)!.totalCents as number;
+      r.markOrderDelivered(shop.db, { orderId: b, payment: { method: 'cash', amountCents: total }, riderKeepsCents: 0 }, CASHIER);
+      expect(count(shop.db, `cash_movements WHERE order_id = '${b}'`)).toBe(1);
+      const end = getShiftSummary(shop.db, shiftId).expectedCashCents;
+      expect(end).toBe(expectedBefore - 20_000 + total);
+      expect(closeShift(shop.db, { shiftId, countedCashCents: end, carryOverReason: 'Test: delivered, money with the rider' }, MANAGER)).toMatchObject({ varianceCents: 0 });
+    });
+  }
+
+  it('a manager sending it out himself: the payout and the drawer row carry no approver', async () => {
+    const shop = await till();
+    const r = await repo();
+    const { a, b } = await addOnSent(shop, 'cancelled');
+    await goAway(shop, a, 'cancelled');
+    at('19:55');
+    r.sendOutOrder(shop.db, b, MANAGER, { payRiderForTrip: { approverUserId: MANAGER.userId } });
+    expect(shop.db.prepare(`SELECT approved_by_user_id AS a FROM cash_movements WHERE order_id = ?`).all(b)).toEqual([{ a: null }]);
+    expect(shop.db.prepare(`SELECT approved_by_user_id AS a FROM drawer_opens WHERE order_id = ?`).all(b)).toEqual([{ a: null }]);
+  });
+
+  it('refused, with nothing written and #B still Ready: #A still in the shop, #A out (the same trip), the charge put back, or no shift open', async () => {
+    const r = await repo();
+    const NO_TRIP = 'Nothing to pay the rider for on this order';
+    const NO_SHIFT = 'No shift is open on this till — open a shift to pay the rider for the trip';
+    const pay = { payRiderForTrip: { approverUserId: MANAGER.userId } };
+
+    // #A still Ready: they go together.
+    {
+      const shop = await till();
+      const { b } = await addOnSent(shop, 'delivered');
+      expect(r.getOrderSnapshot(shop.db, b)?.goesAlone).toBeNull();
+      const before = moneyLedger(shop.db, b);
+      expect(() => r.sendOutOrder(shop.db, b, CASHIER, pay)).toThrow(NO_TRIP);
+      expect(moneyLedger(shop.db, b)).toEqual(before);
+      expect(r.findOrder(shop.db, b)?.status).toBe('ready');
+    }
+    // #A out for delivery: Send out's own 'has already gone out' line; nothing paid here.
+    {
+      const shop = await till();
+      const { a, b } = await addOnSent(shop, 'delivered');
+      r.sendOutOrder(shop.db, a.id, CASHIER);
+      expect(r.getOrderSnapshot(shop.db, b)?.goesAlone).toBeNull();
+      const before = moneyLedger(shop.db, b);
+      expect(() => r.sendOutOrder(shop.db, b, CASHIER, pay)).toThrow(NO_TRIP);
+      expect(moneyLedger(shop.db, b)).toEqual(before);
+    }
+    // The charge put back before it was sent: its bill pays the trip.
+    {
+      const shop = await till();
+      const a = await first(shop, 'ready');
+      const b = await addOn(shop, '03001234567');
+      r.syncOrderDeliveryCharge(shop.db, b, AREA, CASHIER, { putBack: true, phone: '03001234567' });
+      await saveCustomer(shop, b, '03001234567', AREA);
+      r.sendOrderToKitchen(shop.db, b, CASHIER);
+      expect(charges(shop.db, b)).toEqual(CHARGE_200);
+      await goAway(shop, a, 'delivered');
+      expect(r.getOrderSnapshot(shop.db, b)?.goesAlone).toBeNull();
+      const before = moneyLedger(shop.db, b);
+      expect(() => r.sendOutOrder(shop.db, b, CASHIER, pay)).toThrow(NO_TRIP);
+      expect(moneyLedger(shop.db, b)).toEqual(before);
+    }
+    // No shift open on this till.
+    {
+      const shop = await till();
+      const { closeShift, getCurrentShift } = await shifts();
+      const { a, b } = await addOnSent(shop, 'cancelled');
+      await goAway(shop, a, 'cancelled');
+      const shift = getCurrentShift(shop.db, TILL_A)!;
+      closeShift(shop.db, { shiftId: shift.id, countedCashCents: 0, carryOverReason: 'Test: still in the kitchen' }, MANAGER);
+      const before = moneyLedger(shop.db, b);
+      expect(() => r.sendOutOrder(shop.db, b, CASHIER, pay)).toThrow(NO_SHIFT);
+      expect(moneyLedger(shop.db, b)).toEqual(before);
+      expect(r.findOrder(shop.db, b)?.status).toBe('ready');
+      // Not ticked, it still goes out (no money moves).
+      expect(r.sendOutOrder(shop.db, b, CASHIER).drawerOpenId).toBeNull();
+    }
+  });
+
+  it('no goesAlone on a cart, on #A itself, or on a website order', async () => {
+    const shop = await till();
+    const r = await repo();
+    const { a, b } = await addOnSent(shop, 'cancelled');
+    await goAway(shop, a, 'cancelled');
+    expect(r.getOrderSnapshot(shop.db, a.id)).not.toHaveProperty('goesAlone');
+    const cartId = await addOn(shop, '03001234567');
+    expect(r.getOrderSnapshot(shop.db, cartId)).not.toHaveProperty('goesAlone');
+    at('19:40');
+    const web = r.createOrder(shop.db, { mode: 'delivery', source: 'web' }, CASHIER);
+    r.addOrderItem(shop.db, { orderId: web.id, menuItemId: shop.pizza, quantity: 1, modifierIds: [] }, CASHIER);
+    r.sendOrderToKitchen(shop.db, web.id, CASHIER);
+    expect(r.getOrderSnapshot(shop.db, web.id)).not.toHaveProperty('goesAlone');
+    expect(r.getOrderSnapshot(shop.db, b)?.goesAlone).toEqual({ orderId: a.id, orderNumber: a.orderNumber, feeCents: 20_000 });
+  });
+
+  it("on the IPC: ticked needs a manager's PIN or password (refused without, or with a wrong one, nothing written); with it, the drawer opens once for that row", async () => {
+    const shop = await till();
+    const { a, b } = await addOnSent(shop, 'cancelled');
+    await goAway(shop, a, 'cancelled');
+    const call = await tillIpc(shop);
+    h.managerPins.clear();
+    h.managerPins.set('2468', MANAGER.userId);
+    h.kicks.length = 0;
+    at('19:55');
+    const before = moneyLedger(shop.db, b);
+    expect(await call('orders:sendOut', { orderId: b, payRiderForTrip: true })).toEqual({
+      ok: false,
+      code: 'forbidden',
+      message: "A manager's PIN or password is needed to pay the rider for the trip",
+    });
+    expect(await call('orders:sendOut', { orderId: b, payRiderForTrip: true, approverPin: '1111' })).toEqual({
+      ok: false,
+      code: 'forbidden',
+      message: "That is not a manager's PIN or password",
+    });
+    expect(moneyLedger(shop.db, b)).toEqual(before);
+    expect(h.kicks).toEqual([]);
+
+    const res = await call('orders:sendOut', { orderId: b, payRiderForTrip: true, approverPin: '2468' });
+    expect(res).toMatchObject({ ok: true, data: { order: { status: 'out_for_delivery', riderKeepsCents: 0 }, deliveryChargeToRider: { amountCents: 20_000, why: 'trip' } } });
+    const drawerId = (shop.db.prepare(`SELECT id FROM drawer_opens WHERE order_id = ?`).get(b) as Row)['id'];
+    expect(h.kicks).toEqual([drawerId]);
+    expect(shop.db.prepare(`SELECT approved_by_user_id AS a FROM cash_movements WHERE order_id = ?`).all(b)).toEqual([{ a: MANAGER.userId }]);
+    h.managerPins.clear();
+  });
+
+  it('on the IPC: not ticked (or anything but true) sends it out with no payout and no drawer pulse', async () => {
+    const shop = await till();
+    const { a, b } = await addOnSent(shop, 'delivered');
+    await goAway(shop, a, 'delivered');
+    const call = await tillIpc(shop);
+    h.kicks.length = 0;
+    at('19:55');
+    const res = await call('orders:sendOut', { orderId: b, payRiderForTrip: 'yes', approverPin: '2468' });
+    expect(res).toMatchObject({ ok: true, data: { order: { status: 'out_for_delivery', riderKeepsCents: 0 } } });
+    expect(count(shop.db, `cash_movements WHERE order_id = '${b}'`)).toBe(0);
+    expect(count(shop.db, `drawer_opens WHERE order_id = '${b}'`)).toBe(0);
+    expect(h.kicks).toEqual([]);
   });
 });

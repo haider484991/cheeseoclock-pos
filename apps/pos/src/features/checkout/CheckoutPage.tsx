@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../../ipc/client';
-import { useCheckoutStore } from '../../stores/checkoutStore';
+import { OfferHeldBack, useCheckoutStore } from '../../stores/checkoutStore';
 import { CategoryRail } from './CategoryRail';
 import { ItemGrid } from './ItemGrid';
 import { PizzaSizeDialog } from './PizzaSizeDialog';
@@ -9,7 +9,7 @@ import { menuChoices, type MenuChoice } from './pizzaChoices';
 import { opensChoicesOnAdd } from './choiceFlow';
 import { searchMenu } from './menuSearch';
 import { isTypingField, ownsEnter } from './keys';
-import { CartPane } from './CartPane';
+import { CartPane, offerHeldBackToast } from './CartPane';
 import { OrderDetails } from './OrderDetails';
 import { ModifierModal } from './ModifierModal';
 import { TenderDialog } from './TenderDialog';
@@ -132,6 +132,11 @@ export function CheckoutPage() {
       });
       reset();
     } catch (e) {
+      if (e instanceof OfferHeldBack) {
+        // Nothing was sent: the cart now says which order holds the customer's offer today.
+        toast({ ...offerHeldBackToast(e.held), variant: 'warning' });
+        return;
+      }
       toast({
         title: 'Could not send',
         description: e instanceof Error ? e.message : 'Unknown error',

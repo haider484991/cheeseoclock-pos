@@ -47,6 +47,18 @@
  * this time" (Rider keeps Rs 0, he gives the shop the whole bill), with
  * "Charge again" back to the order's own figures; Send out's request says
  * riderAlreadyPaid accordingly (every request is now { orderId, ... }).
+ *
+ * Review fixes C (2 Oct 2026):
+ *  - The owing outside Out card: "Rider paid" on its own full-width row
+ *    above [Delivered + Pay] [Print] [Cancel] (beside them it pushed Print
+ *    and Cancel off the card at 1011 × 663: a 217 px row in 172 px, measured
+ *    in Edge with the till's own CSS); "Outside rider" is never cut short.
+ *  - An add-on that now goes alone (#0042 cancelled, refunded or delivered
+ *    before it went out): the Send out box says "#0042 is no longer here:
+ *    this order goes alone with no delivery charge." and offers "Pay the
+ *    rider Rs 200 for this trip", not ticked; ticked, a manager's PIN or
+ *    password, and the request pays the trip. Assign rider says only the
+ *    words. The PIN box is a stand-in here (no state of its own).
  */
 import { createHash } from 'node:crypto';
 import type { ReactNode } from 'react';
@@ -179,6 +191,28 @@ vi.mock('./AssignRiderDialog', async (importOriginal) => {
     },
   };
 });
+
+// The PIN box and its hint line: stand-ins with no state of their own, so Live Orders keeps the
+// same number of useState calls on every render while the Send out box asks for a PIN.
+vi.mock('../../components/secret/SecretInput', async () => {
+  const React = await import('react');
+  return {
+    SecretInput: ({
+      value,
+      onChange,
+      keyboard: _keyboard,
+      wrapperClassName: _wrapper,
+      ...rest
+    }: { value: string; onChange: (next: string) => void; keyboard?: string; wrapperClassName?: string } & Record<string, unknown>) =>
+      React.createElement('input', {
+        ...rest,
+        type: 'password',
+        value,
+        onChange: (e: { target: { value: string } }) => onChange(e.target.value),
+      }),
+  };
+});
+vi.mock('../../components/secret/SecretHint', () => ({ SecretHint: () => null }));
 
 vi.mock('../../components/toast/ToastProvider', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../components/toast/ToastProvider')>();
@@ -563,6 +597,20 @@ describe('an Out card sent out with an outside rider', () => {
     expect(c).not.toContain('03000000001');
     // The next step is still the rider coming back: Delivered + Pay (unpaid).
     expect(buttonsWith(c, 'Delivered + Pay')).toHaveLength(1);
+  });
+
+  it('"Outside rider" is never cut short on a narrow card: one wrapping row, the words in one piece with the truck, the link last on the right', () => {
+    const c = card(sentOut(47, 20_000));
+    // The label: the truck and both words in one span that does not break or cut (it read "Outside …" at 1011 × 663).
+    const label = /<span class="([^"]*)"><svg[^>]*lucide-truck[^>]*>.*?<\/svg>Outside rider<\/span>/.exec(c);
+    expect(label).not.toBeNull();
+    expect(label![1]).toContain('whitespace-nowrap');
+    expect(label![1]).not.toContain('truncate');
+    expect(c).not.toContain('truncate font-semibold">Outside');
+    // Its row wraps what does not fit to the next line, the link on the right.
+    const row = c.slice(c.lastIndexOf('<div', c.indexOf('lucide-truck')), c.indexOf('lucide-truck'));
+    expect(row).toContain('flex flex-wrap items-center');
+    expect(openingTag(buttonsWith(c, 'Assign rider')[0]!)).toContain('ml-auto');
   });
 
   it('he keeps nothing on a bill with its charge (one trip, one fee): "· already paid for this trip", as the paper says', () => {
@@ -998,20 +1046,37 @@ describe('Live Orders: Send out asks, then Rider owes / Rider paid (step 18-6)',
     expect(two.words).not.toContain('Paid already');
   });
 
-  it('an unpaid outside Out card: amber "Rider owes Rs 4,515" by the total, and "Rider paid" beside Delivered + Pay', () => {
+  it('an unpaid outside Out card: amber "Rider owes Rs 4,515" by the total; "Rider paid" on its own full-width row above Delivered + Pay, Print and Cancel', () => {
     const c = card(ownerExample(47, 'out_for_delivery', { riderKeepsCents: 20_000 as never }));
     expect(text(c)).toContain('Outside rider · out 12m · keeps Rs 200 Assign rider');
-    expect(text(c)).toContain('Rs 4,715 Rider owes Rs 4,515 2 items');
+    expect(text(c)).toContain('Rs 4,715 Rider owes Rs 4,515 2 items Rider paid Delivered + Pay');
     expect(text(c)).not.toContain('Not paid');
     expect(c).toContain('bg-amber-100');
     expect(buttonsWith(c, 'Delivered + Pay')).toHaveLength(1);
     const riderPaid = buttonsWith(c, 'Rider paid');
     expect(riderPaid).toHaveLength(1);
-    // Full height, in the chef-hat button's place: after the big button, before the printer.
-    expect(openingTag(riderPaid[0]!)).toContain('h-11');
-    const row = c.slice(c.indexOf('Delivered + Pay'));
-    expect(row.indexOf('Rider paid')).toBeGreaterThan(0);
-    expect(row.indexOf('Rider paid')).toBeLessThan(row.indexOf('Print bill or receipt'));
+    // Full height and full width, on its own row (review, 2 Oct 2026: beside Delivered + Pay the
+    // row needed 217 px of the card's 172 at 1011 × 663, and Print and Cancel went off the card).
+    const tag = openingTag(riderPaid[0]!);
+    for (const cls of ['h-11', 'w-full', 'mt-2']) expect(tag).toContain(cls);
+    expect(tag).not.toContain('shrink-0');
+    // The row under it: Delivered + Pay, Print, Cancel — and no Rider paid.
+    const ROW = '<div class="mt-1 flex items-center gap-1">';
+    expect(c.split(ROW)).toHaveLength(2);
+    const row = c.slice(c.indexOf(ROW));
+    expect(c.indexOf('Rider paid')).toBeLessThan(c.indexOf(ROW));
+    expect(row).not.toContain('Rider paid');
+    expect(row.indexOf('Delivered + Pay')).toBeGreaterThan(0);
+    expect(row.indexOf('Delivered + Pay')).toBeLessThan(row.indexOf('Print bill or receipt'));
+    expect(row.indexOf('Print bill or receipt')).toBeLessThan(row.indexOf('Cancel order (manager approval)'));
+    // Delivered + Pay may take two lines there, so Print and Cancel keep their room on a narrow card.
+    const primary = openingTag(buttonsWith(c, 'Delivered + Pay')[0]!);
+    for (const cls of ['h-11', 'flex-1', 'px-2', 'leading-tight']) expect(primary).toContain(cls);
+    expect(primary).not.toContain('whitespace-nowrap');
+    // A paid outside card and an own rider's card keep the one row they had (pinned elsewhere too).
+    const paid = card(ownerExample(52, 'out_for_delivery', { riderKeepsCents: 20_000 as never, paidAt: minsAgo(5) }));
+    expect(paid).toContain('<div class="mt-2 flex items-center gap-1">');
+    expect(paid).not.toContain(ROW);
     // He keeps nothing: he owes the whole bill.
     expect(text(card(ownerExample(49, 'out_for_delivery', { riderKeepsCents: 0 as never })))).toContain('Rs 4,715 Rider owes Rs 4,715');
   });
@@ -1353,6 +1418,194 @@ describe('add-on delivery (step 18-11): Send out names the same customer’s oth
     alone.press('Send out');
     await settle();
     expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o45' }]]);
+  });
+});
+
+describe('an add-on that now goes alone (review fixes C): "#0042 is no longer here", and the trip tick', () => {
+  /** #0042, the delivery the add-on went with: cancelled, refunded or delivered before #0045 went out. */
+  const ALONE = { orderId: 'o42', orderNumber: '20261001-0042', feeCents: 20_000 } as unknown as NonNullable<OrderSnapshot['goesAlone']>;
+  /** #0045, the add-on: its delivery charge left off for #0042, Ready. */
+  const alone = (over: Partial<OrderSnapshot['order']> = {}, goesAlone: OrderSnapshot['goesAlone'] = ALONE) =>
+    ({
+      ...noCharge(delivery(45, 'ready', { subtotalCents: toCents(390_000), taxCents: toCents(58_500), totalCents: toCents(448_500), ...over })),
+      goesAlone,
+    }) as OrderSnapshot;
+  const LINE = '#0042 is no longer here: this order goes alone with no delivery charge.';
+  const TICK = 'Pay the rider Rs 200 for this trip';
+  const PIN_WORDS = 'The drawer opens to pay him. A manager’s PIN or password is needed.';
+
+  function box(
+    snap: OrderSnapshot,
+    more: { payTrip?: boolean; pin?: string; sameCustomer?: Parameters<typeof SendOutDialog>[0]['sameCustomer'] } = {},
+  ): string {
+    signIn('cashier');
+    return render(
+      <SendOutDialog
+        snap={snap}
+        chargeAgain={false}
+        onChargeAgain={() => seen.events.push('charge again')}
+        onClose={() => seen.events.push('closed')}
+        onSent={(_next, riderPaidNow) => seen.events.push(riderPaidNow ? 'sent, Paid now' : 'sent')}
+        onAssignInstead={() => seen.events.push('assign instead')}
+        onPayTrip={(on) => seen.events.push(on ? 'ticked' : 'unticked')}
+        onPin={(pin) => seen.events.push(`pin ${pin}`)}
+        {...(more.payTrip !== undefined ? { payTrip: more.payTrip } : {})}
+        {...(more.pin !== undefined ? { pin: more.pin } : {})}
+        {...(more.sameCustomer !== undefined ? { sameCustomer: more.sameCustomer } : {})}
+      />,
+    );
+  }
+  /** The open box's tick, and its PIN box (the stand-in), as rendered. */
+  const tick = () => [...walk(seen.content)].find((e) => e.type === 'input' && e.props['type'] === 'checkbox');
+  const pinBox = () => [...walk(seen.content)].find((e) => e.props['aria-label'] === 'Manager PIN or password');
+
+  it('not ticked to start: the amber line and the tick, word for word; no PIN box; the answers ask nothing about a trip', async () => {
+    const markup = box(alone());
+    expect(text(markup)).toBe(
+      'Send out #0045 The bill prints now · Test Customer ' +
+        `${LINE} ${TICK} ` +
+        'Customer pays the rider Rs 4,485 No delivery charge on this bill Rider gives the shop Rs 4,485 ' +
+        'Has the rider paid the shop? Paid now · Rs 4,485 Pays after delivery ' +
+        'One of your own riders? Assign rider instead',
+    );
+    expect(markup).toContain('ring-amber-300');
+    expect(markup).toContain('type="checkbox"');
+    expect(markup).not.toContain('checked=""');
+    expect(pinBox()).toBeUndefined();
+    tap('Pays after delivery');
+    await settle();
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o45' }]]);
+    expect(seen.toasts).toEqual([]);
+    expect(seen.events).toEqual(['orders.sendOut', 'sent']);
+  });
+
+  it('the tick and the PIN only tell the board (nothing is sent); ticked, the PIN box and its words show', () => {
+    box(alone());
+    (tick()!.props['onChange'] as (e: unknown) => void)({ target: { checked: true } });
+    expect(seen.events).toEqual(['ticked']);
+
+    const markup = box(alone(), { payTrip: true, pin: '' });
+    expect(text(markup)).toContain(`${LINE} ${TICK} ${PIN_WORDS}`);
+    expect(markup).toContain('checked=""');
+    (pinBox()!.props['onChange'] as (next: string) => void)('2468');
+    (tick()!.props['onChange'] as (e: unknown) => void)({ target: { checked: false } });
+    expect(seen.events).toEqual(['ticked', 'pin 2468', 'unticked']);
+    expect(seen.calls).toEqual([]);
+  });
+
+  it('ticked with no PIN typed: nothing is sent, and the toast says a PIN is needed', async () => {
+    box(alone(), { payTrip: true, pin: '   ' });
+    tap('Pays after delivery');
+    await settle();
+    expect(seen.calls).toEqual([]);
+    expect(seen.toasts).toEqual([{ title: "A manager's PIN or password is needed", variant: 'warning' }]);
+  });
+
+  it('ticked with the PIN: every answer asks the till to pay the trip; the toast says the drawer opens', async () => {
+    for (const [answer, event] of [
+      ['Pays after delivery', 'sent'],
+      ['Paid now · Rs 4,485', 'sent, Paid now'],
+    ] as const) {
+      seen.calls.length = 0;
+      seen.toasts.length = 0;
+      seen.events.length = 0;
+      box(alone(), { payTrip: true, pin: ' 2468 ' });
+      tap(answer);
+      await settle();
+      expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o45', payRiderForTrip: true, approverPin: '2468' }]]);
+      expect(seen.toasts).toEqual([{ title: 'Rider paid Rs 200 for the trip — the drawer opens.', variant: 'success' }]);
+      expect(seen.events).toEqual(['orders.sendOut', event]);
+    }
+    // Prepaid: the one button says the drawer opens only while ticked.
+    expect(text(box(alone({ paidAt: minsAgo(30) })))).toContain(
+      'Paid already, and no delivery charge: nothing comes out of the drawer. Send out One of',
+    );
+    expect(text(box(alone({ paidAt: minsAgo(30) }), { payTrip: true, pin: '2468' }))).toContain(
+      'Paid already, and no delivery charge: nothing comes out of the drawer. Send out · drawer opens',
+    );
+  });
+
+  it('no line and no tick while another delivery of this customer is still in the shop (they go together), or the bill has a charge; no tick when no fee was recorded', () => {
+    const STILL_HERE = { orderId: 'o44', orderNumber: '20261001-0044', out: false };
+    const together = text(box(alone(), { sameCustomer: STILL_HERE }));
+    expect(together).toContain('Same customer as #0044 — send them together.');
+    expect(together).not.toContain('no longer here');
+    expect(together).not.toContain(TICK);
+    // One of them already out: this order still goes alone — its line in place of "has already gone out".
+    const out = text(box(alone(), { sameCustomer: { ...STILL_HERE, out: true } }));
+    expect(out).toContain(`${LINE} ${TICK}`);
+    expect(out).not.toContain('already gone out');
+    // A charge on the bill: the bill pays this trip.
+    const charged = { ...ownerExample(43, 'ready'), goesAlone: ALONE } as OrderSnapshot;
+    expect(text(box(charged))).not.toContain('no longer here');
+    // No fee recorded: the words, and nothing to tick.
+    const noFee = text(box(alone({}, { ...ALONE, feeCents: 0 as never })));
+    expect(noFee).toContain(LINE);
+    expect(noFee).not.toContain(TICK);
+    // Nothing going alone: the box as before.
+    expect(text(box(alone({}, null)))).not.toContain('no longer here');
+  });
+
+  it('on Live Orders: a prepaid add-on going alone opens the box (not one tap); ticked with the PIN, Send out pays the trip; unticked, the PIN typed goes', async () => {
+    const b = liveOrders([alone({ paidAt: minsAgo(30) })]);
+    b.press('Send out');
+    await settle();
+    expect(seen.calls).toEqual([]);
+    expect(b.words).toContain(`Send out #0045 The bill prints now · Test Customer ${LINE} ${TICK} Paid already`);
+
+    const tickIt = (on: boolean) => {
+      (tick()!.props['onChange'] as (e: unknown) => void)({ target: { checked: on } });
+      b.view();
+    };
+    const typePin = (pin: string) => {
+      (pinBox()!.props['onChange'] as (next: string) => void)(pin);
+      b.view();
+    };
+    tickIt(true);
+    expect(b.words).toContain(PIN_WORDS);
+    typePin('2468');
+    expect(pinBox()!.props['value']).toBe('2468');
+    // Unticked, the PIN goes with it; ticked again, it is empty.
+    tickIt(false);
+    expect(b.words).not.toContain(PIN_WORDS);
+    tickIt(true);
+    expect(pinBox()!.props['value']).toBe('');
+    typePin('2468');
+    b.press('Send out · drawer opens');
+    await settle();
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o45', payRiderForTrip: true, approverPin: '2468' }]]);
+  });
+
+  it('on Live Orders, nothing ticked: Pays after delivery sends it out with nothing about a trip', async () => {
+    const b = liveOrders([alone()]);
+    b.press('Send out');
+    b.press('Pays after delivery');
+    await settle();
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o45' }]]);
+  });
+
+  it('Assign rider (one of the shop’s own riders): only the words — nothing to tick, nothing paid', () => {
+    signIn('cashier');
+    const words = text(render(<AssignRiderDialog snap={alone()} onClose={() => {}} onAssigned={() => {}} />));
+    expect(words).toContain(`Order #0045 · Test Customer ${LINE}`);
+    expect(words).not.toContain('Pay the rider');
+    // Another delivery of this customer still in the shop: no line.
+    const together = text(
+      render(
+        <AssignRiderDialog
+          snap={alone()}
+          sameCustomer={{ orderId: 'o44', orderNumber: '20261001-0044', out: false }}
+          onClose={() => {}}
+          onAssigned={() => {}}
+        />,
+      ),
+    );
+    expect(together).not.toContain('no longer here');
+    // Live Orders hands it the same customer's other delivery, read as the board is now.
+    const b = liveOrders([delivery(44, 'preparing'), alone()]);
+    b.press('Send out');
+    b.tapInBox('One of your own riders? Assign rider instead');
+    expect((stubs.assign.at(-1) as { sameCustomer?: unknown }).sameCustomer).toEqual({ orderId: 'o44', orderNumber: '20261001-0044', out: false });
   });
 });
 

@@ -854,7 +854,14 @@ export interface DeliveryChargeToRiderInput {
    * ("pay the rider's fee if they went").
    */
   why: 'kept' | 'trip';
-  /** The manager whose PIN let a cashier do it (a cancel); null when the actor is a manager. */
+  /**
+   * Which trip, for why 'trip': 'cancelled' (the default: the order was then
+   * cancelled or refused at the door), or 'went_alone' (an add-on delivery
+   * whose charge was left off for the same customer's first delivery, which
+   * is no longer here: it went out alone, OrderSnapshot.goesAlone).
+   */
+  tripWhy?: 'cancelled' | 'went_alone';
+  /** The manager whose PIN let a cashier do it (a cancel, a trip paid at Send out); null when the actor is a manager. */
   approvedByUserId?: string | null;
 }
 
@@ -882,10 +889,13 @@ export function recordDeliveryChargeToRider(
     if (input.why !== 'kept' && input.why !== 'trip') throw new Error('Say why the rider is paid');
     if (!getCurrentShift(db, actor.deviceId)) throw new Error('No shift is open on this till — open a shift first');
     const order = shortOrderNumber(input.orderNumber);
+    const alone = input.why === 'trip' && input.tripWhy === 'went_alone';
     const reason =
       input.why === 'kept'
         ? `Delivery charge kept by the outside rider — Order ${order}`
-        : `Trip paid to the outside rider — Order ${order} cancelled`;
+        : alone
+          ? `Trip paid to the outside rider — Order ${order} went alone`
+          : `Trip paid to the outside rider — Order ${order} cancelled`;
     const movement = recordCashMovementRow(
       db,
       {
@@ -895,7 +905,7 @@ export function recordDeliveryChargeToRider(
         approvedByUserId: input.approvedByUserId ?? null,
       },
       actor,
-      { orderId: input.orderId, auditAction: 'delivery_charge_to_rider', auditExtra: { why: input.why } },
+      { orderId: input.orderId, auditAction: 'delivery_charge_to_rider', auditExtra: { why: input.why, ...(alone ? { tripWhy: 'went_alone' } : {}) } },
     );
     return movement.id;
   })();

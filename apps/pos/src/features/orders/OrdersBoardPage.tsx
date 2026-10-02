@@ -130,7 +130,14 @@ export function OrdersBoardPage() {
   const [deliverFor, setDeliverFor] = useState<OrderSnapshot | null>(null);
   // Send out's question, on a Ready delivery. chargeAgain: the rider was
   // already paid for this trip (one trip, one fee) and "Charge again" was tapped.
-  const [sendOutFor, setSendOutFor] = useState<{ snap: OrderSnapshot; chargeAgain: boolean } | null>(null);
+  // payTrip / pin: an add-on that now goes alone, "Pay the rider Rs 200 for this
+  // trip" ticked, and the manager's PIN or password typed for it.
+  const [sendOutFor, setSendOutFor] = useState<{
+    snap: OrderSnapshot;
+    chargeAgain: boolean;
+    payTrip?: boolean;
+    pin?: string;
+  } | null>(null);
   // Rider paid: the outside rider pays the shop while the order stays out
   // (the Out card's button, or Send out's "Paid now" on the order as sent).
   const [riderPaidFor, setRiderPaidFor] = useState<OrderSnapshot | null>(null);
@@ -363,6 +370,8 @@ export function OrdersBoardPage() {
       {assignFor && (
         <AssignRiderDialog
           snap={assignFor}
+          // An add-on going alone is said there too (only the words: an own rider brings back the full bill).
+          sameCustomer={samePhoneDelivery(all, assignFor)}
           onClose={() => setAssignFor(null)}
           onAssigned={() => {
             setAssignFor(null);
@@ -376,7 +385,12 @@ export function OrdersBoardPage() {
           // Read from the board as it is now: the other delivery may go out while the box is open.
           sameCustomer={samePhoneDelivery(all, sendOutFor.snap)}
           chargeAgain={sendOutFor.chargeAgain}
-          onChargeAgain={() => setSendOutFor({ snap: sendOutFor.snap, chargeAgain: true })}
+          onChargeAgain={() => setSendOutFor((s) => (s ? { ...s, chargeAgain: true } : s))}
+          payTrip={sendOutFor.payTrip === true}
+          // Unticked, the PIN typed for it goes.
+          onPayTrip={(on) => setSendOutFor((s) => (s ? { ...s, payTrip: on, pin: on ? s.pin : '' } : s))}
+          pin={sendOutFor.pin ?? ''}
+          onPin={(pin) => setSendOutFor((s) => (s ? { ...s, pin } : s))}
           onClose={() => setSendOutFor(null)}
           onSent={(next, riderPaidNow) => {
             setSendOutFor(null);
@@ -640,16 +654,18 @@ function OrderCard({
             </div>
           )}
           {outside && (
-            <div className="flex items-center justify-between gap-1.5 rounded-md bg-violet-50 p-1.5 text-violet-800 dark:bg-violet-950/40 dark:text-violet-200">
-              <span className="flex min-w-0 flex-wrap items-center gap-x-1.5">
+            // One wrapping row: "Outside rider" stays whole on a narrow card (it was cut to "Outside …");
+            // what does not fit goes to the next line, the link last, on the right.
+            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-md bg-violet-50 p-1.5 text-violet-800 dark:bg-violet-950/40 dark:text-violet-200">
+              <span className="flex items-center gap-1.5 whitespace-nowrap font-semibold">
                 <Truck className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate font-semibold">Outside rider</span>
-                {outMinutes !== null && <span className="whitespace-nowrap text-[10px]">· out {ageLabel(outMinutes)}</span>}
-                <span className="whitespace-nowrap text-[10px]">· {outsideRiderKeepsText(order.riderKeepsCents ?? 0, riderKeepsNothingWhy(snap))}</span>
+                Outside rider
               </span>
+              {outMinutes !== null && <span className="whitespace-nowrap text-[10px]">· out {ageLabel(outMinutes)}</span>}
+              <span className="whitespace-nowrap text-[10px]">· {outsideRiderKeepsText(order.riderKeepsCents ?? 0, riderKeepsNothingWhy(snap))}</span>
               <button
                 type="button"
-                className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-violet-700 underline-offset-2 hover:underline dark:text-violet-300"
+                className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-violet-700 underline-offset-2 hover:underline dark:text-violet-300"
                 onClick={onChangeRider}
                 title={ASSIGN_RIDER_LINK_TITLE}
               >
@@ -690,30 +706,31 @@ function OrderCard({
         </span>
       </div>
 
-      <div className="mt-2 flex items-center gap-1">
+      {/* "Rider paid" on its own row, full width, above the card's usual row: beside Delivered + Pay
+          it pushed Print and Cancel off a narrow card (review 2 Oct 2026, at 1011 × 663). */}
+      {secondary && (
+        <Button
+          size="md"
+          variant="secondary"
+          className="mt-2 h-11 w-full text-sm text-amber-900 ring-amber-300 hover:bg-amber-50 dark:text-amber-200 dark:ring-amber-800"
+          onClick={onSecondary}
+          disabled={busy}
+        >
+          {secondary.label}
+        </Button>
+      )}
+      <div className={secondary ? 'mt-1 flex items-center gap-1' : 'mt-2 flex items-center gap-1'}>
         {primaryLabel && (
           <Button
             size="md"
             variant={PRIMARY_VARIANT[primaryKind]}
-            // Beside "Rider paid" the words may take two lines on a narrow card.
+            // Under "Rider paid" the words may take two lines on a narrow card, so the icons keep their room.
             className={secondary ? 'h-11 flex-1 px-2 text-sm leading-tight' : 'h-11 flex-1 whitespace-nowrap text-sm'}
             onClick={onPrimary}
             disabled={busy}
           >
             <PrimaryIcon className="h-4 w-4" />
             {busy ? 'Saving…' : primaryLabel}
-          </Button>
-        )}
-        {/* "Rider paid" in the chef-hat button's place: an Out card never has that one. */}
-        {secondary && (
-          <Button
-            size="md"
-            variant="secondary"
-            className="h-11 shrink-0 px-2 text-xs leading-tight text-amber-900 ring-amber-300 hover:bg-amber-50 dark:text-amber-200 dark:ring-amber-800"
-            onClick={onSecondary}
-            disabled={busy}
-          >
-            {secondary.label}
           </Button>
         )}
         {/* Only while the kitchen still has it: the till refuses the ticket after that. */}

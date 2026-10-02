@@ -6,13 +6,22 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+import { SecretInput } from '../../components/secret/SecretInput';
+import { SecretHint } from '../../components/secret/SecretHint';
+import { approvalProblem } from '../../components/secret/secretRules';
 import {
   ASSIGN_RIDER_LINK_TITLE,
+  goesAloneLine,
   riderPaidEarlierChoice,
   sameCustomerLine,
   sendOutSplit,
   type SamePhoneDelivery,
 } from './boardLogic';
+
+/** The box's tick for an add-on that now goes alone (goesAloneLine), word for word. */
+export function payTripWords(tripCents: number): string {
+  return `Pay the rider ${formatCents(tripCents)} for this trip`;
+}
 
 /** Which answer sent it out: the rider paid now, pays after delivery, or the customer paid already. */
 type Answer = 'paid_now' | 'after' | 'prepaid';
@@ -42,6 +51,17 @@ interface Props {
    * read by the board as it is now; null or left out for none.
    */
   sameCustomer?: SamePhoneDelivery | null;
+  /**
+   * An add-on that now goes alone (goesAloneLine): "Pay the rider Rs 200 for
+   * this trip" is ticked. The board keeps it, and the manager's PIN or
+   * password typed for it (`pin`), with the open box; left out, not ticked.
+   */
+  payTrip?: boolean;
+  /** The tick tapped: show the box again with payTrip. */
+  onPayTrip?: (on: boolean) => void;
+  /** The manager's PIN or password for the trip, as typed. */
+  pin?: string;
+  onPin?: (pin: string) => void;
 }
 
 /**
@@ -73,6 +93,14 @@ interface Props {
  * together."; one already out while this bill has no delivery charge — amber
  * "No delivery charge on this order: #0042 has already gone out.". Nothing
  * when it is out and this order is charged (a new trip).
+ *
+ * An add-on that now goes alone (goesAloneLine: #0042 was cancelled,
+ * refunded or delivered before this one went out): amber "#0042 is no longer
+ * here: this order goes alone with no delivery charge." in place of the
+ * line above, and the tick "Pay the rider Rs 200 for this trip", NOT ticked
+ * to start. Ticked, it asks for a manager's PIN or password (as a cancel's
+ * trip payout does) and Send out pays him from the drawer, which opens;
+ * with no PIN typed nothing is sent. Left unticked, nothing is paid.
  */
 export function SendOutDialog({
   snap,
@@ -82,6 +110,10 @@ export function SendOutDialog({
   chargeAgain,
   onChargeAgain,
   sameCustomer = null,
+  payTrip = false,
+  onPayTrip = () => {},
+  pin = '',
+  onPin = () => {},
 }: Props) {
   const { order } = snap;
   const short = order.orderNumber.split('-').pop();
@@ -89,18 +121,42 @@ export function SendOutDialog({
   const earlier = riderPaidEarlierChoice(snap);
   const riderAlreadyPaid = earlier !== null && !chargeAgain;
   const { customerPaysCents, keepsCents, givesCents } = sendOutSplit(snap, { riderAlreadyPaid });
-  const together = sameCustomerLine(sameCustomer, snap);
+  const alone = goesAloneLine(snap, sameCustomer);
+  // An add-on going alone says so in place of "has already gone out".
+  const together = alone ? null : sameCustomerLine(sameCustomer, snap);
+  // 'Pay the rider Rs 200 for this trip': not ticked to start; ticked, a manager's PIN or password.
+  const tripCents = alone && alone.tripCents > 0 && payTrip ? alone.tripCents : 0;
   const { toast } = useToast();
 
   const send = useMutation({
     mutationFn: (_answer: Answer) =>
-      ipc.orders.sendOut(earlier ? { orderId: order.id, riderAlreadyPaid } : { orderId: order.id }),
-    onSuccess: (next, answer) => onSent(next, answer === 'paid_now'),
+      ipc.orders.sendOut({
+        orderId: order.id,
+        ...(earlier ? { riderAlreadyPaid } : {}),
+        ...(tripCents > 0 ? { payRiderForTrip: true, approverPin: pin.trim() } : {}),
+      }),
+    onSuccess: (next, answer) => {
+      if (tripCents > 0) {
+        toast({ title: `Rider paid ${formatCents(tripCents)} for the trip — the drawer opens.`, variant: 'success' });
+      }
+      onSent(next, answer === 'paid_now');
+    },
     onError: (e) =>
       toast({ title: 'Could not send out', description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' }),
   });
   const busy = send.isPending;
   const saying = (answer: Answer, words: string) => (busy && send.variables === answer ? 'Saving…' : words);
+  /** Send it out. The trip ticked needs the manager's PIN or password typed first: without it nothing is sent. */
+  const go = (answer: Answer) => {
+    if (tripCents > 0) {
+      const problem = approvalProblem(pin);
+      if (problem) {
+        toast({ title: problem, variant: 'warning' });
+        return;
+      }
+    }
+    send.mutate(answer);
+  };
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
@@ -138,6 +194,43 @@ export function SendOutDialog({
             </p>
           )}
 
+          {alone && (
+            // An add-on whose first delivery is no longer here: it goes alone, with no delivery charge.
+            <div className="mb-3 space-y-2 rounded-xl bg-amber-100 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-300 dark:bg-amber-950/50 dark:text-amber-100 dark:ring-amber-800">
+              <p className="flex items-center gap-2 font-semibold">
+                <Users className="h-4 w-4 shrink-0" aria-hidden="true" />
+                {alone.text}
+              </p>
+              {alone.tripCents > 0 && (
+                <>
+                  <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg bg-white px-3 py-2 font-semibold text-stone-800 ring-1 ring-amber-200 dark:bg-stone-800 dark:text-stone-100 dark:ring-amber-800">
+                    <input
+                      type="checkbox"
+                      checked={payTrip}
+                      onChange={(e) => onPayTrip(e.target.checked)}
+                      disabled={busy}
+                      className="h-5 w-5 shrink-0 accent-amber-600"
+                    />
+                    {payTripWords(alone.tripCents)}
+                  </label>
+                  {payTrip && (
+                    <div className="space-y-1">
+                      <p className="text-xs">The drawer opens to pay him. A manager’s PIN or password is needed.</p>
+                      <SecretInput
+                        value={pin}
+                        onChange={onPin}
+                        aria-label="Manager PIN or password"
+                        className="min-w-0 flex-1 rounded-lg border border-stone-200 bg-white px-3 py-2 text-center font-mono text-lg tracking-[0.5em] focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
+                        placeholder="••••"
+                      />
+                      <SecretHint value={pin} />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
           {earlier && (
             // One trip, one fee: he was paid on the refunded order; by default nothing more now.
             <div className="mb-3 space-y-1.5 rounded-xl bg-sky-50 px-4 py-3 text-sm text-sky-900 dark:bg-sky-950/30 dark:text-sky-100">
@@ -170,12 +263,12 @@ export function SendOutDialog({
                 variant="primary"
                 size="md"
                 className="mt-4 h-14 w-full"
-                onClick={() => send.mutate('prepaid')}
+                onClick={() => go('prepaid')}
                 disabled={busy}
                 autoFocus
               >
                 <Truck className="h-4 w-4" />
-                {saying('prepaid', keepsCents > 0 ? 'Send out · drawer opens' : 'Send out')}
+                {saying('prepaid', keepsCents > 0 || tripCents > 0 ? 'Send out · drawer opens' : 'Send out')}
               </Button>
             </>
           ) : (
@@ -211,7 +304,7 @@ export function SendOutDialog({
                   variant="success"
                   size="md"
                   className="h-14 px-3"
-                  onClick={() => send.mutate('paid_now')}
+                  onClick={() => go('paid_now')}
                   disabled={busy}
                 >
                   {saying('paid_now', `Paid now · ${formatCents(givesCents)}`)}
@@ -220,7 +313,7 @@ export function SendOutDialog({
                   variant="primary"
                   size="md"
                   className="h-14 px-3"
-                  onClick={() => send.mutate('after')}
+                  onClick={() => go('after')}
                   disabled={busy}
                   autoFocus
                 >

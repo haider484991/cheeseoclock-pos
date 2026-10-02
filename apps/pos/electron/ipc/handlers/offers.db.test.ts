@@ -1207,6 +1207,29 @@ describe.skipIf(!Sqlite)('once a day per phone: cancel or refund first, then rin
     expect(await heldBy(again)).toBeNull();
   });
 
+  it("Send's customer save answers with who holds it (review fixes C): a cart with only the phone typed learns of #first from the save's reply, before anything is sent", async () => {
+    await saveOffers([ONCE()]);
+    const first = await takeaway(PHONE_A);
+    await send(first);
+    // The cart: no phone saved yet (only typed on the panel), so it cannot say anything yet.
+    const cart = await takeaway();
+    expect(await heldBy(cart)).toBeNull();
+    // Send saves the phone first (commitCustomerToOrder -> customers:attachToOrder): its reply names #first,
+    // and the order is still a cart with no offer on it — the till's screen stops there and says so.
+    const r = await repos();
+    const customer = r.findCustomerByPhone(db as never, PHONE_A)!;
+    h.session = CASHIER;
+    const reply = await data<OrderSnapshot>('customers:attachToOrder', { orderId: cart, customerId: customer.id, addressId: null });
+    expect(reply.offerHeldBy).toEqual({ orderId: first, orderNumber: numberOf(first), paid: false });
+    expect(reply.order.status).toBe('open');
+    expect(orderRow(cart)).toMatchObject({ status: 'open', discount_cents: 0 });
+    // #first cancelled, then Send's save again: the offer goes on, and the reply says nobody holds it.
+    await data('orders:void', { orderId: first, reason: 'Customer changed order', approverPin: MANAGER_SECRET, foodMade: 'not_made' });
+    const again = await data<OrderSnapshot>('customers:attachToOrder', { orderId: cart, customerId: customer.id, addressId: null });
+    expect(again.offerHeldBy).toBeNull();
+    expect(orderRow(cart)).toMatchObject({ discount_cents: 20_000 });
+  });
+
   it('only an open counter order carries it: absent once sent, and on a foodpanda order', async () => {
     await saveOffers([ONCE()]);
     const first = await takeaway(PHONE_A);

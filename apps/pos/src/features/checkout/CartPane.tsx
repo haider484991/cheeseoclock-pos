@@ -60,6 +60,15 @@ export function offerHeldByWords(held: { orderNumber: string; paid: boolean }): 
   return `${held.paid ? 'Refund' : 'Cancel'} #${held.orderNumber.split('-').pop()} first to keep the offer`;
 }
 
+/**
+ * Send stopped before the kitchen (checkoutStore OfferHeldBack): the phone it
+ * saved shows a live order of this customer holding today's offer. The cart
+ * now says so too; Send again goes without it.
+ */
+export function offerHeldBackToast(held: { orderNumber: string; paid: boolean }): { title: string; description: string } {
+  return { title: 'Not sent yet', description: `${offerHeldByWords(held)}, or tap Send again to send it without the offer.` };
+}
+
 /** The ticket contains items, totals and checkout actions. */
 export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemoveDeal, onSendToKitchen, onCustomize }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);

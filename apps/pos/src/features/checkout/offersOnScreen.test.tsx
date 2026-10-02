@@ -32,7 +32,7 @@ import {
 import { ToastProvider } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useCheckoutStore } from '../../stores/checkoutStore';
-import { CartPane } from './CartPane';
+import { CartPane, offerHeldBackToast } from './CartPane';
 import { TenderDialog } from './TenderDialog';
 import { ReceiptDialog } from './ReceiptDialog';
 import { DiscountDialog } from './DiscountDialog';
@@ -326,6 +326,16 @@ describe('the order screen', () => {
     // Nobody holds it: nothing to say.
     useCheckoutStore.setState({ snapshot: { ...order({ discount: null }), offerHeldBy: null } as OrderSnapshot });
     expect(text(cart(seed))).not.toContain('first to keep the offer');
+  });
+
+  it('Send stopped because the phone it saved shows a live order holding the offer (review fixes C): the toast says what to do, in the cart’s own words', () => {
+    expect(offerHeldBackToast({ orderNumber: '20261002-0001', paid: false })).toEqual({
+      title: 'Not sent yet',
+      description: 'Cancel #0001 first to keep the offer, or tap Send again to send it without the offer.',
+    });
+    expect(offerHeldBackToast({ orderNumber: '20261002-0001', paid: true }).description).toBe(
+      'Refund #0001 first to keep the offer, or tap Send again to send it without the offer.',
+    );
   });
 
   it('no such words with an offer or a discount on the cart, or once the order is sent', () => {

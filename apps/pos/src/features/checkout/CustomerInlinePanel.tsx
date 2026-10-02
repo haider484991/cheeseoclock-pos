@@ -829,13 +829,15 @@ export function deliveryTellPhone(told: string | null, typed: string): string | 
  * Resolves with the customer and address now on the order (null when none
  * was written), so the form can point at them: Pay saves the customer before
  * it opens, and a second save (a note changed after closing Pay) then reuses
- * them instead of adding the address, or a nameless customer, again.
+ * them instead of adding the address, or a nameless customer, again. With
+ * them, `snapshot`: the order as the till answered the save (the phone now
+ * saved on it, so its offerHeldBy and addOnTo are worked out), or null.
  */
 export async function commitCustomerToOrder(
   orderId: string,
   mode: 'dine_in' | 'takeaway' | 'delivery' | 'online' | 'foodpanda',
   form: CustomerFormState,
-): Promise<{ customerId: string; addressId: string | null } | null> {
+): Promise<{ customerId: string; addressId: string | null; snapshot: OrderSnapshot | null } | null> {
   if (mode === 'dine_in' || mode === 'online' || mode === 'foodpanda') return null;
   const note = form.deliveryNotes.trim() || null;
   if (!form.phone.trim() && !form.name.trim() && !form.addressLine.trim()) {
@@ -889,7 +891,7 @@ export async function commitCustomerToOrder(
     addressId = (await ipc.customers.createAddress({ customerId, ...typedAddress })).id;
   }
 
-  await ipc.customers.attachToOrder({
+  const attached = await ipc.customers.attachToOrder({
     orderId,
     customerId,
     addressId,
@@ -907,7 +909,9 @@ export async function commitCustomerToOrder(
       console.warn('Could not make the address the usual one (order not affected):', e);
     }
   }
-  return { customerId, addressId };
+  // The till's answer is the order with the customer on it (a stand-in may answer nothing).
+  const snapshot = attached && typeof attached === 'object' && 'order' in attached ? attached : null;
+  return { customerId, addressId, snapshot };
 }
 
 /**
