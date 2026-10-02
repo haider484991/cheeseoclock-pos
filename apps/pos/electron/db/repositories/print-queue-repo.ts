@@ -1,6 +1,6 @@
 import { v7 as uuidv7 } from 'uuid';
 import type { AppDatabase } from '../connection.js';
-import type { ReceiptCopy } from '@cheeseoclock/shared-types';
+import type { KitchenChange, ReceiptCopy } from '@cheeseoclock/shared-types';
 import { nowIso } from './base.js';
 
 /**
@@ -43,6 +43,12 @@ export interface KitchenJobPayload {
   reprint: boolean;
   /** The order was cancelled while the kitchen had it: "CANCELLED — DO NOT MAKE". */
   cancelled?: boolean;
+  /**
+   * Edit order (v0.7.36): the kitchen's CHANGE slip for one edit — what it
+   * added and took off, frozen when the edit was saved — not the order's
+   * ticket. Its paper series is `kitchen_change:<editNo>`.
+   */
+  change?: KitchenChange;
   /** Who was signed in when it was queued, or who pressed the button. */
   requestedByUserId?: string | null;
 }
@@ -300,7 +306,8 @@ export function findOpenJob(
   for (const r of rows) {
     const job = rowToJob(r);
     const p = job.payload;
-    if (p.kind === 'kitchen' && p.cancelled !== true) return job;
+    // The order's ticket: not a CANCELLED slip, and not an edit's CHANGE slip (its own paper).
+    if (p.kind === 'kitchen' && p.cancelled !== true && p.change === undefined) return job;
     if (p.kind === 'receipt' && p.reason !== 'refund' && p.copies.includes(copy)) return job;
   }
   return null;

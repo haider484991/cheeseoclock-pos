@@ -409,4 +409,26 @@ live('a Free order', () => {
     s.r.tenderOrder(db, { orderId: o.id, payments: [] }, CASHIER);
     expect(snap(o.id).order.paidAt).not.toBeNull();
   });
+
+  it('on a cart sent with Send, not Pay: paid at Rs 0 as it goes, so Send out pays the rider from the drawer', async () => {
+    const { db, s, snap } = await shop();
+    const o = s.r.createOrder(db, { mode: 'delivery' }, CASHIER);
+    s.r.addOrderItem(db, { orderId: o.id, menuItemId: s.item.fajitaM, quantity: 1, modifierIds: [], notes: null }, CASHIER);
+    s.r.addOrderItem(db, { orderId: o.id, menuItemId: s.item.delivery, quantity: 1, modifierIds: [], notes: null }, CASHIER);
+    s.r.applyDiscount(db, { orderId: o.id, discountType: 'percent', value: 100, reason: 'Owner guest', approverUserId: MANAGER.userId, free: true }, CASHIER);
+    const sent = s.r.sendOrderToKitchen(db, o.id, CASHIER);
+    expect(sent.status).toBe('sent_to_kitchen');
+    expect(sent.paidAt).not.toBeNull();
+    expect(snap(o.id).payments).toHaveLength(0);
+    const out = s.r.sendOutOrder(db, o.id, CASHIER);
+    expect(out.riderKeepsCents).toBe(10_000);
+    expect(out.drawerOpenId).not.toBeNull();
+
+    // An ordinary 100% discount is not a Free order: it goes unpaid, as before.
+    const plain = s.r.createOrder(db, { mode: 'takeaway' }, CASHIER);
+    s.r.addOrderItem(db, { orderId: plain.id, menuItemId: s.item.fajitaM, quantity: 1, modifierIds: [], notes: null }, CASHIER);
+    s.r.applyDiscount(db, { orderId: plain.id, discountType: 'percent', value: 100, reason: 'Make-good', approverUserId: MANAGER.userId }, CASHIER);
+    expect(snap(plain.id).order.totalCents).toBe(0);
+    expect(s.r.sendOrderToKitchen(db, plain.id, CASHIER).paidAt).toBeNull();
+  });
 });

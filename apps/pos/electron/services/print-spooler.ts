@@ -6,6 +6,7 @@ import {
   refundHandOver,
   isDrinkLine,
   renderDrawerKick,
+  renderKitchenChangeTicket,
   renderKitchenTicket,
   renderReceipt,
   type CancelInfo,
@@ -26,6 +27,7 @@ import {
   kitchenTicketRules,
   type DrawerOutcome,
   type DrawerSettings,
+  type KitchenChange,
   type OrderPapers,
   type OrderSnapshot,
   type OrderStatus,
@@ -69,6 +71,7 @@ import {
   rescheduleJob,
   retryNow,
   setSendingPlan,
+  type KitchenJobPayload,
   type PrintJobPayload,
   type PrintJobRow,
   type ReceiptJobReason,
@@ -780,6 +783,33 @@ class PrintSpooler {
       cancelled: true,
       requestedByUserId: this.whoIsSignedIn(),
     });
+  }
+
+  /**
+   * Edit order (v0.7.36): the kitchen's CHANGE slip for an edit just saved
+   * (orders:saveEdit, after its commit) — only what it added and took off,
+   * frozen in the job, when this till prints kitchen tickets. Not when the
+   * order's own ticket is still waiting to print: that ticket prints the
+   * order as it is when its turn comes, edit included, so a slip would make
+   * the kitchen add it twice. Not when every line it changed is a drink and
+   * this till leaves drinks off its tickets. Never throws: print failure never
+   * blocks the edit.
+   */
+  onOrderEdited(orderId: string, change: KitchenChange): void {
+    if (!this.db) return;
+    const db = this.db;
+    try {
+      const policy = getPrintPolicy(db);
+      if (!policy.kitchenTicket) return;
+      const rules = kitchenTicketRules(policy);
+      const lines = [...change.added, ...change.removed];
+      if (lines.length === 0 || (!rules.drinks && lines.every((l) => l.drink))) return;
+      const ticket = findOpenJob(db, orderId, 'kitchen');
+      if (ticket?.status === 'pending') return;
+      this.enqueue({ kind: 'kitchen', orderId, reprint: false, change, requestedByUserId: change.byUserId ?? this.whoIsSignedIn() });
+    } catch (e) {
+      log.error('Could not queue the kitchen change slip', { orderId, error: String(e) });
+    }
   }
 
   /**
@@ -1519,6 +1549,66 @@ class PrintSpooler {
     return { kind: 'copy', number: earlierPapers + 1, printedAt: now, firstPrintedAt: originalAt };
   }
 
+  /**
+   * An Edit order's CHANGE slip (v0.7.36): what the edit added and took off,
+   * as frozen in the job, on the kitchen printer, with the till's kitchen
+   * rules (phone, drinks, copies). Its own series in the print log
+   * (`kitchen_change:<n>`): a retry after a printer error says RE-SENT, and it
+   * never makes the order's ticket read as a REPRINT.
+   */
+  private renderChangeSlip(
+    job: PrintJobRow,
+    payload: KitchenJobPayload,
+    change: KitchenChange,
+    snap: OrderSnapshot,
+    adapter: PrinterAdapter,
+  ): { adapter: PrinterAdapter; bytes: Uint8Array; papers: PlannedPaper[] } {
+    const db = this.db!;
+    const document: PrintedDocument = 'kitchen_change';
+    const docKey = `kitchen_change:${change.editNo}`;
+    const requestedBy = payload.requestedByUserId ?? null;
+    let stamp: CopyStamp | null = null;
+    let printNo = 0;
+    let names = new Map<string, string>();
+    try {
+      const series = this.series(snap, document, docKey, 'kitchen');
+      names = userNames(db, [requestedBy, change.byUserId]);
+      stamp = this.stampFor(series, { jobId: job.id, manual: false, kitchen: true, requestedBy, approvedBy: null, names, fbrCopy: false });
+      printNo = series.prior;
+    } catch (e) {
+      log.warn('Print log unreadable; change slip printed without its stamp', { jobId: job.id, error: String(e) });
+    }
+    const rules = kitchenTicketRules(getPrintPolicy(db));
+    const copies = rules.copies;
+    const slip = (n: number) =>
+      renderKitchenChangeTicket(snap, change, {
+        width: adapter.config.width ?? 48,
+        stamp,
+        queuedAt: new Date(job.createdAt),
+        byName: change.byUserId ? (names.get(change.byUserId) ?? null) : null,
+        showPhone: rules.phone,
+        showDrinks: rules.drinks,
+        copyOf: copies > 1 ? { n, of: copies } : null,
+      });
+    return {
+      adapter,
+      bytes: copies > 1 ? concat(Array.from({ length: copies }, (_, i) => slip(i + 1))) : slip(1),
+      papers: [
+        {
+          orderNumber: snap.order.orderNumber,
+          document,
+          docKey,
+          copy: 'kitchen',
+          printNo,
+          reason: 'auto',
+          requestedByUserId: requestedBy,
+          approvedByUserId: null,
+          fbrIrn: null,
+        },
+      ],
+    };
+  }
+
   /** Bytes for a job, the printer they go to, and the papers they carry (for the print log). */
   private render(
     job: PrintJobRow,
@@ -1531,6 +1621,8 @@ class PrintSpooler {
     switch (payload.kind) {
       case 'kitchen': {
         const adapter = this.getAdapter('kitchen');
+        // An Edit order's CHANGE slip (v0.7.36): its own paper and series, what the edit changed.
+        if (payload.change) return this.renderChangeSlip(job, payload, payload.change, snap, adapter);
         const cancelled = payload.cancelled === true;
         const document: PrintedDocument = cancelled ? 'kitchen_cancel' : 'kitchen';
         const reason: PrintReason = cancelled ? 'cancel' : payload.reprint ? MANUAL_REASON : 'auto';
@@ -1937,7 +2029,7 @@ export function failedPaperWords(db: AppDatabase, job: PrintJobRow): string | nu
     const snap = job.orderId ? getOrderSnapshot(db, job.orderId, { includeDeleted: true }) : null;
     const order = snap ? ` for ${orderLabel(snap)}` : '';
     let paper: string;
-    if (p.kind === 'kitchen') paper = p.cancelled === true ? 'Kitchen CANCELLED slip' : 'Kitchen ticket';
+    if (p.kind === 'kitchen') paper = p.cancelled === true ? 'Kitchen CANCELLED slip' : p.change ? 'Kitchen CHANGE slip' : 'Kitchen ticket';
     else if (p.kind === 'drawer') paper = 'Cash drawer';
     else if (p.reason === 'refund') paper = 'Refund slip';
     else if (!snap) paper = 'Receipt';

@@ -107,6 +107,7 @@ export type { DecodedLine } from './escpos-decode.js';
 export {
   renderReceipt,
   renderKitchenTicket,
+  renderKitchenChangeTicket,
   isDrinkLine,
   renderDrawerKick,
   appendLogo,
@@ -159,6 +160,7 @@ export type { RenderPlainDocumentOpts } from './plain-document.js';
 export type {
   RenderReceiptOpts,
   RenderKitchenTicketOpts,
+  RenderKitchenChangeOpts,
   ReceiptBranding,
   ReceiptDocument,
   CopyStamp,

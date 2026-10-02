@@ -271,6 +271,37 @@ export function kitchenTicketRules(p: Pick<PrintPolicy, 'kitchenCopies' | 'kitch
   };
 }
 
+/** One line of the kitchen's CHANGE slip (Edit order, v0.7.36): what was added or taken off. */
+export interface KitchenChangeLine {
+  name: string;
+  /** How many were added or taken off (not the line's new quantity). */
+  quantity: number;
+  /** Its choices as the kitchen reads them ("No onion", "Extra cheese"…). */
+  modifiers: string[];
+  notes: string | null;
+  /** A drink (the bar, or a Drinks category): left off when this till leaves drinks off its tickets. */
+  drink: boolean;
+}
+
+/**
+ * What an Edit order changed, as the kitchen's CHANGE slip prints it (v0.7.36;
+ * the owner, 2 Oct 2026: "ADDED / REMOVED kitchen slips"). Frozen in the
+ * print job when the edit is saved: the slip says what changed then, never
+ * the order as it is when the printer gets to it.
+ */
+export interface KitchenChange {
+  /** The order's nth edit (its paper series: `kitchen_change:<n>`). */
+  editNo: number;
+  /** When the edit was saved (ISO). */
+  at: string;
+  /** Who saved it. */
+  byUserId: string | null;
+  /** Why, when something came off. */
+  reason: string | null;
+  added: KitchenChangeLine[];
+  removed: KitchenChangeLine[];
+}
+
 /** The logo as a 1-bit picture for one paper width, as stored and sent over IPC. */
 export interface ReceiptLogoRasterJson {
   paperWidth: PrinterWidth;

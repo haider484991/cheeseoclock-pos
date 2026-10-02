@@ -679,6 +679,9 @@ const COUNTER_SCOPED = [
   'orders:detachCustomer',
   // The counter's "Order notes" with no customer: only on the bill still being rung up.
   'orders:setNote',
+  // Edit order (v0.7.36): the same orders as orders:get (the board's); taking off needs a manager's PIN at Save.
+  'orders:previewEdit',
+  'orders:saveEdit',
   'customers:findByPhone',
   'customers:attachToOrder',
   'printer:reprint',

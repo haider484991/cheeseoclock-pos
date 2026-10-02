@@ -4173,6 +4173,12 @@ function setOrderStatus(
  * tendering. Used primarily for delivery/COD where payment happens on
  * delivery. Moves status `open` → `sent_to_kitchen`. The order then appears
  * on the Live Orders board for the kitchen + dispatcher to drive forward.
+ *
+ * A Free order (v0.7.36) has nothing to collect: it is paid at Rs 0 in the
+ * same transaction (completeFreeOrder), as Pay's "Nothing to pay — complete
+ * order" and an edit's Free order are, so Send out pays an outside rider his
+ * charge from the drawer and the hand-over takes no money. The caller queues
+ * its FBR invoice after the commit when the returned order is newly paid.
  */
 export function sendOrderToKitchen(
   db: AppDatabase,
@@ -4186,15 +4192,19 @@ export function sendOrderToKitchen(
   if (order && order.mode === 'foodpanda' && order.paidAt === null) {
     throw new Error('Foodpanda orders are paid and sent in one step — use Pay (F1)');
   }
-  const sent = setOrderStatus(
-    db,
-    orderId,
-    'sent_to_kitchen',
-    ['open', 'sent_to_kitchen'], // idempotent — re-sending is a no-op transition
-    [],
-    actor,
-    'send_to_kitchen',
-  );
+  let sent!: Order;
+  db.transaction(() => {
+    sent = setOrderStatus(
+      db,
+      orderId,
+      'sent_to_kitchen',
+      ['open', 'sent_to_kitchen'], // idempotent — re-sending is a no-op transition
+      [],
+      actor,
+      'send_to_kitchen',
+    );
+    if (sent.paidAt === null && sent.totalCents === 0 && hasFreeOrder(db, orderId)) sent = completeFreeOrder(db, orderId, actor);
+  })();
   // The kitchen is about to use the ingredients: take them off stock now, not
   // at payment. Unpaid orders (cash on delivery, served then paid later, web
   // orders) used to take nothing until the money came in, and a served-unpaid

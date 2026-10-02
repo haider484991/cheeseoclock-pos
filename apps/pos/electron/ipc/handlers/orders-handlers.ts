@@ -3,16 +3,38 @@ import { defineHandler, IpcGuardError } from '../registry.js';
 import { requireAdmin, requireCapability, REFUSED } from '../guards.js';
 import { assertCounterAddress, assertCounterMaySee, assertOrderStillBeingTaken } from '../order-access.js';
 import { COST_CAPABILITY, ok, hasCapability } from '@cheeseoclock/shared-types';
-import type { AuthenticatedUser, CameBy, OrderSnapshot, OrderStockAnswer, PaymentMethod, StockSettlement } from '@cheeseoclock/shared-types';
+import type {
+  AuthenticatedUser,
+  CameBy,
+  KitchenChange,
+  KitchenChangeLine,
+  OrderEditChangeLine,
+  OrderEditOp,
+  OrderEditPreview,
+  OrderSnapshot,
+  OrderStockAnswer,
+  PaymentMethod,
+  StockSettlement,
+} from '@cheeseoclock/shared-types';
 import {
   cameBySchema,
   deleteTestOrderInputSchema,
   foodpandaTenderCheckSchema,
+  previewEditInputSchema,
+  saveEditInputSchema,
   setCameByInputSchema,
   listDeletedTestsInputSchema,
   orderStockAnswerSchema,
   testDeletePreviewInputSchema,
 } from '@cheeseoclock/shared-schemas';
+import {
+  EDIT_NEEDS_REASON,
+  editNeedsPinWords,
+  previewOrderEdit,
+  saveOrderEdit,
+  type SavedOrderEdit,
+} from '../../db/repositories/order-edit-repo.js';
+import { isDrinkLine } from '@cheeseoclock/printer-core';
 import {
   getCurrentSession,
   verifyManagerPin,
@@ -67,6 +89,10 @@ import {
   DISCOUNT_REASON_REQUIRED,
   kitchenHearsOfClose,
   NOTHING_TO_DISCOUNT,
+  FREE_ORDER_IS_ALL,
+  FREE_ORDER_NEEDS_MANAGER,
+  FREE_ORDER_NEEDS_REASON,
+  FREE_ORDER_NOT_FOODPANDA,
   requiresManagerApproval,
   stockSettlementForCounter,
   stockStatusForCounter,
@@ -387,6 +413,31 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // The order's subtotal decides whether a flat amount is more than the % limit of it.
     const current = getOrderSnapshot(ctx.db, payload.orderId);
     if (!current) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+
+    // A Free order (v0.7.36): 100% off the whole order, value deals and delivery charge
+    // included — always with a reason and a manager's PIN or password, checked in that order
+    // (a missing reason never uses up a PIN attempt). The repository checks again.
+    if (payload.free === true) {
+      if (payload.discountType !== 'percent' || payload.value !== 100) {
+        throw new IpcGuardError({ code: 'validation_failed', message: FREE_ORDER_IS_ALL });
+      }
+      if (current.order.mode === 'foodpanda') throw new IpcGuardError({ code: 'precondition_failed', message: FREE_ORDER_NOT_FOODPANDA });
+      if (discountReasonMissing(payload.reason)) throw new IpcGuardError({ code: 'validation_failed', message: FREE_ORDER_NEEDS_REASON });
+      if (!payload.approverPin) throw new IpcGuardError({ code: 'precondition_failed', message: FREE_ORDER_NEEDS_MANAGER });
+      try {
+        approverUserId = (await verifyManagerPin(ctx.db, payload.approverPin)).approverUserId;
+      } catch (e) {
+        throw new IpcGuardError({ code: 'forbidden', message: e instanceof Error ? e.message : 'Manager approval failed' });
+      }
+      applyDiscount(
+        ctx.db,
+        { orderId: payload.orderId, discountType: 'percent', value: 100, reason: payload.reason ?? null, approverUserId, free: true },
+        { userId: s.id, deviceId: ctx.deviceId },
+      );
+      const freeSnap = getOrderSnapshot(ctx.db, payload.orderId);
+      if (!freeSnap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+      return ok(freeSnap);
+    }
     // The owner's "a discount needs a reason" (Settings → Money & discounts), read live: every
     // discount given here is one given by hand (any login, a manager replacing the foodpanda deal
     // too). Refused BEFORE the manager's PIN is checked, so a missing reason never uses up a
@@ -469,6 +520,95 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     return ok(snap);
+  });
+
+  // ---- Edit order (v0.7.36) ------------------------------------------------
+  // The owner, 2 Oct 2026: an order the kitchen has is changed under the same
+  // number — adding is any cashier's, taking off needs a manager's PIN — and
+  // the user, 3 Oct 2026: a discount until it is paid, and a Free order.
+
+  defineHandler('orders:previewEdit', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    const parsed = previewEditInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new IpcGuardError({ code: 'validation_failed', message: parsed.error.issues[0]?.message ?? 'Those changes are not valid' });
+    }
+    const order = findOrder(ctx.db, parsed.data.orderId);
+    if (!order) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    assertCounterMaySee(ctx.db, s, order, 'open');
+    assertEditPicks(ctx.db, parsed.data.ops);
+    try {
+      return ok(previewOrderEdit(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
+    } catch (e) {
+      throw new IpcGuardError({ code: 'precondition_failed', message: e instanceof Error ? e.message : 'The edit could not be worked out' });
+    }
+  });
+
+  defineHandler('orders:saveEdit', ctx, async (_ctx, payload) => {
+    const s = requireOrderCreate();
+    const parsed = saveEditInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new IpcGuardError({ code: 'validation_failed', message: parsed.error.issues[0]?.message ?? 'Those changes are not valid' });
+    }
+    const input = parsed.data;
+    const order = findOrder(ctx.db, input.orderId);
+    if (!order) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    assertCounterMaySee(ctx.db, s, order, 'open');
+    assertEditPicks(ctx.db, input.ops);
+    const actor = { userId: s.id, deviceId: ctx.deviceId };
+    // What Save asks for (nothing written), then the manager's PIN when it asks for one: a
+    // reason missing is refused first, so it never uses up a PIN attempt.
+    let asked: OrderEditPreview;
+    try {
+      asked = previewOrderEdit(ctx.db, { orderId: input.orderId, ops: input.ops }, actor);
+    } catch (e) {
+      throw new IpcGuardError({ code: 'precondition_failed', message: e instanceof Error ? e.message : 'The edit could not be worked out' });
+    }
+    if (asked.needs.reason && discountReasonMissing(input.reason)) {
+      throw new IpcGuardError({ code: 'validation_failed', message: EDIT_NEEDS_REASON });
+    }
+    let approverUserId: string | null = null;
+    if (asked.needs.pin) {
+      if (!input.approverPin) throw new IpcGuardError({ code: 'precondition_failed', message: editNeedsPinWords(asked.needs.why) });
+      try {
+        approverUserId = (await verifyManagerPin(ctx.db, input.approverPin)).approverUserId;
+      } catch (e) {
+        throw new IpcGuardError({ code: 'forbidden', message: e instanceof Error ? e.message : 'Manager approval failed' });
+      }
+    }
+    // The order as it was: the lines taken off are read from it for the kitchen's slip.
+    const base = getOrderSnapshot(ctx.db, input.orderId);
+    if (!base) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    let saved: SavedOrderEdit;
+    try {
+      saved = saveOrderEdit(
+        ctx.db,
+        {
+          orderId: input.orderId,
+          baseKey: input.baseKey,
+          ops: input.ops,
+          approverUserId,
+          reason: input.reason ?? null,
+          ...(input.foodMade ? { foodMade: input.foodMade } : {}),
+        },
+        actor,
+      );
+    } catch (e) {
+      throw new IpcGuardError({ code: 'precondition_failed', message: e instanceof Error ? e.message : 'The edit was not saved' });
+    }
+    // After the commit: the kitchen's CHANGE slip (what was added, what not to make).
+    printSpooler.onOrderEdited(input.orderId, kitchenChangeOf(ctx.db, input.orderId, saved, base, s.id, input.reason ?? null));
+    // A Free order paid at Rs 0: its FBR invoice queued, as Pay's is (never blocks the edit).
+    if (saved.completedFree) {
+      try {
+        const cfg = getFbrConfig(ctx.db);
+        enqueueFbrSubmission(ctx.db, input.orderId, mapOrderToFbrPayload(saved.snapshot, toSellerInfo(cfg)), cfg.mode);
+        fbrWorker.kick();
+      } catch (e) {
+        log.warn('FBR enqueue failed for a Free order (edit saved)', { orderId: input.orderId, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    return ok({ snapshot: saved.snapshot, diff: saved.diff });
   });
 
   defineHandler('orders:resumeDraft', ctx, () => {
@@ -659,6 +799,16 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     if (!next) throw new IpcGuardError({ code: 'not_found', message: 'Order vanished' });
     // Kitchen ticket (once per order) per Settings → Printer.
     printSpooler.onOrderEvent(payload.orderId, 'sent_to_kitchen');
+    // A Free order is paid at Rs 0 as it goes (the repository): its FBR invoice queued, as Pay's is.
+    if (snap.order.paidAt === null && next.order.paidAt !== null) {
+      try {
+        const cfg = getFbrConfig(ctx.db);
+        enqueueFbrSubmission(ctx.db, payload.orderId, mapOrderToFbrPayload(next, toSellerInfo(cfg)), cfg.mode);
+        fbrWorker.kick();
+      } catch (e) {
+        log.warn('FBR enqueue failed for a Free order (sent to the kitchen)', { orderId: payload.orderId, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
     return ok(next);
   });
 
@@ -1193,6 +1343,58 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     return ok({ ...snap, stock: stockForLogin(s, done.stock) });
   });
+}
+
+/**
+ * An edit's choices, checked as Add and Customize check them: every new line
+ * (add) and every new line's new choices (options: the line's item is its
+ * add's, earlier in the same edit; a line the edit did not add is refused
+ * by the repository in its own words).
+ */
+function assertEditPicks(db: AppDatabase, ops: ReadonlyArray<OrderEditOp>): void {
+  const itemOf = new Map<string, string>();
+  for (const op of ops) {
+    if (op.op === 'add') {
+      assertChoicePicks(db, op.menuItemId, op.modifierIds);
+      itemOf.set(op.lineId, op.menuItemId);
+    } else if (op.op === 'options') {
+      const menuItemId = itemOf.get(op.orderItemId);
+      if (menuItemId) assertChoicePicks(db, menuItemId, op.modifierIds);
+    }
+  }
+}
+
+/**
+ * The kitchen's CHANGE slip for a saved edit: the food it added (read on the
+ * order as it is now) and took off (read on the order as it was), never a
+ * delivery charge, each marked a drink or not for the till's drinks rule;
+ * numbered by the order's edits so far.
+ */
+function kitchenChangeOf(
+  db: AppDatabase,
+  orderId: string,
+  saved: SavedOrderEdit,
+  base: OrderSnapshot,
+  byUserId: string,
+  reason: string | null,
+): KitchenChange {
+  const line = (snap: OrderSnapshot, c: OrderEditChangeLine): KitchenChangeLine => {
+    const it = snap.items.find((i) => i.id === c.lineId);
+    return { name: c.menuItemName, quantity: c.quantity, modifiers: c.modifiers, notes: c.notes, drink: it ? isDrinkLine(it) : false };
+  };
+  const editNo = Number(
+    (db.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'orders' AND entity_id = ? AND action = 'order_edit'`).get(orderId) as {
+      n: number;
+    }).n,
+  );
+  return {
+    editNo: Math.max(1, editNo),
+    at: new Date().toISOString(),
+    byUserId,
+    reason: reason?.trim() || null,
+    added: saved.diff.added.filter((l) => !l.fee).map((l) => line(saved.snapshot, l)),
+    removed: saved.diff.removed.filter((l) => !l.fee).map((l) => line(base, l)),
+  };
 }
 
 /**

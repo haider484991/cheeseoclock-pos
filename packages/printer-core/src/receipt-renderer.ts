@@ -89,7 +89,15 @@
  * collects at the door (the total less a refund made while he is out).
  */
 
-import type { DeliveryBill, DrawerSettings, OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
+import type {
+  DeliveryBill,
+  DrawerSettings,
+  KitchenChange,
+  KitchenChangeLine,
+  OrderSnapshot,
+  PrinterWidth,
+  ReceiptCopy,
+} from '@cheeseoclock/shared-types';
 import {
   RECEIPT_EXTRA_LINES_MAX,
   deliveryBillOf,
@@ -1412,6 +1420,149 @@ export function renderKitchenTicket(
   }
   b.newline();
 
+  if (opts.cutPaper !== false) b.cut(true);
+  return b.build();
+}
+
+export interface RenderKitchenChangeOpts {
+  width?: PrinterWidth;
+  /** Cut paper after printing — default true. */
+  cutPaper?: boolean;
+  /**
+   * From the print log. 'retry': the printer failed mid-way, so the first
+   * try may have printed — "* RE-SENT * / CHECK FOR THIS CHANGE BEFORE
+   * COOKING". 'reprint' / 'copy': this change already printed.
+   */
+  stamp?: CopyStamp | null;
+  /** When the slip was queued: one printing 2 minutes or more later says "LATE - sent 19:52". */
+  queuedAt?: Date | null;
+  /** Clock for the "printed at" time — injectable for tests. */
+  now?: Date;
+  /** Who saved the edit, by name. */
+  byName?: string | null;
+  /** This till's kitchen-ticket rules (Settings → Printers), as the order's ticket follows them. */
+  showPhone?: boolean;
+  showDrinks?: boolean;
+  /** One of several slips printed at once: "COPY 1 OF 2". */
+  copyOf?: { n: number; of: number } | null;
+}
+
+/** The lines of one half of a CHANGE slip, with the item's choices and note under it, as the ticket prints them. */
+function changeLines(b: EscPosBuilder, width: PrinterWidth, lines: ReadonlyArray<KitchenChangeLine>): void {
+  for (const it of lines) {
+    b.bold(true).doubleHeight(true);
+    b.wrappedText(`${it.quantity} x ${it.name}`, width);
+    b.bold(false).doubleHeight(false);
+    for (const m of it.modifiers.filter((n) => isLeaveOutChoice(n))) {
+      b.bold(true);
+      for (const ln of wrap(m.toUpperCase(), width - 4)) b.text(`    ${ln}`).newline();
+      b.bold(false);
+    }
+    for (const m of it.modifiers.filter((n) => !isLeaveOutChoice(n))) {
+      for (const ln of wrap(`+ ${m}`, width - 4)) b.text(`    ${ln}`).newline();
+    }
+    if (it.notes) {
+      b.bold(true);
+      for (const ln of wrap(`!! ALLERGY/NOTE: ${it.notes}`, width - 4)) b.text(`    ${ln}`).newline();
+      b.bold(false);
+    }
+  }
+}
+
+/**
+ * The kitchen's CHANGE slip (Edit order, v0.7.36; the owner, 2 Oct 2026:
+ * "same number, ADDED / REMOVED kitchen slips"): only what the edit changed,
+ * as loud as the ticket — what to make now, and what NOT to make — under the
+ * same order number, so the kitchen changes the order on the rail instead of
+ * cooking a second one. Nothing about money. The rest of the order is as on
+ * its first ticket, and the slip says so.
+ *
+ * Layout (80mm / 48 cols):
+ *
+ *                    KITCHEN
+ *                * ORDER CHANGED *
+ *                     #0042
+ *                    DELIVERY
+ *      03/10 19:52                          Ali
+ *      Change 1 - by Ali
+ *      Reason: Customer changed order
+ *      Customer: Hamza              0300 9367865
+ *      ----------------------------------------
+ *      ADD - MAKE NOW
+ *      1 x Fajita Pizza — Large 12"
+ *          NO ONION
+ *          + Extra cheese
+ *      ----------------------------------------
+ *      REMOVE - DO NOT MAKE
+ *      1 x Cola 345 ml
+ *      ----------------------------------------
+ *      Everything else on #0042 stays as it is.
+ */
+export function renderKitchenChangeTicket(
+  snapshot: OrderSnapshot,
+  change: KitchenChange,
+  opts: RenderKitchenChangeOpts = {},
+): Uint8Array {
+  const width: PrinterWidth = opts.width ?? 48;
+  const half = width / 2;
+  const b = new EscPosBuilder(width);
+  const { order } = snapshot;
+  const short = order.orderNumber.split('-').pop() ?? order.orderNumber;
+  const stamp = opts.stamp ?? null;
+  const reprinted = stamp?.kind === 'reprint' || stamp?.kind === 'copy';
+  const resent = stamp?.kind === 'retry';
+
+  b.align('center');
+  b.bold(true).doubleSize(true).wrappedText('KITCHEN', half);
+  b.doubleSize(false).doubleHeight(true).wrappedText('* ORDER CHANGED *', width);
+  if (resent) {
+    b.doubleHeight(false).bold(false).wrappedText('Printer error on first try', width);
+    b.bold(true).wrappedText('CHECK FOR THIS CHANGE BEFORE COOKING', width);
+  }
+  b.doubleHeight(false).bold(true).doubleSize(true).wrappedText(`#${short}`, half);
+  if (reprinted) {
+    b.doubleSize(false).doubleHeight(true).wrappedText('* REPRINT *', width);
+    b.wrappedText('SAME CHANGE - DO NOT DO IT TWICE', width);
+  }
+  b.doubleSize(false).doubleHeight(true).wrappedText(MODE_SHOUT[order.mode], width);
+  b.doubleHeight(false);
+  if (opts.copyOf && opts.copyOf.of > 1) b.wrappedText(`COPY ${opts.copyOf.n} OF ${opts.copyOf.of}`, width);
+  if (order.source === 'web') b.wrappedText(order.mode === 'takeaway' ? 'WEBSITE PICK-UP' : 'WEBSITE ORDER', width);
+  b.bold(false);
+
+  b.align('left');
+  const when = opts.now ?? new Date();
+  b.line(formatTicketTime(when), paperCashierName(snapshot));
+  b.bold(true).wrappedText(`Change ${change.editNo}${opts.byName ? ` - by ${opts.byName}` : ''}`, width).bold(false);
+  if (change.reason) b.wrappedText(`Reason: ${change.reason}`, width);
+  if (!reprinted && opts.queuedAt && when.getTime() - opts.queuedAt.getTime() >= KITCHEN_LATE_MS) {
+    b.bold(true).wrappedText(`LATE - sent ${formatClock(opts.queuedAt)}`, width).bold(false);
+  }
+  if (snapshot.tableLabel) b.line(`Table: ${snapshot.tableLabel}`);
+  const phone = opts.showPhone === false ? null : snapshot.customerPhone;
+  if (snapshot.customerName || phone) b.line(`Customer: ${snapshot.customerName ?? ''}`, phone ?? '');
+  b.rule();
+
+  // Drinks left off when this till's rule says so, as on the order's ticket: the counter hands them out.
+  const keep = (l: KitchenChangeLine) => opts.showDrinks !== false || !l.drink;
+  const added = change.added.filter(keep);
+  const removed = change.removed.filter(keep);
+  const drinksLeftOff = [...change.added, ...change.removed].filter((l) => !keep(l)).reduce((n, l) => n + l.quantity, 0);
+  if (added.length > 0) {
+    b.bold(true).doubleHeight(true).wrappedText('ADD - MAKE NOW', width).doubleHeight(false).bold(false);
+    changeLines(b, width, added);
+    b.rule();
+  }
+  if (removed.length > 0) {
+    b.bold(true).doubleHeight(true).wrappedText('REMOVE - DO NOT MAKE', width).doubleHeight(false).bold(false);
+    changeLines(b, width, removed);
+    b.rule();
+  }
+  if (drinksLeftOff > 0) {
+    b.wrappedText(`${drinksLeftOff} drink${drinksLeftOff === 1 ? '' : 's'} changed at the counter (not listed)`, width);
+  }
+  b.wrappedText(`Everything else on #${short} stays as it is.`, width);
+  b.newline();
   if (opts.cutPaper !== false) b.cut(true);
   return b.build();
 }
