@@ -1402,7 +1402,10 @@ export function findResumableDraft(db: AppDatabase, deviceId: string): OrderSnap
  * removed again, or a shell whose first add-item failed. Nothing of value is
  * lost; left alone they sit in history as empty "open" orders forever. Called
  * when the checkout resumes after a restart, so a draft the cashier is
- * actively building is never touched.
+ * actively building is never touched, and when the counter starts a new cart
+ * (orders:create): the emptied cart it replaces is dropped, never reused. Only
+ * this till's own counter carts; never from createOrder, which the website
+ * bridge calls on the same till.
  */
 export function discardEmptyDrafts(db: AppDatabase, actor: Actor & { userId: string }): number {
   let count = 0;

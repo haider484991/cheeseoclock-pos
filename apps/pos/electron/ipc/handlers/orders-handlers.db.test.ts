@@ -501,3 +501,82 @@ describe.skipIf(!DatabaseSync)('orders:listActive: "Ticket not printed" (v0.7.33
     expect(warn).toHaveBeenCalledWith('Kitchen ticket marks not read', expect.objectContaining({ error: expect.any(String) }));
   });
 });
+
+describe.skipIf(!DatabaseSync)('orders:create drops this till’s emptied cart, never reuses it (owner 2026-10-02)', () => {
+  interface Created {
+    id: string;
+    orderNumber: string;
+  }
+  const create = async (payload: Record<string, unknown> = { mode: 'takeaway' }) =>
+    (await call('orders:create', payload)).data as Created;
+  const row = (id: string) =>
+    db.prepare(`SELECT status, deleted_at AS deletedAt FROM orders WHERE id = ?`).get(id) as {
+      status: string;
+      deletedAt: string | null;
+    };
+  const discards = (id: string) =>
+    db.prepare(`SELECT action FROM audit_log WHERE entity_type = 'orders' AND entity_id = ? AND action = 'discard_empty_draft'`).all(id);
+  const deletes = (id: string) =>
+    db.prepare(`SELECT op FROM sync_queue WHERE entity_type = 'orders' AND entity_id = ? AND op = 'delete'`).all(id);
+  /** A counter cart rung up and then emptied by hand, through the handlers. */
+  const emptiedCart = async (): Promise<Created> => {
+    const o = await create();
+    const added = (await call('orders:addItem', { orderId: o.id, menuItemId: pizzaId, quantity: 1, modifierIds: [] }))
+      .data as OrderSnapshot;
+    const line = added.items[0]!;
+    const left = (await call('orders:removeItem', { orderId: o.id, orderItemId: line.id })).data as OrderSnapshot;
+    expect(left.items).toEqual([]);
+    expect(left.order.status).toBe('open');
+    return o;
+  };
+
+  it('the emptied #0001 is dropped (audit discard_empty_draft, synced as a delete) and the new cart is #0002', async () => {
+    const first = await emptiedCart();
+    expect(first.orderNumber).toMatch(/-0001$/);
+    const next = await create({ mode: 'delivery', cameBy: 'phone' });
+    expect(next.orderNumber).toMatch(/-0002$/);
+    expect(next.id).not.toBe(first.id);
+    expect(row(first.id).deletedAt).not.toBeNull();
+    expect(discards(first.id)).toHaveLength(1);
+    expect(deletes(first.id)).toHaveLength(1);
+    // The new cart is the one in hand: open, not dropped, and what the restart would pick back up once it has a line.
+    expect(row(next.id)).toEqual({ status: 'open', deletedAt: null });
+    expect(discards(next.id)).toEqual([]);
+  });
+
+  it('leaves alone: a cart with a line, another till’s empty cart, sent orders and website orders', async () => {
+    const r = await import('../../db/repositories/order-repo.js');
+    // A cart on this till with something in it (a draft the restart would bring back).
+    const held = r.createOrder(db as never, { mode: 'takeaway' }, ACTOR);
+    r.addOrderItem(db as never, { orderId: held.id, menuItemId: pizzaId, quantity: 1, modifierIds: [], notes: null }, ACTOR);
+    // The other till's empty cart (arrived by sync): that cashier's screen, not this one.
+    const otherTill = r.createOrder(db as never, { mode: 'takeaway' }, { userId: 'u_cash', deviceId: 'dev-till-2' });
+    // A sent order; even one whose lines are all gone (made by hand here) is never a cart.
+    const sent = await sentOrder();
+    db.prepare(`UPDATE order_items SET deleted_at = ? WHERE order_id = ?`).run(T0, sent);
+    // A website order the bridge started on this till, still empty and open.
+    const web = r.createOrder(db as never, { mode: 'delivery', source: 'web' }, ACTOR);
+
+    await create();
+    for (const id of [held.id, otherTill.id, sent, web.id]) {
+      expect(row(id).deletedAt).toBeNull();
+      expect(discards(id)).toEqual([]);
+      expect(deletes(id)).toEqual([]);
+    }
+    expect(row(sent).status).toBe('sent_to_kitchen');
+    expect(row(web.id).status).toBe('open');
+  });
+
+  it('a create that fails drops nothing: the emptied cart and the number stay as they were', async () => {
+    const first = await emptiedCart();
+    // No such table: the new order cannot be written.
+    await expect(create({ mode: 'dine_in', tableId: 'no-such-table' })).rejects.toThrow();
+    expect(row(first.id)).toEqual({ status: 'open', deletedAt: null });
+    expect(discards(first.id)).toEqual([]);
+    expect(deletes(first.id)).toEqual([]);
+    // The next good create drops it then, and takes the number the failed try did not use.
+    const next = await create();
+    expect(next.orderNumber).toMatch(/-0002$/);
+    expect(row(first.id).deletedAt).not.toBeNull();
+  });
+});

@@ -154,10 +154,21 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
    */
   let committed: string | null = null;
 
-  /** The open order, created if there is none. Only call inside `run`. */
+  /**
+   * The open order, created if there is none. Only call inside `run`.
+   *
+   * An emptied cart (every line taken off) is not reused: the next customer
+   * would get its start time and its number (owner 2026-10-02). orders:create
+   * drops it. A delivery started by its area is kept: it is this customer's,
+   * and a delivery charge taken off by hand stays off.
+   */
   async function ensureOrderNow(): Promise<OrderSnapshot> {
     const existing = get().snapshot;
-    if (existing && existing.order.status === 'open') return existing;
+    if (existing && existing.order.status === 'open') {
+      if (existing.items.length > 0) return existing;
+      const { getCustomerFormSnapshot } = await import('../features/checkout/useCustomerForm');
+      if (existing.order.mode === 'delivery' && getCustomerFormSnapshot().area.trim() !== '') return existing;
+    }
     const mode = get().mode;
     const cameBy = mode === 'takeaway' || mode === 'delivery' ? get().cameBy : null;
     const order = await ipc.orders.create({

@@ -181,29 +181,37 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       if (!c.success) throw new IpcGuardError({ code: 'validation_failed', message: 'Walk-in, Phone or WhatsApp' });
       cameBy = c.data;
     }
-    const order = createOrder(
-      ctx.db,
-      {
-        mode: payload.mode,
-        tableId: payload.tableId ?? null,
-        customerId: payload.customerId ?? null,
-        notes: payload.notes ?? null,
-        cameBy,
-      },
-      { userId: s.id, deviceId: ctx.deviceId },
-    );
-    // If the cashier already picked a customer, snapshot them onto the order now.
-    if (payload.customerId) {
-      snapshotCustomerOntoOrder(
+    const actor = { userId: s.id, deviceId: ctx.deviceId };
+    const order = ctx.db.transaction(() => {
+      // A new cart replaces this till's emptied one: dropped (audit discard_empty_draft, synced as a
+      // delete), never reused. Here only, never inside createOrder: the website bridge calls
+      // createOrder on this same till and would drop the cart a cashier is holding.
+      discardEmptyDrafts(ctx.db, actor);
+      const created = createOrder(
         ctx.db,
         {
-          orderId: order.id,
-          customerId: payload.customerId,
-          addressId: payload.customerAddressId ?? null,
+          mode: payload.mode,
+          tableId: payload.tableId ?? null,
+          customerId: payload.customerId ?? null,
+          notes: payload.notes ?? null,
+          cameBy,
         },
-        { userId: s.id, deviceId: ctx.deviceId },
+        actor,
       );
-    }
+      // If the cashier already picked a customer, snapshot them onto the order now.
+      if (payload.customerId) {
+        snapshotCustomerOntoOrder(
+          ctx.db,
+          {
+            orderId: created.id,
+            customerId: payload.customerId,
+            addressId: payload.customerAddressId ?? null,
+          },
+          actor,
+        );
+      }
+      return created;
+    })();
     return ok(order);
   });
 
