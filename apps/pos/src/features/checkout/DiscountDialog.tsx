@@ -1,9 +1,10 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
-import { approvalRuleText, DISCOUNT_REASON_REQUIRED, formatCents } from '@cheeseoclock/pos-domain';
-import { Lock, X } from 'lucide-react';
+import { approvalRuleText, DISCOUNT_REASON_REQUIRED, FREE_ORDER_NEEDS_REASON, formatCents } from '@cheeseoclock/pos-domain';
+import { Gift, Lock, X } from 'lucide-react';
 import { useCheckoutStore } from '../../stores/checkoutStore';
+import { FREE_ORDER_LABEL, FREE_ORDER_REASONS } from './discountWords';
 import { SecretInput } from '../../components/secret/SecretInput';
 import { SecretHint } from '../../components/secret/SecretHint';
 import { approvalProblem, secretReady } from '../../components/secret/secretRules';
@@ -57,12 +58,20 @@ interface Props {
  * owner has made a reason required, the Reason row says "needed" and Apply
  * waits for one (a reason button is still one tap); the main process refuses
  * a discount without one in any case.
+ *
+ * A Free order (v0.7.36; not on foodpanda): 100% off everything — the food,
+ * the value deals and the delivery charge — always with a reason and a
+ * manager's PIN or password. While an order the kitchen has is being changed
+ * (Edit order), no PIN is typed here: Save asks for it when the change needs
+ * one.
  */
 export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const applyDiscount = useCheckoutStore((s) => s.applyDiscount);
   const clearDiscount = useCheckoutStore((s) => s.clearDiscount);
   const busy = useCheckoutStore((s) => s.busy);
+  /** Changing an order the kitchen has (Edit order): a manager's PIN, when needed, is asked at Save. */
+  const editing = useCheckoutStore((s) => s.edit !== null);
   // The owner's approval limit and buttons (checkout:getRules; the released ones until it answers).
   const rules = useDiscountRules();
   const limits = rules.approval;
@@ -78,7 +87,9 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const start = discountDialogStart(current);
   const removingDeal = dealOn && intent === 'removeDeal';
 
-  const [picked, setPicked] = useState<DiscountChoice | null>(start.picked);
+  // A Free order on the order opens on itself.
+  const [free, setFree] = useState(current?.freeOrder === true);
+  const [picked, setPicked] = useState<DiscountChoice | null>(current?.freeOrder === true ? null : start.picked);
   const [customKind, setCustomKind] = useState<'percent' | 'flat'>('percent');
   const [customText, setCustomText] = useState('');
   const [reason, setReasonText] = useState(start.reason);
@@ -116,8 +127,16 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const before = previewDiscount(lines, subtotal, null, rules, mode);
   const after = previewDiscount(lines, subtotal, choice, rules, mode);
   // The discount already on the order, by its OWN frozen rule (the header's first part follows the switch now).
-  const currentWords = current ? currentDiscountWords(current, lines, rules) : null;
-  const needsPin = after.needsApproval || dealOn;
+  const currentWords = current
+    ? current.freeOrder === true
+      ? { now: current.reason ? `${FREE_ORDER_LABEL} (${current.reason})` : FREE_ORDER_LABEL, ruleNote: null }
+      : currentDiscountWords(current, lines, rules)
+    : null;
+  // A Free order is always a manager's; changing an order the kitchen has, Save asks instead.
+  const needsPin = !editing && (free || after.needsApproval || dealOn);
+  const needsPinAtSave = editing && (free || after.needsApproval || dealOn);
+  // A Free order: never on foodpanda (foodpanda prices its orders), nor in place of the owner's foodpanda deal.
+  const offersFree = mode !== 'foodpanda' && !dealOn;
   const pinOk = secretReady(pin);
   // The owner's "a discount needs a reason" (checkout:getRules): the main process decides again on save.
   const reasonProblem = discountReasonProblem(rules.reasonRequired, reason);
@@ -133,7 +152,43 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
     pin,
   });
   const canApply = applyNow.kind === 'save' && !saving && !busy;
-  const primary = discountDialogPrimary({ dealOn, intent, hasChoice: !!choice });
+  // A Free order: its reason and (at the counter) the manager's PIN, as applyFree decides.
+  const canMakeFree = reason.trim() !== '' && (!needsPin || pinOk) && !saving && !busy;
+  const primary = free ? 'apply' : discountDialogPrimary({ dealOn, intent, hasChoice: !!choice });
+
+  /** The Free order button: everything free, with a reason (and a manager's PIN here, or at Save). */
+  function chooseFree(on: boolean) {
+    setFree(on);
+    setError(null);
+    setReasonText('');
+    setCustomText('');
+    if (on) requestAnimationFrame(() => reasonRef.current?.focus());
+  }
+
+  async function applyFree() {
+    if (saving || busy) return;
+    if (!reason.trim()) {
+      setError(FREE_ORDER_NEEDS_REASON);
+      reasonRef.current?.focus();
+      return;
+    }
+    if (needsPin && !pinOk) {
+      setError((pin.trim() ? approvalProblem(pin) : null) ?? "A Free order needs a manager's PIN or password.");
+      pinRef.current?.focus();
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await applyDiscount('percent', 100, reason.trim(), needsPin ? pin : undefined, { free: true });
+      onClose();
+    } catch (e) {
+      setError(`Not made free: ${e instanceof Error ? e.message : 'Unknown error'}`);
+      if (needsPin) setPin('');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   function focusPinSoon() {
     requestAnimationFrame(() => pinRef.current?.focus());
@@ -158,16 +213,21 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   }
 
   async function apply(which: DiscountChoice | null = choice) {
+    if (free) {
+      await applyFree();
+      return;
+    }
     if (saving || busy) return;
     const preview = which ? previewDiscount(lines, subtotal, which, rules, mode) : null;
     // Something to work it on, something picked, something to take off, the reason (said before
     // the PIN, as the main process does), then the manager's PIN: the same decision as the button's.
+    // Changing an order the kitchen has: no PIN here (Save asks for it).
     const step = discountApplyStep({
       onlyValueDeals,
       choice: which,
       typing,
       discountCents: preview?.discountCents ?? 0,
-      needsApproval: (preview?.needsApproval ?? false) || dealOn,
+      needsApproval: !editing && ((preview?.needsApproval ?? false) || dealOn),
       reasonRequired: rules.reasonRequired,
       reason,
       pin,
@@ -329,6 +389,25 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
           </header>
 
           <div className="space-y-3">
+            {free ? (
+              <section
+                aria-label={FREE_ORDER_LABEL}
+                className="space-y-1.5 rounded-xl border-2 border-emerald-500 bg-emerald-50 p-3 text-emerald-950 dark:bg-emerald-950/40 dark:text-emerald-50"
+              >
+                <div className="flex items-center gap-2 text-base font-bold">
+                  <Gift className="h-5 w-5" aria-hidden="true" />
+                  {FREE_ORDER_LABEL}
+                </div>
+                <p className="text-sm">
+                  Everything on this order is free: the food, the value deals and the delivery charge.
+                  {mode === 'delivery' && ' At Send out the drawer pays an outside rider his delivery charge.'}
+                </p>
+                <button type="button" className="ticket-link" onClick={() => chooseFree(false)}>
+                  Back to discounts
+                </button>
+              </section>
+            ) : (
+              <>
             <section aria-label="Percent off">
               <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-stone-500">Percent off</div>
               <div className="grid grid-cols-5 gap-2">
@@ -385,6 +464,27 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                 </div>
               </div>
             </section>
+            {offersFree && (
+              <button
+                type="button"
+                onClick={() => chooseFree(true)}
+                className="flex min-h-[48px] w-full items-center justify-between gap-3 rounded-xl border-2 border-dashed border-emerald-400 px-3 py-2 text-left hover:bg-emerald-50 dark:border-emerald-700 dark:hover:bg-emerald-950/40"
+              >
+                <span className="flex items-center gap-2">
+                  <Gift className="h-5 w-5 shrink-0 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+                  <span>
+                    <span className="font-bold">{FREE_ORDER_LABEL}</span>
+                    <span className="text-sm text-stone-500 dark:text-stone-400"> · everything free, value deals and delivery too</span>
+                  </span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-stone-500">
+                  <Lock className="h-3 w-3" aria-hidden="true" />
+                  manager
+                </span>
+              </button>
+            )}
+              </>
+            )}
 
             <section aria-label="Reason">
               <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-stone-500">
@@ -392,14 +492,14 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                 <span
                   className={cn(
                     'font-normal normal-case tracking-normal',
-                    reasonProblem && 'font-semibold text-amber-700 dark:text-amber-300',
+                    (free ? reason.trim() === '' : reasonProblem) && 'font-semibold text-amber-700 dark:text-amber-300',
                   )}
                 >
-                  {discountReasonHint(rules.reasonRequired)}
+                  {discountReasonHint(free || rules.reasonRequired)}
                 </span>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {reasonButtons(rules.presets.reasons, rules.reasonRequired).map((r) => (
+                {(free ? FREE_ORDER_REASONS : reasonButtons(rules.presets.reasons, rules.reasonRequired)).map((r) => (
                   <button
                     key={r}
                     type="button"
@@ -452,9 +552,28 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                 <SecretHint value={pin} className="mt-1 px-1" />
               </div>
             )}
+            {needsPinAtSave && (
+              <p className="flex items-center gap-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
+                <Lock className="h-3 w-3" aria-hidden="true" />
+                A manager’s PIN or password is asked when you save the change.
+              </p>
+            )}
 
             <div className="rounded-xl bg-stone-100 px-4 py-3 dark:bg-stone-800" aria-live="polite">
-              {choice ? (
+              {free ? (
+                <>
+                  <div className="flex items-baseline justify-between text-sm">
+                    <span className="font-semibold text-emerald-700 dark:text-emerald-400">{FREE_ORDER_LABEL}</span>
+                    <span className="font-mono font-semibold text-emerald-700 dark:text-emerald-400">−{formatCents(before.totalCents)}</span>
+                  </div>
+                  <div className="mt-1 flex items-baseline justify-between">
+                    <span className="text-sm text-stone-500 dark:text-stone-400">
+                      New total <s className="ml-1">{formatCents(before.totalCents)}</s>
+                    </span>
+                    <span className="font-mono text-2xl font-bold">{formatCents(0)}</span>
+                  </div>
+                </>
+              ) : choice ? (
                 <>
                   <div className="flex items-baseline justify-between text-sm">
                     <span className="font-semibold text-emerald-700 dark:text-emerald-400">{describePreview(choice, after, base)}</span>
@@ -489,7 +608,15 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
           <footer className="mt-4 flex items-center gap-2">
             {current && primary !== 'remove' && (
               <Button variant="ghost" className="text-red-700 dark:text-red-400" disabled={saving || busy} onClick={() => void remove()}>
-                {dealOn ? 'Take the deal off' : offerOn ? (offerOn.declined ? 'Put the offer back' : 'Take the offer off') : 'Remove discount'}
+                {dealOn
+                  ? 'Take the deal off'
+                  : offerOn
+                    ? offerOn.declined
+                      ? 'Put the offer back'
+                      : 'Take the offer off'
+                    : current.freeOrder === true
+                      ? 'Take the Free order off'
+                      : 'Remove discount'}
               </Button>
             )}
             <div className="flex-1" />
@@ -501,8 +628,8 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                 {saving ? 'Taking it off…' : 'Take the deal off'}
               </Button>
             ) : (
-              <Button variant="primary" size="lg" disabled={!canApply} onClick={() => void apply()}>
-                {saving ? 'Applying…' : choice ? `Apply ${describeDiscount(choice)}` : 'Apply'}
+              <Button variant="primary" size="lg" disabled={!(free ? canMakeFree : canApply)} onClick={() => void apply()}>
+                {saving ? 'Applying…' : free ? 'Make it free' : choice ? `Apply ${describeDiscount(choice)}` : 'Apply'}
               </Button>
             )}
           </footer>

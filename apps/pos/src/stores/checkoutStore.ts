@@ -1,9 +1,67 @@
 import { create } from 'zustand';
-import type { CameBy, FoodpandaTenderCheck, OrderSnapshot, OrderMode, PaymentMethod } from '@cheeseoclock/shared-types';
+import { v7 as uuidv7 } from 'uuid';
+import type {
+  CameBy,
+  FoodMade,
+  FoodpandaTenderCheck,
+  OrderEditDiff,
+  OrderEditNeeds,
+  OrderEditOp,
+  OrderEditSaved,
+  OrderSnapshot,
+  OrderMode,
+  PaymentMethod,
+} from '@cheeseoclock/shared-types';
 import { isCameBy } from '@cheeseoclock/shared-types';
 import { ipc } from '../ipc/client';
 import { addedLineId, createSerialQueue, findMergeableLine } from '../features/checkout/cartLines';
 import { customersChanged } from '../features/checkout/customerLookups';
+import { appendEditOp, withoutLine } from '../features/checkout/editOps';
+import type { CustomerFormState } from '../features/checkout/CustomerInlinePanel';
+
+/**
+ * Edit order (v0.7.36): an order the kitchen has, being changed at Checkout.
+ * The ticket shows the order as Save will leave it — the till's own preview
+ * (orders:previewEdit), nothing written until Save — and the cart's taps
+ * become the edit's changes (editOps). The counter's own cart is put aside
+ * meanwhile and comes back after Save or Cancel.
+ */
+export interface EditSession {
+  orderId: string;
+  /** The order as the kitchen has it: the ticket's NEW and "was" marks read it. */
+  base: OrderSnapshot;
+  /** What the edit is worked on (Save is refused if the order changed since). */
+  baseKey: string;
+  ops: OrderEditOp[];
+  /** What changes, and what Save will ask for (a manager's PIN, a reason), for the changes so far. */
+  diff: OrderEditDiff;
+  needs: OrderEditNeeds;
+  /** Where the edit was started from (Live Orders, Recent Orders…): the screen goes back there after. */
+  returnTo: string;
+  /** The counter's own cart, put aside while the edit runs. */
+  parked: ParkedCart;
+}
+
+interface ParkedCart {
+  snapshot: OrderSnapshot | null;
+  mode: OrderMode;
+  tableId: string | null;
+  cameBy: CameBy | null;
+  form: CustomerFormState;
+  committed: string | null;
+}
+
+/** Save's answers: the manager's PIN or password, the reason, and "Was the food made?" per item taken off. */
+export interface EditAnswers {
+  approverPin?: string;
+  reason?: string | null;
+  foodMade?: Record<string, FoodMade>;
+}
+
+/** The till answered a change for an order that changed meanwhile (the other till, another edit). */
+export const EDIT_CHANGED_MEANWHILE = 'This order was changed somewhere else while you were changing it. Cancel, then start the change again.';
+/** Pay, Send and the order type are the counter's: not while an order the kitchen has is being changed. */
+export const EDIT_IN_PROGRESS = 'Save or cancel the change to the order first.';
 
 /** The ticket line the cashier last added to or changed — the ticket flashes it, and +/- keys act on it. */
 export interface LineTouch {
@@ -92,11 +150,18 @@ interface CheckoutState {
     area: string,
     opts?: { mayStartOrder?: boolean; forOrderId?: string | null; putBack?: boolean; phone?: string | null },
   ) => Promise<void>;
+  /**
+   * `opts.free`: a Free order (v0.7.36) — 100% off everything, value deals
+   * and the delivery charge too, with a reason and a manager's PIN or
+   * password. While an order the kitchen has is being changed, the PIN is
+   * asked at Save, not here.
+   */
   applyDiscount: (
     discountType: 'percent' | 'flat',
     value: number,
     reason?: string,
     approverPin?: string,
+    opts?: { free?: boolean },
   ) => Promise<void>;
   /**
    * Taking the shop's foodpanda deal off needs a manager's PIN or password.
@@ -139,6 +204,21 @@ interface CheckoutState {
   refreshSnapshot: () => Promise<void>;
   /** Discard the local pointer to the snapshot — used after tender to start fresh. */
   reset: () => void;
+
+  /** The order the kitchen has that is being changed (Edit order, v0.7.36), or null at the counter. */
+  edit: EditSession | null;
+  /**
+   * Start changing an order the kitchen has: the till says whether it may
+   * be changed (refused in its words: paid, out, foodpanda…). The counter's
+   * own cart is put aside. `returnTo`: the screen to go back to after.
+   */
+  startEdit: (orderId: string, returnTo: string) => Promise<void>;
+  /** Undo everything the edit did to one line (one added: gone; one the kitchen has: as it was). */
+  undoEditLine: (lineId: string) => Promise<void>;
+  /** Leave the order as the kitchen has it; the counter's cart comes back. */
+  cancelEdit: () => Promise<void>;
+  /** Save the change (the till asks again for anything missing); the counter's cart comes back. */
+  saveEdit: (answers: EditAnswers) => Promise<OrderEditSaved>;
 }
 
 let touchSeq = 0;
@@ -276,6 +356,42 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
     }
   }
 
+  /**
+   * Inside `run`, while an order is being changed: these changes as the
+   * till works them out (nothing written), and the ticket shows the result.
+   * Refused in the till's words: nothing changes on screen.
+   */
+  async function previewEditNow(ops: OrderEditOp[], touchLine: string | null = null): Promise<void> {
+    const e = get().edit;
+    if (!e) return;
+    const p = await ipc.orders.previewEdit({ orderId: e.orderId, ops });
+    if (p.baseKey !== e.baseKey) throw new Error(EDIT_CHANGED_MEANWHILE);
+    set({ edit: { ...e, ops, diff: p.diff, needs: p.needs }, snapshot: p.snapshot, ...(touchLine ? { lastTouch: touch(touchLine) } : {}) });
+  }
+
+  /** Inside `run`: one or more taps folded into the edit's changes (editOps), then previewed. */
+  async function editWith(more: OrderEditOp | OrderEditOp[], touchLine: string | null = null): Promise<void> {
+    const e = get().edit;
+    if (!e) return;
+    let ops = e.ops;
+    for (const op of Array.isArray(more) ? more : [more]) ops = appendEditOp(ops, op, e.base);
+    await previewEditNow(ops, touchLine);
+  }
+
+  /** Inside `run`: back to the counter's own cart, as it was put aside. */
+  async function leaveEdit(e: EditSession): Promise<void> {
+    const { setCustomerForm } = await import('../features/checkout/useCustomerForm');
+    const p = e.parked;
+    setCustomerForm(p.form);
+    committed = p.committed;
+    set({ edit: null, snapshot: p.snapshot, mode: p.mode, tableId: p.tableId, cameBy: p.cameBy, lastTouch: null });
+  }
+
+  /** The counter's own actions (Pay, Send, the order type…) are refused while an order is being changed. */
+  function notWhileEditing(): void {
+    if (get().edit) throw new Error(EDIT_IN_PROGRESS);
+  }
+
   return {
     snapshot: null,
     mode: 'takeaway',
@@ -283,8 +399,11 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
     cameBy: null,
     busy: false,
     lastTouch: null,
+    edit: null,
 
     async setMode(mode) {
+      // The order the kitchen has keeps its type: nothing to switch while it is being changed.
+      if (get().edit) return;
       // Reflect the choice immediately for the mode-bar highlight.
       set({ mode, tableId: mode === 'dine_in' ? get().tableId : null });
       await run(async () => {
@@ -309,6 +428,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
     },
 
     async setCameBy(cameBy) {
+      if (get().edit) return;
       const was = get().cameBy;
       // The chip lights at once; the order follows in turn with the taps.
       set({ cameBy });
@@ -338,7 +458,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
     async discardDraft() {
       await run(async () => {
         const snap = get().snapshot;
-        if (!snap) return;
+        if (!snap || get().edit) return;
         await ipc.orders.discardDraft(snap.order.id);
         get().reset();
       });
@@ -350,6 +470,14 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
 
     addItem(menuItemId, quantity = 1, modifierIds = [], notes = null) {
       return run(async () => {
+        if (get().edit) {
+          // The same plain item again is one more on that line, as at the counter (the kitchen's
+          // slip says ADD either way); anything else is a new line with its own id.
+          const same = findMergeableLine(get().snapshot?.items ?? [], menuItemId, modifierIds, notes);
+          if (same) return editWith({ op: 'qty', orderItemId: same.id, quantity: same.quantity + quantity }, same.id);
+          const lineId = uuidv7();
+          return editWith({ op: 'add', lineId, menuItemId, quantity, modifierIds, notes }, lineId);
+        }
         const order = await ensureOrderNow();
         const same = findMergeableLine(order.items, menuItemId, modifierIds, notes);
         const snap = same
@@ -371,6 +499,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
 
     updateItemOptions(orderItemId, modifierIds, notes) {
       return run(async () => {
+        if (get().edit) return editWith({ op: 'options', orderItemId, modifierIds, notes }, orderItemId);
         const snap = get().snapshot;
         if (!snap) return;
         const next = await ipc.orders.updateItemOptions({
@@ -388,6 +517,17 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         const snap = get().snapshot;
         const line = snap?.items.find((i) => i.id === orderItemId);
         if (!snap || !line || !line.menuItemId) return;
+        if (get().edit) {
+          // One of a line of several, changed: a new line of one with the choices, one less on the old.
+          const lineId = uuidv7();
+          return editWith(
+            [
+              { op: 'add', lineId, menuItemId: line.menuItemId, quantity: 1, modifierIds, notes },
+              { op: 'qty', orderItemId, quantity: line.quantity - 1 },
+            ],
+            lineId,
+          );
+        }
         // Add the changed one first: if the second step fails the ticket shows
         // one item too many (easy to see) rather than one silently missing.
         const added = await ipc.orders.addItem({
@@ -409,6 +549,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
 
     updateItemQty(orderItemId, quantity) {
       return run(async () => {
+        if (get().edit) return editWith({ op: 'qty', orderItemId, quantity }, quantity > 0 ? orderItemId : null);
         const snap = get().snapshot;
         if (!snap) return;
         const next = await ipc.orders.updateItemQuantity({
@@ -426,6 +567,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         const line = snap?.items.find((i) => i.id === orderItemId);
         if (!snap || !line) return;
         const quantity = line.quantity + delta;
+        if (get().edit) return editWith({ op: 'qty', orderItemId, quantity }, quantity > 0 ? orderItemId : null);
         const next = await ipc.orders.updateItemQuantity({
           orderId: snap.order.id,
           orderItemId,
@@ -437,6 +579,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
 
     removeItem(orderItemId) {
       return run(async () => {
+        if (get().edit) return editWith({ op: 'remove', orderItemId });
         const snap = get().snapshot;
         if (!snap) return;
         const next = await ipc.orders.removeItem({
@@ -449,6 +592,8 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
 
     setDeliveryArea(area, opts = {}) {
       return run(async () => {
+        // The order the kitchen has keeps its customer and its delivery charge as they are.
+        if (get().edit) return;
         const snap = get().snapshot;
         // The order was just sent or paid (the screen not cleared yet): a late ask is not a new order.
         if (snap && snap.order.status !== 'open') return;
@@ -471,8 +616,12 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
       });
     },
 
-    applyDiscount(discountType, value, reason, approverPin) {
+    applyDiscount(discountType, value, reason, approverPin, opts = {}) {
       return run(async () => {
+        // Changing an order the kitchen has: a manager's PIN, when it needs one, is asked at Save.
+        if (get().edit) {
+          return editWith({ op: 'discount', discountType, value, reason: reason ?? null, ...(opts.free ? { free: true } : {}) });
+        }
         const snap = get().snapshot;
         if (!snap) return;
         const next = await ipc.orders.applyDiscount({
@@ -481,6 +630,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
           value,
           reason: reason ?? null,
           ...(approverPin ? { approverPin } : {}),
+          ...(opts.free ? { free: true } : {}),
         });
         set({ snapshot: next });
       });
@@ -488,6 +638,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
 
     clearDiscount(approverPin) {
       return run(async () => {
+        if (get().edit) return editWith({ op: 'clearDiscount' });
         const snap = get().snapshot;
         if (!snap) return;
         const next = await ipc.orders.clearDiscount(snap.order.id, approverPin);
@@ -497,6 +648,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
 
     prepareToPay() {
       return run(async () => {
+        notWhileEditing();
         const snap = get().snapshot;
         if (!snap || snap.order.status !== 'open') return snap;
         // The saved address brings its area's delivery charge with it (the main process, in the
@@ -510,6 +662,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
 
     tender(payments, foodpanda) {
       return run(async () => {
+        notWhileEditing();
         const snap = get().snapshot;
         if (!snap) throw new Error('No open order to tender');
         await commitCustomer(snap.order.id, 'tender');
@@ -525,6 +678,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
 
     sendToKitchen() {
       return run(async () => {
+        notWhileEditing();
         const snap = get().snapshot;
         if (!snap) throw new Error('No open order to send');
         const saved = await commitCustomer(snap.order.id, 'send to kitchen', { again: savesAgain(snap) });
@@ -550,7 +704,8 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
     // there would wait on itself.
     async refreshSnapshot() {
       const snap = get().snapshot;
-      if (!snap) return;
+      // While an order is being changed the ticket is the till's preview, not the stored order.
+      if (!snap || get().edit) return;
       const next = await ipc.orders.get(snap.order.id);
       if (next && get().snapshot?.order.id === next.order.id) set({ snapshot: next });
     },
@@ -561,7 +716,69 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         resetCustomerForm(),
       );
       committed = null;
-      set({ snapshot: null, tableId: null, lastTouch: null, cameBy: null });
+      // A change not saved is dropped (sign-out); the counter's cart put aside is still 'open'
+      // in the till and comes back with "Unfinished order restored".
+      set({ snapshot: null, tableId: null, lastTouch: null, cameBy: null, edit: null });
+    },
+
+    startEdit(orderId, returnTo) {
+      return run(async () => {
+        if (get().edit) throw new Error(EDIT_IN_PROGRESS);
+        // The till says whether it may be changed, in its own words, before anything moves.
+        const p = await ipc.orders.previewEdit({ orderId, ops: [] });
+        const { getCustomerFormSnapshot, resetCustomerForm } = await import('../features/checkout/useCustomerForm');
+        const st = get();
+        const parked: ParkedCart = {
+          snapshot: st.snapshot,
+          mode: st.mode,
+          tableId: st.tableId,
+          cameBy: st.cameBy,
+          form: getCustomerFormSnapshot(),
+          committed,
+        };
+        resetCustomerForm();
+        committed = null;
+        set({
+          edit: { orderId, base: p.snapshot, baseKey: p.baseKey, ops: [], diff: p.diff, needs: p.needs, returnTo, parked },
+          snapshot: p.snapshot,
+          mode: p.snapshot.order.mode,
+          tableId: p.snapshot.order.tableId,
+          cameBy: chipOf(p.snapshot),
+          lastTouch: null,
+        });
+      });
+    },
+
+    undoEditLine(lineId) {
+      return run(async () => {
+        const e = get().edit;
+        if (!e) return;
+        await previewEditNow(withoutLine(e.ops, lineId));
+      });
+    },
+
+    cancelEdit() {
+      return run(async () => {
+        const e = get().edit;
+        if (e) await leaveEdit(e);
+      });
+    },
+
+    saveEdit(answers) {
+      return run(async () => {
+        const e = get().edit;
+        if (!e) throw new Error('Nothing is being changed');
+        const saved = await ipc.orders.saveEdit({
+          orderId: e.orderId,
+          baseKey: e.baseKey,
+          ops: e.ops,
+          ...(answers.approverPin ? { approverPin: answers.approverPin } : {}),
+          ...(answers.reason?.trim() ? { reason: answers.reason.trim() } : {}),
+          ...(answers.foodMade && Object.keys(answers.foodMade).length > 0 ? { foodMade: answers.foodMade } : {}),
+        });
+        await leaveEdit(e);
+        return saved;
+      });
     },
   };
 });

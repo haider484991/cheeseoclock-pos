@@ -601,8 +601,8 @@ describe('a Ready delivery card: "Send out", and "Assign rider" as a small link'
       expect(buttonsWith(c, 'Assign rider')).toEqual([]);
       expect(buttonsWith(c, 'Send out')).toEqual([]);
     }
-    // Byte for byte as before but for review fixes D's last row (undoRowD).
-    expect(sha256(undoRowD(cards.get('#0046')!))).toBe(BEFORE.readyTakeaway);
+    // Byte for byte as before but for review fixes D's last row (undoRowD) and v0.7.36's Edit order pencil.
+    expect(sha256(undoRowD(undoEditIcon(cards.get('#0046')!)))).toBe(BEFORE.readyTakeaway);
   });
 });
 
@@ -1752,15 +1752,22 @@ function undoRowD(card: string): string {
 /** The aria-labels of the icon buttons in this markup, in order. */
 const iconLabels = (markup: string) => [...markup.matchAll(/<button type="button" aria-label="([^"]+)"/g)].map((m) => m[1]);
 
+/** v0.7.36's Edit order icon (the pencil): first in the icons' group of an unpaid order the kitchen has. */
+const EDIT_ICON = 'Edit order (add or take off items)';
+/** The card with v0.7.36's Edit order icon taken back out. */
+const undoEditIcon = (card: string) => card.replace(/<button type="button" aria-label="Edit order \(add or take off items\)".*?<\/button>/, '');
+
 describe('a card’s last row fits the narrowest window (review fixes D): the icons go under the button when they must', () => {
   const KITCHEN = ['Reprint kitchen ticket', 'Print bill or receipt', 'Cancel order (manager approval)'];
+  // v0.7.36: an unpaid order the kitchen has can be changed — its pencil first (four icons fit the narrowest card).
+  const EDITABLE = [EDIT_ICON, ...KITCHEN];
   const PLAIN = ['Print bill or receipt', 'Cancel order (manager approval)'];
   const PAID = ['Print bill or receipt', 'Refund order (manager approval)'];
   const CASES: Array<[string, string, OrderSnapshot, string[]]> = [
-    ['New (sent to the kitchen)', 'Start preparing', delivery(41, 'sent_to_kitchen'), KITCHEN],
-    ['Preparing', 'Mark ready', delivery(43, 'preparing'), KITCHEN],
-    ['a Ready delivery', 'Send out', delivery(42, 'ready'), KITCHEN],
-    ['a Ready takeaway, unpaid', 'Picked up + Pay', delivery(46, 'ready', {}, null, 'takeaway'), KITCHEN],
+    ['New (sent to the kitchen)', 'Start preparing', delivery(41, 'sent_to_kitchen'), EDITABLE],
+    ['Preparing', 'Mark ready', delivery(43, 'preparing'), EDITABLE],
+    ['a Ready delivery', 'Send out', delivery(42, 'ready'), EDITABLE],
+    ['a Ready takeaway, unpaid', 'Picked up + Pay', delivery(46, 'ready', {}, null, 'takeaway'), EDITABLE],
     ['a Ready takeaway, paid', 'Picked up', delivery(48, 'ready', { paidAt: minsAgo(30) }, null, 'takeaway'), ['Reprint kitchen ticket', ...PAID]],
     ['an own rider’s Out card, unpaid', 'Delivered + Pay', delivery(44, 'out_for_delivery', {}, OWN_RIDER), PLAIN],
     ['an own rider’s Out card, paid', 'Delivered', delivery(45, 'out_for_delivery', { paidAt: minsAgo(30) }, OWN_RIDER), PAID],
@@ -1789,7 +1796,9 @@ describe('a card’s last row fits the narrowest window (review fixes D): the ic
 
   it('only the last row changed: with the change taken out, the card is the one before it, byte for byte (pinned below too)', () => {
     const c = card(delivery(41, 'sent_to_kitchen'));
-    const before = undoRowD(c);
+    // v0.7.36's pencil taken out first: the rest is the card as review fixes D left it.
+    expect(iconLabels(c)[0]).toBe(EDIT_ICON);
+    const before = undoRowD(undoEditIcon(c));
     expect(before).not.toContain(ROW_D);
     expect(before).not.toContain(ICONS_D);
     expect(before.indexOf(ROW_BEFORE_D)).toBeGreaterThan(0);

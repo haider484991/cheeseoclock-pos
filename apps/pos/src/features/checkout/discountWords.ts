@@ -28,6 +28,8 @@ type Line = { readonly menuItemName?: string | null; readonly noDiscount?: boole
 
 /** A Free order's name on every screen (v0.7.36: 100% off everything, with a manager's PIN), as the bill prints it. */
 export const FREE_ORDER_LABEL = 'Free order';
+/** The reasons offered for a Free order; any other can be typed. */
+export const FREE_ORDER_REASONS = ['Staff meal', 'Complaint', 'Owner’s guest'] as const;
 
 /** "10%" or "Rs 200". */
 function amountWords(d: Pick<Discount, 'discountType' | 'value'>): string {

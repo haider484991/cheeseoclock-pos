@@ -6,6 +6,7 @@ import {
   ChefHat,
   CreditCard,
   MapPin,
+  Pencil,
   Phone,
   Printer,
   Trash2,
@@ -43,6 +44,7 @@ import { ModeBadge, PaidChip, StatusBadge } from './OrderBadges';
 import { PAYMENT_LABELS, isOwed, orderTimeLabel, shortOrderNumber } from './historyFilters';
 import { historyStockStep } from './stockCopy';
 import { offersKitchenReprint, outsideRiderChipText, sentStepAt } from './boardLogic';
+import { offersEdit, useStartEdit } from './useStartEdit';
 
 interface DrawerProps {
   orderId: string;
@@ -68,6 +70,8 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   // "Delete test order…" is the owner's alone (the main process checks again,
   // and asks for the owner's PIN or password in the dialog).
   const role = useSessionStore((st) => st.user?.role ?? null);
+  // Edit order (v0.7.36): the order opens at Checkout, and this list comes back after Save or Cancel.
+  const startEdit = useStartEdit();
 
   const snapQ = useQuery({
     queryKey: ['orders', 'detail', orderId],
@@ -422,6 +426,20 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
             </div>
 
             <footer className="space-y-2 border-t border-stone-200 px-4 py-3 dark:border-stone-700">
+              {offersEdit(o) && (
+                <Button
+                  variant="secondary"
+                  size="md"
+                  className="w-full whitespace-nowrap"
+                  onClick={() => {
+                    onClose();
+                    void startEdit(o);
+                  }}
+                >
+                  <Pencil className="h-4 w-4" />
+                  Edit order · add or take off items
+                </Button>
+              )}
               {canCollect && (
                 <Button variant="success" size="md" className="w-full whitespace-nowrap" onClick={() => setCollectOpen(true)}>
                   <CreditCard className="h-4 w-4" />

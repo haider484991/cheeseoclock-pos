@@ -21,7 +21,7 @@ import { CustomerInlinePanel } from './CustomerInlinePanel';
 import { foodpandaDealLine } from './foodpandaDealLine';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { isDeliveryChargeName, isLeaveOutChoice } from '@cheeseoclock/shared-types';
-import { cartDiscountDetail, cartOfferDetail, offerOnOrder } from './discountWords';
+import { cartDiscountDetail, cartOfferDetail, FREE_ORDER_LABEL, offerOnOrder } from './discountWords';
 import { useCheckoutRules } from '../settings/shop-rules/useShopSetting';
 
 interface Props {
@@ -45,10 +45,10 @@ function shortMissing(missing: string[]): string {
 }
 
 /** What the × beside the order's discount does, in words. */
-function removeLabel(deal: boolean, offer: { declined: boolean } | null): string {
+function removeLabel(deal: boolean, offer: { declined: boolean } | null, free = false): string {
   if (deal) return 'Take the foodpanda deal off (manager)';
   if (offer) return offer.declined ? 'Put the offer back' : 'Take the offer off this order';
-  return 'Remove discount';
+  return free ? 'Take the Free order off' : 'Remove discount';
 }
 
 /**
@@ -344,7 +344,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
                     </>
                   ) : (
                     <>
-                      Discount
+                      {discount?.freeOrder === true ? FREE_ORDER_LABEL : 'Discount'}
                       {discount && (
                         <span className="font-normal">
                           {/* "· 10% off food" when the discount's own frozen rule left the delivery charge alone. */}
@@ -357,8 +357,8 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
                 <button
                   type="button"
                   onClick={removeDiscount}
-                  aria-label={removeLabel(dealLine !== null, offerOn)}
-                  title={removeLabel(dealLine !== null, offerOn)}
+                  aria-label={removeLabel(dealLine !== null, offerOn, discount?.freeOrder === true)}
+                  title={removeLabel(dealLine !== null, offerOn, discount?.freeOrder === true)}
                 >
                   {offerOn?.declined ? <RotateCcw className="h-3 w-3" /> : <X className="h-3 w-3" />}
                 </button>

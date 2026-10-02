@@ -32,11 +32,26 @@ export function OrderDetails() {
   const cameBy = useCheckoutStore((s) => s.cameBy);
   const setCameBy = useCheckoutStore((s) => s.setCameBy);
   const startedAt = useCheckoutStore((s) => s.snapshot?.order.createdAt ?? null);
+  /** Edit order (v0.7.36): the order the kitchen has keeps its type and how it came in. */
+  const editing = useCheckoutStore((s) => (s.edit ? s.edit.base.order.orderNumber : null));
   const rules = useCheckoutRules();
   const { toast } = useToast();
   const offers = rules.data?.offers ?? null;
   // An order is judged by when it was started; before the first item, by now.
   const showChips = cameByChipsShown(offers, mode, startedAt ?? new Date().toISOString());
+
+  if (editing) {
+    return (
+      <section className="order-details" aria-labelledby="order-details-title">
+        <div className="order-details-heading">
+          <div>
+            <h1 id="order-details-title">Add to #{editing.split('-').pop()}</h1>
+            <p className="text-xs text-stone-500">Tap items to add them. Change or take off lines on the ticket. Nothing is saved until Save.</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   async function switchMode(next: OrderMode) {
     if (next === mode) return;

@@ -153,7 +153,9 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: ride
           ? `Rider paid · ${formatCents(takeCents)} for the shop`
           : alreadyPaid
             ? `Marked ${verb}`
-            : `${verbCap} · payment taken`,
+            : order.totalCents === 0
+              ? `${verbCap} · nothing to pay`
+              : `${verbCap} · payment taken`,
         ...change,
       });
       if (refuse) onDone({ refundItem: true, snap: after });

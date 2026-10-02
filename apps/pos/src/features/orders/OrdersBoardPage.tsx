@@ -10,6 +10,7 @@ import {
   Hourglass,
   Inbox,
   MapPin,
+  Pencil,
   Phone,
   Printer,
   RefreshCw,
@@ -33,6 +34,7 @@ import { SendOutDialog } from './SendOutDialog';
 import { VoidOrderDialog } from './VoidOrderDialog';
 import { RefundOrderDialog } from './RefundOrderDialog';
 import { ModeBadge, PaidChip, TicketNotPrinted } from './OrderBadges';
+import { offersEdit, useStartEdit } from './useStartEdit';
 import { ALERT_WATCH_KEY } from '../notifications/useAlertWatch';
 import {
   ageLabel,
@@ -156,6 +158,8 @@ export function OrdersBoardPage() {
   const [refundFor, setRefundFor] = useState<{ snap: OrderSnapshot; refusedItem: boolean } | null>(null);
   const qc = useQueryClient();
   const { toast } = useToast();
+  // Edit order (v0.7.36): the order opens at Checkout, and the board comes back after Save or Cancel.
+  const startEdit = useStartEdit();
   const now = useNow(20_000);
   // The owner's amber / red minutes (checkout:getRules; the released 15 / 30 until it answers).
   const timing = useKitchenTiming();
@@ -366,6 +370,8 @@ export function OrdersBoardPage() {
                         onReprint={() => reprint.mutate(snap.order.id)}
                         onReprintKitchen={() => reprintKitchen.mutate(snap.order.id)}
                         onCancel={() => (snap.order.paidAt !== null ? setRefundFor({ snap, refusedItem: false }) : setVoidFor(snap))}
+                        // Edit order (v0.7.36): only while the till would let it be changed.
+                        onEdit={offersEdit(snap.order) ? () => void startEdit(snap.order) : null}
                       />
                     );
                   })
@@ -529,6 +535,8 @@ interface OrderCardProps {
   onReprint: () => void;
   onReprintKitchen: () => void;
   onCancel: () => void;
+  /** Edit order (add or take off items), or null when this order can't be changed. */
+  onEdit: (() => void) | null;
 }
 
 function OrderCard({
@@ -545,6 +553,7 @@ function OrderCard({
   onReprint,
   onReprintKitchen,
   onCancel,
+  onEdit,
 }: OrderCardProps) {
   const { order } = snap;
   const paid = order.paidAt !== null;
@@ -576,6 +585,12 @@ function OrderCard({
   // `short`: 40 px tall, beside Rider paid (the big buttons' rows are 44).
   const icons = (short = false) => (
     <>
+      {/* Edit order (v0.7.36): add or take off items under the same number, while the kitchen has it unpaid. */}
+      {onEdit && (
+        <IconButton label="Edit order (add or take off items)" onClick={onEdit} short={short}>
+          <Pencil className="h-4 w-4" />
+        </IconButton>
+      )}
       {/* Only while the kitchen still has it: the till refuses the ticket after that. */}
       {offersKitchenReprint(order.status) && (
         <IconButton label="Reprint kitchen ticket" onClick={onReprintKitchen} short={short}>

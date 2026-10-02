@@ -194,6 +194,22 @@ html.dark .pizza-size-close:hover { background: #292524; }
 .ticket-keys { display: flex; justify-content: center; gap: 14px; margin-top: 8px; font-size: 11px; color: #a8a29e; }
 .ticket-keys kbd { padding: 0 4px; border-radius: 4px; background: #f5f5f4; font-family: 'JetBrains Mono', monospace; color: #78716c; }
 
+/* Edit order (v0.7.36): the ticket of an order the kitchen has, being changed. */
+.ticket.is-editing .ticket-head { background: #fffbeb; }
+.ticket-edit-who { margin-top: 4px; font-size: 12px; color: #78716c; overflow-wrap: anywhere; }
+.ticket-edit-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 11px; font-weight: 700; vertical-align: 1px; }
+.ticket-edit-badge.is-new { background: #d1fae5; color: #065f46; }
+.ticket-taking-off { margin: 8px 6px 4px; padding: 8px 10px; border-radius: 8px; background: #fef2f2; }
+.ticket-taking-off h3 { margin: 0 0 4px; font-size: 12px; font-weight: 700; color: #991b1b; }
+.ticket-taking-off ul { margin: 0; padding: 0; list-style: none; }
+.ticket-taking-off li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: #7f1d1d; }
+.ticket-taking-off li > span { text-decoration: line-through; }
+html.dark .ticket.is-editing .ticket-head { background: #2a2210; }
+html.dark .ticket-edit-badge { background: #3a2e10; color: #fde68a; }
+html.dark .ticket-edit-badge.is-new { background: #064e3b; color: #a7f3d0; }
+html.dark .ticket-taking-off { background: #3b1414; }
+html.dark .ticket-taking-off h3, html.dark .ticket-taking-off li { color: #fecaca; }
+
 .menu-sections { display: flex; flex-direction: column; gap: 18px; }
 .menu-section-title { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #78716c; }
 html.dark .menu-section-title { color: #a8a29e; }

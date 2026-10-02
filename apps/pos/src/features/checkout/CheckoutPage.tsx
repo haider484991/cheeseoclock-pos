@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { goTo } from '../../navigation';
+import { editChangesNothing } from '@cheeseoclock/pos-domain';
+import type { OrderEditSaved } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
-import { OfferHeldBack, useCheckoutStore } from '../../stores/checkoutStore';
+import { OfferHeldBack, useCheckoutStore, type EditSession } from '../../stores/checkoutStore';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { EditOrderTicket } from './EditOrderTicket';
+import { EditSaveDialog } from './EditSaveDialog';
 import { CategoryRail } from './CategoryRail';
 import { ItemGrid } from './ItemGrid';
 import { PizzaSizeDialog } from './PizzaSizeDialog';
@@ -45,6 +51,9 @@ export function CheckoutPage() {
   const lastTouch = useCheckoutStore((s) => s.lastTouch);
   const reset = useCheckoutStore((s) => s.reset);
   const resumeDraft = useCheckoutStore((s) => s.resumeDraft);
+  /** Edit order (v0.7.36): an order the kitchen has, being changed here. */
+  const edit = useCheckoutStore((s) => s.edit);
+  const [saveOpen, setSaveOpen] = useState(false);
   const gate = useTenderGate();
   const { toast } = useToast();
   // Only delivery forces the details step; a takeaway's customer is optional (owner 2026-09-26).
@@ -166,11 +175,57 @@ export function CheckoutPage() {
     setTenderOpen(true);
   }
 
+  /** Edit order: the Save box, when something changed. */
+  function openSave() {
+    const e = useCheckoutStore.getState().edit;
+    if (!e) return;
+    if (editChangesNothing(e.diff)) {
+      toast({ title: 'Nothing changed yet', description: 'Add items from the menu, or change a line on the ticket.', variant: 'warning' });
+      return;
+    }
+    setSaveOpen(true);
+  }
+
+  /** Edit order: leave the order as the kitchen has it (asked first when something changed), and go back. */
+  async function leaveEdit() {
+    const e = useCheckoutStore.getState().edit;
+    if (!e) return;
+    const short = e.base.order.orderNumber.split('-').pop();
+    if (!editChangesNothing(e.diff) && !(await askConfirm(`Leave #${short} as the kitchen has it? The changes made here are dropped.`))) return;
+    try {
+      await useCheckoutStore.getState().cancelEdit();
+      void goTo(e.returnTo);
+    } catch (err) {
+      toast({ title: 'Could not cancel the change', description: err instanceof Error ? err.message : 'Unknown error', variant: 'error' });
+    }
+  }
+
+  /** Edit order saved: say what the kitchen gets, and go back where the change was started. */
+  function handleEditSaved(saved: OrderEditSaved, session: EditSession) {
+    setSaveOpen(false);
+    const short = saved.snapshot.order.orderNumber.split('-').pop();
+    const food = (lines: OrderEditSaved['diff']['added']) => lines.filter((l) => !l.fee).reduce((n, l) => n + l.quantity, 0);
+    const added = food(saved.diff.added);
+    const removed = food(saved.diff.removed);
+    const slip = [added > 0 ? `${added} to make` : null, removed > 0 ? `${removed} not to make` : null].filter(Boolean).join(', ');
+    const parts = [
+      slip ? `The kitchen gets a CHANGE slip: ${slip}.` : null,
+      saved.diff.freeOrder ? 'Free order: nothing to pay.' : `New total ${formatCents(saved.snapshot.order.totalCents)}.`,
+    ].filter(Boolean);
+    toast({ title: `#${short} changed`, description: parts.join(' '), variant: 'success' });
+    void goTo(session.returnTo);
+  }
+
   /**
    * The ticket's big button, from the keyboard: Confirm order → customer
    * details → Send to kitchen (takeaway / delivery), or Pay (Foodpanda).
+   * Changing an order the kitchen has: Save.
    */
   function primaryAction() {
+    if (useCheckoutStore.getState().edit) {
+      openSave();
+      return;
+    }
     if (!hasItems) return;
     if (needsCustomer && checkoutStep === 'items') {
       setCheckoutStep('details');
@@ -228,6 +283,8 @@ export function CheckoutPage() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.defaultPrevented) return;
+      // The Save box of a change answers its own keys (Enter saves, Esc closes it).
+      if (saveOpen) return;
       if (pizzaChoice || modifierForItem || customizeLineId || tenderOpen || receiptOpen || discountOpen) {
         if (e.key === 'Escape') {
           if (pizzaChoice) setPizzaChoice(null);
@@ -249,6 +306,11 @@ export function CheckoutPage() {
       const inEmptySearch = active === searchRef.current && search === '';
 
       if (e.key === 'Escape') {
+        // Changing an order the kitchen has: Esc leaves it as it was (asked first).
+        if (edit && !typing) {
+          void leaveEdit();
+          return;
+        }
         if (checkoutStep === 'details' && !busy && !typing) setCheckoutStep('items');
         return;
       }
@@ -281,6 +343,8 @@ export function CheckoutPage() {
       if (!hasItems) return;
       if (e.key === 'F1' || e.key === 'F2') {
         e.preventDefault();
+        // An order the kitchen has is not sent or paid from here: Save, then Live Orders.
+        if (edit) return;
         if (needsCustomer && checkoutStep === 'items') {
           setCheckoutStep('details');
           return;
@@ -300,7 +364,7 @@ export function CheckoutPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pizzaChoice, modifierForItem, customizeLineId, tenderOpen, receiptOpen, discountOpen, snapshot, reset, gate, toast, checkoutStep, needsCustomer, hasItems, busy, mode, search, lastTouch]);
+  }, [pizzaChoice, modifierForItem, customizeLineId, tenderOpen, receiptOpen, discountOpen, snapshot, reset, gate, toast, checkoutStep, needsCustomer, hasItems, busy, mode, search, lastTouch, edit, saveOpen]);
 
   function handleChooseSize(choice: MenuChoice) {
     sizeTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -453,7 +517,13 @@ export function CheckoutPage() {
         </div>
       </section>
 
-      <CartPane step={checkoutStep} onContinue={() => setCheckoutStep('details')} onBack={() => setCheckoutStep('items')} onPay={() => void openPay()} onDiscount={() => setDiscountOpen('change')} onRemoveDeal={() => setDiscountOpen('removeDeal')} onSendToKitchen={handleSendToKitchen} onCustomize={setCustomizeLineId} />
+      {edit ? (
+        <EditOrderTicket onSave={openSave} onCancel={() => void leaveEdit()} onDiscount={() => setDiscountOpen('change')} onCustomize={setCustomizeLineId} />
+      ) : (
+        <CartPane step={checkoutStep} onContinue={() => setCheckoutStep('details')} onBack={() => setCheckoutStep('items')} onPay={() => void openPay()} onDiscount={() => setDiscountOpen('change')} onRemoveDeal={() => setDiscountOpen('removeDeal')} onSendToKitchen={handleSendToKitchen} onCustomize={setCustomizeLineId} />
+      )}
+
+      {saveOpen && edit && <EditSaveDialog onClose={() => setSaveOpen(false)} onSaved={handleEditSaved} />}
 
       {pizzaChoice && (
         <PizzaSizeDialog choice={pizzaChoice} returnFocus={sizeTriggerRef.current} onClose={() => setPizzaChoice(null)} onSelect={(item) => { setPizzaChoice(null); void handleAddItem(item); }} />

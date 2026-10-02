@@ -354,8 +354,11 @@ describe('Apply, decided in one place: the button, Enter and a second tap on a p
     expect(apply).toContain("discountRefused(e instanceof Error ? e.message : 'Unknown error', step.approverPin !== undefined)");
     expect(apply).toContain('setError(refused.error)');
     expect(apply).not.toContain('`Discount not applied');
-    // Enter and a second tap call apply() — never applyDiscount directly.
-    expect(src.match(/applyDiscount\(/g)?.length).toBe(1);
+    // Enter and a second tap call apply() — never applyDiscount directly. A Free order (v0.7.36)
+    // is apply()'s too: its one other call is in applyFree, which only apply() reaches.
+    expect(src.match(/applyDiscount\(/g)?.length).toBe(2);
+    expect(src.match(/applyFree\(/g)?.length).toBe(2);
+    expect(apply.slice(0, decide)).toContain('await applyFree();');
   });
 });
 
