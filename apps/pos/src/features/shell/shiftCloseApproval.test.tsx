@@ -51,6 +51,7 @@ import { shiftCarryOverText, shiftDetailLines } from '../reports/reportFormat';
 import { TeamLeakageTab } from '../reports/tabs/TeamLeakageTab';
 import {
   CASHIER_CANNOT_CLOSE,
+  CLOSE_HINT_CHECK_FAILED,
   CLOSE_HINT_CHECKING,
   CLOSE_HINT_COINS_LARGE,
   CLOSE_HINT_NOT_STARTED,
@@ -75,8 +76,15 @@ import {
   STOP_CLOSING_QUESTION,
   UnpaidCarryOver,
 } from './ShiftWidget';
-import { CLEAR_ALL_QUESTION, NOTE_COUNTER_FIRST_ROW, NoteCounter, noteCounterKeyAction } from './NoteCounter';
-import { noteCounterInitial, noteCounterKey, noteCounterToCount, type NoteCounterState } from './noteCounterState';
+import {
+  CLEAR_ALL_QUESTION,
+  NOTE_COUNTER_CHOSEN_ROW,
+  NOTE_COUNTER_FIRST_ROW,
+  NOTE_COUNTER_PAD,
+  NoteCounter,
+  noteCounterKeyAction,
+} from './NoteCounter';
+import { noteCounterInitial, noteCounterKey, noteCounterPad, noteCounterToCount, type NoteCounterState } from './noteCounterState';
 import {
   dismissShiftCloseOutcome,
   noteShiftReportFailed,
@@ -89,8 +97,13 @@ import { CLOSE_PAUSES_WEBSITE_NOTE, CLOSE_PAUSES_WEBSITE_TEXT } from './webOrder
 
 // What the last dialog was given to close itself with (Root's onOpenChange,
 // Content's Escape and outside-tap handlers): Radix calls these on Escape
-// and on a tap on the dimmed area.
-const radix = vi.hoisted(() => ({ root: {} as Record<string, unknown>, content: {} as Record<string, unknown> }));
+// and on a tap on the dimmed area. `contentRef`: the ref the box put on its
+// Content, so a test can stand a box (its rows) in for the window's.
+const radix = vi.hoisted(() => ({
+  root: {} as Record<string, unknown>,
+  content: {} as Record<string, unknown>,
+  contentRef: null as unknown,
+}));
 
 // A server render has no portal: the dialog's parts render in place.
 vi.mock('@radix-ui/react-dialog', async () => {
@@ -110,10 +123,11 @@ vi.mock('@radix-ui/react-dialog', async () => {
     },
     Portal: pass,
     Overlay: () => null,
-    Content: (props: P & Record<string, unknown>) => {
+    Content: React.forwardRef<unknown, P & Record<string, unknown>>((props, ref) => {
       radix.content = props;
+      radix.contentRef = ref;
       return content(props);
-    },
+    }),
     Title: tag('h2'),
     Description: tag('p'),
     Close: pass,
@@ -131,6 +145,25 @@ vi.mock('../../components/confirm/ConfirmHost', async (importOriginal) => ({
     return Promise.resolve(confirmAsk.answer);
   },
 }));
+
+// The note count as the close box hands it on (its Clear all is a plain
+// button, out of reach of a server render), and a count to open the box on
+// (`seed.count`; unset: a fresh one) for what only a started count does.
+const counter = vi.hoisted(() => ({ props: null as null | { onClear: () => void; state: unknown } }));
+const seed = vi.hoisted(() => ({ count: null as unknown }));
+vi.mock('./NoteCounter', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./NoteCounter')>();
+  const React = await import('react');
+  const NoteCounter = (props: Parameters<typeof real.NoteCounter>[0]) => {
+    counter.props = props;
+    return React.createElement(real.NoteCounter, props);
+  };
+  return { ...real, NoteCounter };
+});
+vi.mock('./noteCounterState', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./noteCounterState')>();
+  return { ...real, noteCounterInitial: () => (seed.count as ReturnType<typeof real.noteCounterInitial> | null) ?? real.noteCounterInitial() };
+});
 
 // What each render asked the till for (a cashier's login must not ask for the shift's money).
 // `closeReply` / `printReply`: what Close shift and the shift report's print answer (unset: no answer yet).
@@ -236,8 +269,11 @@ function signIn(role: AuthenticatedUser['role']) {
   useSessionStore.setState({ user: { id: 'u1' as UUID, fullName: 'Test', role, sessionId: 's1' as UUID }, status: 'authenticated' });
 }
 
-function render(node: ReactNode, seed: Array<[readonly unknown[], unknown]> = []): string {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function render(
+  node: ReactNode,
+  seed: Array<[readonly unknown[], unknown]> = [],
+  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+): string {
   for (const [key, data] of seed) qc.setQueryData(key, data);
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
@@ -294,6 +330,9 @@ afterEach(() => {
   seen.toasts.length = 0;
   confirmAsk.calls.length = 0;
   confirmAsk.answer = false;
+  counter.props = null;
+  seed.count = null;
+  radix.contentRef = null;
   dismissShiftCloseOutcome();
   useSessionStore.setState({ user: null, status: 'idle' });
 });
@@ -750,7 +789,7 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
     expect(CLOSE_HINT_CHECKING).toBe('Checking the orders on this till…');
     expect(CLOSE_HINT_REASON).toBe('Give a reason for the unpaid orders (below the count).');
     expect(CLOSE_HINT_COINS_LARGE).toBe('Rs 1,000 or more in coins and other: count the notes in their own rows.');
-    const all = { started: true, checked: true, reasonMissing: false, otherIsLarge: false };
+    const all = { failed: false, started: true, checked: true, reasonMissing: false, otherIsLarge: false };
     expect(closeShiftHint({ ...all, started: false, checked: false, reasonMissing: true, otherIsLarge: true })).toEqual({
       text: CLOSE_HINT_NOT_STARTED,
       amber: false,
@@ -795,7 +834,18 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
   });
 
   it('the keyboard: digits, Backspace, Delete, Enter and the arrows count; a held digit, Ctrl, typing in a box and Tab do not', () => {
-    const k = { key: '5', ctrlKey: false, altKey: false, metaKey: false, repeat: false, isComposing: false, typing: false, ownsEnter: false, onRow: false };
+    const k = {
+      key: '5',
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      repeat: false,
+      isComposing: false,
+      typing: false,
+      ownsEnter: false,
+      onRow: false,
+      onPad: false,
+    };
     for (const key of ['0', '5', '9', 'Backspace', 'Delete', 'Enter', 'ArrowUp', 'ArrowDown']) {
       expect(noteCounterKeyAction({ ...k, key }), key).toBe('count');
     }
@@ -820,15 +870,19 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
     signIn('manager');
     render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={VIA_PIN} />);
     const onKeyDown = radix.content['onKeyDown'] as (e: unknown) => void;
-    const stopped = (key: string, target: Record<string, unknown> = { tagName: 'DIV', dataset: {} }, more: Record<string, unknown> = {}) => {
+    const stopped = (
+      key: string,
+      target: Record<string, unknown> = { tagName: 'DIV', dataset: {}, closest: () => null },
+      more: Record<string, unknown> = {},
+    ) => {
       const preventDefault = vi.fn();
       onKeyDown({ key, ctrlKey: false, altKey: false, metaKey: false, repeat: false, nativeEvent: { isComposing: false }, target, preventDefault, ...more });
       return preventDefault.mock.calls.length > 0;
     };
     expect(stopped('5')).toBe(true);
-    expect(stopped('Enter', { tagName: 'BUTTON', dataset: { noteRow: '500' }, matches: () => true })).toBe(true);
-    expect(stopped('Enter', { tagName: 'BUTTON', dataset: {}, matches: () => true })).toBe(false);
-    expect(stopped('5', { tagName: 'INPUT', dataset: {} })).toBe(false);
+    expect(stopped('Enter', { tagName: 'BUTTON', dataset: { noteRow: '500' }, matches: () => true, closest: () => null })).toBe(true);
+    expect(stopped('Enter', { tagName: 'BUTTON', dataset: {}, matches: () => true, closest: () => null })).toBe(false);
+    expect(stopped('5', { tagName: 'INPUT', dataset: {}, closest: () => null })).toBe(false);
     expect(stopped('5', undefined, { ctrlKey: true })).toBe(false);
     expect(stopped('Tab')).toBe(false);
   });
@@ -862,7 +916,8 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
     const onClose = vi.fn();
     render(<CloseShiftDialog shiftId="shift-1" onClose={onClose} approverPin="Manager-pass-7" check={VIA_PIN} />);
     for (const handler of ['onEscapeKeyDown', 'onPointerDownOutside']) {
-      const event = { preventDefault: vi.fn() };
+      // A tap outside: on something still on the page.
+      const event = { preventDefault: vi.fn(), detail: { originalEvent: { target: { isConnected: true } } } };
       (radix.content[handler] as (e: typeof event) => void)(event);
       // Radix is stopped from closing it: leaving is the box's own decision.
       expect(event.preventDefault, handler).toHaveBeenCalled();
@@ -878,6 +933,241 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
     expect(open.preventDefault).toHaveBeenCalled();
     expect(open.currentTarget.querySelector).toHaveBeenCalledWith('[data-note-row="5000"]');
     expect(row.focus).toHaveBeenCalled();
+  });
+
+  // Review fixes A (v0.7.35), each seen in the till's own Electron 32: a
+  // tapped pad key keeps the keyboard, so Enter on the keyboard pressed it
+  // again (pad 5 + Enter gave 55, still on Rs 5,000); and the keyboard was
+  // dropped on the page behind the box (typing did nothing) after Open
+  // drawer to count, after Clear all and after "Keep counting".
+
+  /** A key of the pad as the keydown finds it: a tapped button (Chromium: reached with the keyboard), inside the pad. */
+  const padKey = { tagName: 'BUTTON', dataset: {}, matches: () => true, closest: (sel: string) => (sel === NOTE_COUNTER_PAD ? {} : null) };
+  /** Close shift (or Cancel) reached with Tab. */
+  const tabbedButton = { tagName: 'BUTTON', dataset: {}, matches: () => true, closest: () => null };
+  const aRow = { tagName: 'BUTTON', dataset: { noteRow: '500' }, matches: () => true, closest: () => null };
+  /** Lets the answer to an in-window question come back. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  /**
+   * The close box's rows, put on its Content (as the till's window has them):
+   * the chosen row, and where the keyboard is — 'page' (behind the box) until
+   * a row takes it.
+   */
+  function plantBox(chosen: string): { focused: () => string } {
+    let focused = 'page';
+    const rowFor = (sel: string): string | null =>
+      sel === NOTE_COUNTER_CHOSEN_ROW ? chosen : (/^\[data-note-row="([^"]+)"\]$/.exec(sel)?.[1] ?? null);
+    const box = {
+      querySelector: (sel: string) => {
+        const key = rowFor(sel);
+        return key === null
+          ? null
+          : {
+              focus: () => {
+                focused = key;
+              },
+            };
+      },
+    };
+    if (!radix.contentRef) throw new Error('The close box put no ref on its Content: it cannot find its rows');
+    (radix.contentRef as { current: unknown }).current = box;
+    return { focused: () => focused };
+  }
+
+  it('(review fixes A) the keyboard’s Enter on a tapped pad key goes to the next row: the key is not pressed again, and the shift is never closed', () => {
+    const k = {
+      key: 'Enter',
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      repeat: false,
+      isComposing: false,
+      typing: false,
+      ownsEnter: true,
+      onRow: false,
+      onPad: true,
+    };
+    expect(noteCounterKeyAction(k)).toBe('count');
+    expect(noteCounterKeyAction({ ...k, ownsEnter: false })).toBe('count');
+    // The rules that were there still hold: Close shift or Cancel reached with Tab owns Enter; a row does not.
+    expect(noteCounterKeyAction({ ...k, onPad: false })).toBeNull();
+    expect(noteCounterKeyAction({ ...k, onPad: false, onRow: true })).toBe('count');
+    expect(noteCounterKeyAction({ ...k, typing: true })).toBeNull();
+
+    // Pad 5, then the keyboard's Enter: 5 notes of Rs 5,000, and on to Rs 1,000 (not 55, still on Rs 5,000).
+    const pad5 = noteCounterKey(noteCounterPad(noteCounterInitial(), '5'), 'Enter');
+    expect(pad5.cells[0]).toBe('5');
+    expect(pad5.active).toBe(1);
+    // Pad 1, 2, 5 and ←, then Enter: 12 (not 1).
+    const typed = ['1', '12', '125', '12'].reduce(noteCounterPad, noteCounterInitial());
+    expect(noteCounterKey(typed, 'Enter')).toEqual({ cells: ['12', '', '', '', '', '', '', ''], active: 1 });
+
+    signIn('manager');
+    const out = render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={VIA_PIN} />);
+    // The pad's keys are inside the box's NOTE_COUNTER_PAD, the rows are not.
+    expect(NOTE_COUNTER_PAD).toBe('[data-note-pad]');
+    expect(out).toContain(
+      '<div data-note-pad=""><div class="flex flex-col gap-4"><div class="grid grid-cols-3 gap-3" role="group" aria-label="Number pad for the note count">',
+    );
+    expect(out.indexOf('data-note-pad')).toBeGreaterThan(out.lastIndexOf('data-note-row'));
+    const onKeyDown = radix.content['onKeyDown'] as (e: unknown) => void;
+    const onKeyUp = radix.content['onKeyUp'] as (e: unknown) => void;
+    const stopped = (handler: (e: unknown) => void, key: string, target: unknown) => {
+      const preventDefault = vi.fn();
+      handler({ key, ctrlKey: false, altKey: false, metaKey: false, repeat: false, nativeEvent: { isComposing: false }, target, preventDefault });
+      return preventDefault.mock.calls.length > 0;
+    };
+    // Enter on a pad key: kept from the browser (it would press the key again), and counted.
+    expect(stopped(onKeyDown, 'Enter', padKey)).toBe(true);
+    expect(stopped(onKeyDown, 'Enter', aRow)).toBe(true);
+    // Only Close shift (or Cancel) itself, reached with Tab, gets Enter.
+    expect(stopped(onKeyDown, 'Enter', tabbedButton)).toBe(false);
+    // The space bar presses a button as it comes up: on a pad key it would press the tapped key again.
+    expect(stopped(onKeyUp, ' ', padKey)).toBe(true);
+    expect(stopped(onKeyUp, ' ', tabbedButton)).toBe(false);
+    expect(stopped(onKeyUp, ' ', aRow)).toBe(false);
+    expect(stopped(onKeyUp, 'Enter', padKey)).toBe(false);
+    expect(asked.calls).not.toContain('close');
+  });
+
+  it('(review fixes A) the keyboard goes back on the chosen row after Open drawer to count, after Clear all (either answer) and after "Keep counting"', async () => {
+    signIn('manager');
+    // Open drawer to count turns off while the drawer opens: the keyboard goes to the row first.
+    render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={VIA_PIN} />);
+    let box = plantBox('5000');
+    tapButton('Open drawer to count');
+    expect(box.focused()).toBe('5000');
+    await settle();
+    expect(asked.calls).toContain('openDrawer');
+
+    // Clear all on a count typed up to the Rs 500 row: cleared, back on Rs 5,000; kept, back on Rs 500.
+    for (const [clear, row] of [
+      [true, '5000'],
+      [false, '500'],
+    ] as const) {
+      seed.count = noteCounterKey(noteCounterKey(noteCounterKey(noteCounterInitial(), '2'), 'Enter'), 'Enter');
+      render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={VIA_PIN} />);
+      box = plantBox('500');
+      confirmAsk.calls.length = 0;
+      confirmAsk.answer = clear;
+      counter.props?.onClear();
+      expect(box.focused(), 'not before the answer').toBe('page');
+      await settle();
+      expect(confirmAsk.calls.map(([q]) => q)).toEqual([CLEAR_ALL_QUESTION]);
+      expect(box.focused(), `Clear all: ${clear}`).toBe(row);
+    }
+
+    // Leaving a started count, then "Keep counting": every way out.
+    const onClose = vi.fn();
+    const leaveBy: Array<[string, () => void]> = [
+      ['Escape', () => (radix.content['onEscapeKeyDown'] as (e: unknown) => void)({ preventDefault() {} })],
+      [
+        'a tap outside',
+        () =>
+          (radix.content['onPointerDownOutside'] as (e: unknown) => void)({
+            preventDefault() {},
+            detail: { originalEvent: { target: { isConnected: true } } },
+          }),
+      ],
+      ['Cancel', () => tapButton('Cancel')],
+      ['the dimmed area', () => (radix.root['onOpenChange'] as (open: boolean) => void)(false)],
+    ];
+    for (const [how, leave] of leaveBy) {
+      seed.count = noteCounterKey(noteCounterInitial(), '1');
+      render(<CloseShiftDialog shiftId="shift-1" onClose={onClose} approverPin="Manager-pass-7" check={VIA_PIN} />);
+      box = plantBox('5000');
+      confirmAsk.calls.length = 0;
+      confirmAsk.answer = false;
+      leave();
+      await settle();
+      expect(confirmAsk.calls.map(([q]) => q), how).toEqual([STOP_CLOSING_QUESTION]);
+      expect(box.focused(), how).toBe('5000');
+    }
+    expect(onClose).not.toHaveBeenCalled();
+    // "Stop": the box goes, and the keyboard is not put back.
+    seed.count = noteCounterKey(noteCounterInitial(), '1');
+    render(<CloseShiftDialog shiftId="shift-1" onClose={onClose} approverPin="Manager-pass-7" check={VIA_PIN} />);
+    box = plantBox('5000');
+    confirmAsk.answer = true;
+    tapButton('Cancel');
+    await settle();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(box.focused()).toBe('page');
+
+    // leaveCloseShift itself: onStay only after "Keep counting".
+    const onStay = vi.fn();
+    confirmAsk.answer = false;
+    await leaveCloseShift({ saving: false, started: true, onClose: () => {}, onStay });
+    expect(onStay).toHaveBeenCalledTimes(1);
+    onStay.mockClear();
+    confirmAsk.answer = true;
+    await leaveCloseShift({ saving: false, started: true, onClose: () => {}, onStay });
+    await leaveCloseShift({ saving: false, started: false, onClose: () => {}, onStay });
+    await leaveCloseShift({ saving: true, started: true, onClose: () => {}, onStay });
+    expect(onStay).not.toHaveBeenCalled();
+  });
+
+  it('(review fixes A) a tap on the question, handed on once the question has gone, is not a tap outside: Clear all by touch no longer closes the box', () => {
+    // On a touch screen Radix waits for the click before it calls the tap
+    // outside; the tap on "Clear all" in the question came here after the
+    // question went, with the rows cleared: the box closed at once.
+    signIn('manager');
+    const onClose = vi.fn();
+    render(<CloseShiftDialog shiftId="shift-1" onClose={onClose} approverPin="Manager-pass-7" check={VIA_PIN} />);
+    const outside = radix.content['onPointerDownOutside'] as (e: unknown) => void;
+    const gone = { preventDefault: vi.fn(), detail: { originalEvent: { target: { isConnected: false } } } };
+    outside(gone);
+    expect(gone.preventDefault).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(confirmAsk.calls).toEqual([]);
+    // A real tap outside (on something still on the page) leaves as before.
+    outside({ preventDefault: vi.fn(), detail: { originalEvent: { target: { isConnected: true } } } });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('(review fixes A) the check of the orders on this till failed: the footer says so, with Try again, which asks again and puts the keyboard back on the row', async () => {
+    expect(CLOSE_HINT_CHECK_FAILED).toBe('Could not check the orders on this till.');
+    const all = { failed: false, started: true, checked: true, reasonMissing: false, otherIsLarge: false };
+    // First: typing cannot fix it.
+    expect(closeShiftHint({ ...all, failed: true, started: false, checked: false, reasonMissing: true, otherIsLarge: true })).toEqual({
+      text: CLOSE_HINT_CHECK_FAILED,
+      amber: false,
+    });
+    expect(closeShiftHint({ ...all, checked: false })).toEqual({ text: CLOSE_HINT_CHECKING, amber: false });
+
+    /** The close check came back with an error (`asking`: and the till is asking again). */
+    const failedCheck = (asking: boolean) => {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false } } });
+      qc.getQueryCache()
+        .build(qc, { queryKey: ['shifts', 'closeCheck', 'shift-1'] })
+        .setState({ status: 'error', error: new Error('Could not read the orders on this till (test).'), fetchStatus: asking ? 'fetching' : 'idle' });
+      return qc;
+    };
+    signIn('manager');
+    for (const count of [null, noteCounterKey(noteCounterInitial(), '5')]) {
+      seed.count = count;
+      const out = render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} />, [], failedCheck(false));
+      const words = text(out);
+      // The error itself is in the box; the footer says why Close shift waits, with Try again — never "Checking" for good.
+      expect(words).toContain('Could not read the orders on this till (test).');
+      expect(words).toContain(`${CLOSE_HINT_CHECK_FAILED} Try again Cancel Close shift`);
+      expect(words).not.toContain(CLOSE_HINT_CHECKING);
+      expect(buttonWith(out, 'Close shift')).toMatch(DISABLED);
+      expect(buttonWith(out, 'Try again')).not.toMatch(DISABLED);
+    }
+    // Try again: the keyboard goes back on the row first (the button goes while the till asks), then the till is asked again.
+    const box = plantBox('5000');
+    asked.calls.length = 0;
+    tapButton('Try again');
+    await settle();
+    expect(asked.calls).toEqual(['closeCheck']);
+    expect(box.focused()).toBe('5000');
+    // While it asks: "Checking…", and no Try again.
+    seed.count = noteCounterKey(noteCounterInitial(), '5');
+    const asking = text(render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} />, [], failedCheck(true)));
+    expect(asking).toContain(`${CLOSE_HINT_CHECKING} Cancel Close shift`);
+    expect(asking).not.toContain('Try again');
   });
 
   it('the result: Counted, then the notes on one line — on the manager’s close and the PIN close; none without notes', () => {

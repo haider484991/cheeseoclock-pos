@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from 'react';
+import { useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -40,7 +40,14 @@ import { SecretInput } from '../../components/secret/SecretInput';
 import { fmtWhen } from '../reports/reportFormat';
 import { refusedItemOwedLine } from '../orders/refusedItemWords';
 import { ALERT_WATCH_KEY, useWebOrdersPause } from '../notifications/useAlertWatch';
-import { CLEAR_ALL_QUESTION, NOTE_COUNTER_FIRST_ROW, NoteCounter, noteCounterKeyAction } from './NoteCounter';
+import {
+  CLEAR_ALL_QUESTION,
+  NOTE_COUNTER_CHOSEN_ROW,
+  NOTE_COUNTER_FIRST_ROW,
+  NOTE_COUNTER_PAD,
+  NoteCounter,
+  noteCounterKeyAction,
+} from './NoteCounter';
 import {
   noteCounterCell,
   noteCounterClear,
@@ -572,22 +579,27 @@ export const CLOSE_SHIFT_DESCRIPTION = 'Count the notes in the drawer, row by ro
 /** The footer's hints, beside Cancel and Close shift (closeShiftHint). */
 export const CLOSE_HINT_NOT_STARTED = 'Type a count in at least one row (0 if the drawer is empty).';
 export const CLOSE_HINT_CHECKING = 'Checking the orders on this till…';
+export const CLOSE_HINT_CHECK_FAILED = 'Could not check the orders on this till.';
 export const CLOSE_HINT_REASON = 'Give a reason for the unpaid orders (below the count).';
 export const CLOSE_HINT_COINS_LARGE = 'Rs 1,000 or more in coins and other: count the notes in their own rows.';
 
 /**
- * The one hint the close box's footer shows, first match wins: nothing typed
- * yet; the till still checking this till's orders; no reason for the unpaid
- * orders; then, amber and never in the way, a large 'Coins and other' (notes
- * belong in their own rows). Null when there is nothing to say. The first
- * three are why Close shift is not ready.
+ * The one hint the close box's footer shows, first match wins: the check of
+ * this till's orders failed (Try again beside it; typing cannot fix it);
+ * nothing typed yet; the till still checking this till's orders; no reason
+ * for the unpaid orders; then, amber and never in the way, a large 'Coins
+ * and other' (notes belong in their own rows). Null when there is nothing to
+ * say. The first four are why Close shift is not ready.
  */
 export function closeShiftHint(p: {
+  /** The check failed and is not being asked again. */
+  failed: boolean;
   started: boolean;
   checked: boolean;
   reasonMissing: boolean;
   otherIsLarge: boolean;
 }): { text: string; amber: boolean } | null {
+  if (p.failed) return { text: CLOSE_HINT_CHECK_FAILED, amber: false };
   if (!p.started) return { text: CLOSE_HINT_NOT_STARTED, amber: false };
   if (!p.checked) return { text: CLOSE_HINT_CHECKING, amber: false };
   if (p.reasonMissing) return { text: CLOSE_HINT_REASON, amber: false };
@@ -604,13 +616,22 @@ export const STOP_CLOSING_QUESTION = 'Stop closing the shift? The count you type
  *   box would go, and the shift close anyway behind the manager's back);
  * - once something is typed, it asks first, with "Keep counting" as the safe
  *   answer: a slip of the hand must not throw a half-done count away;
+ *   "Keep counting" calls onStay (the box puts the keyboard back on the row);
  * - otherwise the box just closes.
  */
-export async function leaveCloseShift(p: { saving: boolean; started: boolean; onClose: () => void }): Promise<void> {
+export async function leaveCloseShift(p: {
+  saving: boolean;
+  started: boolean;
+  onClose: () => void;
+  onStay?: () => void;
+}): Promise<void> {
   if (p.saving) return;
   if (p.started) {
     const stop = await askConfirm(STOP_CLOSING_QUESTION, { safeDefault: true, yesLabel: 'Stop', noLabel: 'Keep counting' });
-    if (!stop) return;
+    if (!stop) {
+      p.onStay?.();
+      return;
+    }
   }
   p.onClose();
 }
@@ -764,15 +785,37 @@ export function CloseShiftDialog({
   const saving = closeMut.isPending;
   const started = noteCounterStarted(count);
   const reasonMissing = needsReason && !carryOverReason.trim();
-  const hint = closeShiftHint({ started, checked: !!check, reasonMissing, otherIsLarge: noteCounterOtherIsLarge(count) });
+  // The check failed and is not being asked again: Try again, in the footer.
+  const checkFailed = !check && checkQ.isError && !checkQ.isFetching;
+  const hint = closeShiftHint({
+    failed: checkFailed,
+    started,
+    checked: !!check,
+    reasonMissing,
+    otherIsLarge: noteCounterOtherIsLarge(count),
+  });
 
   // While the close is saving the count stays as it was sent.
   const changeCount = (change: (s: NoteCounterState) => NoteCounterState) => {
     if (!saving) setCount(change);
   };
-  const confirmLeave = () => void leaveCloseShift({ saving, started, onClose });
+
+  // The box does all the typing (onKeyDown below), so the keyboard must stay
+  // inside it. A question in the window (Clear all, leaving) takes it, and a
+  // button that turns off or goes away under it (Open drawer to count, Try
+  // again) drops it on the page behind: then digits, Backspace and Enter did
+  // nothing until a row was tapped. These put it back on the row being typed
+  // into (or on another row, by its selector).
+  const contentRef = useRef<HTMLDivElement>(null);
+  const keyboardToRow = (row: string = NOTE_COUNTER_CHOSEN_ROW) => {
+    contentRef.current?.querySelector<HTMLElement>(row)?.focus();
+  };
+  const confirmLeave = () => void leaveCloseShift({ saving, started, onClose, onStay: () => keyboardToRow() });
   const clearAll = async () => {
-    if (await confirmClearAll()) changeCount(noteCounterClear);
+    const clear = (await confirmClearAll()) && !saving;
+    if (clear) changeCount(noteCounterClear);
+    // Cleared: back on the Rs 5,000 row (the chosen row on screen is still the old one until it redraws).
+    keyboardToRow(clear ? NOTE_COUNTER_FIRST_ROW : NOTE_COUNTER_CHOSEN_ROW);
   };
 
   // The keyboard types into the chosen row, like the pad beside it.
@@ -788,10 +831,18 @@ export function CloseShiftDialog({
       typing: isTypingField(target),
       ownsEnter: ownsEnter(target),
       onRow: target.dataset['noteRow'] !== undefined,
+      onPad: target.closest(NOTE_COUNTER_PAD) !== null,
     });
     if (action === null) return;
     e.preventDefault();
     if (action === 'count') changeCount((s) => noteCounterKey(s, e.key));
+  }
+
+  // The space bar presses a button when it comes up. A pad key is never
+  // reached with Tab, so on one it can only press the key just tapped again
+  // (after a tap on a touch screen, whatever its keydown did).
+  function onKeyUp(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === ' ' && (e.target as HTMLElement).closest(NOTE_COUNTER_PAD) !== null) e.preventDefault();
   }
 
   return (
@@ -799,7 +850,9 @@ export function CloseShiftDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
         <Dialog.Content
+          ref={contentRef}
           onKeyDown={onKeyDown}
+          onKeyUp={onKeyUp}
           // The keyboard starts on the Rs 5,000 row, not on the X.
           onOpenAutoFocus={(e) => {
             e.preventDefault();
@@ -812,6 +865,11 @@ export function CloseShiftDialog({
           }}
           onPointerDownOutside={(e) => {
             e.preventDefault();
+            // On a touch screen Radix waits for the click, and a tap on "Clear
+            // all" in the question came here once the question had gone: with
+            // the rows cleared, the box closed at once. What was tapped is no
+            // longer on the page, so it was not a tap outside.
+            if ((e.detail.originalEvent.target as Node | null)?.isConnected === false) return;
             confirmLeave();
           }}
           className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-24px)] w-[780px] max-w-[calc(100vw-24px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl bg-white shadow-soft-lg outline-none dark:bg-stone-900"
@@ -864,22 +922,28 @@ export function CloseShiftDialog({
                   size="sm"
                   className="w-full"
                   disabled={countMut.isPending}
-                  onClick={() => countMut.mutate()}
+                  onClick={() => {
+                    // The button turns off while the drawer opens: the keyboard goes back to the row first.
+                    keyboardToRow();
+                    countMut.mutate();
+                  }}
                 >
                   <Inbox className="h-4 w-4" />
                   {countMut.isPending ? 'Opening…' : 'Open drawer to count'}
                 </Button>
-                <NumberPad
-                  value={noteCounterCell(count)}
-                  onChange={(next) => changeCount((s) => noteCounterPad(s, next))}
-                  onSubmit={() => changeCount((s) => noteCounterKey(s, 'Enter'))}
-                  maxLength={noteCounterMaxDigits(count.active)}
-                  showDisplay={false}
-                  enterLabel="Next"
-                  keyClassName="h-14"
-                  keyTabIndex={-1}
-                  label="Number pad for the note count"
-                />
+                <div data-note-pad="">
+                  <NumberPad
+                    value={noteCounterCell(count)}
+                    onChange={(next) => changeCount((s) => noteCounterPad(s, next))}
+                    onSubmit={() => changeCount((s) => noteCounterKey(s, 'Enter'))}
+                    maxLength={noteCounterMaxDigits(count.active)}
+                    showDisplay={false}
+                    enterLabel="Next"
+                    keyClassName="h-14"
+                    keyTabIndex={-1}
+                    label="Number pad for the note count"
+                  />
+                </div>
                 <label className="block text-sm">
                   <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">Closing note (optional)</span>
                   <input
@@ -916,6 +980,20 @@ export function CloseShiftDialog({
             >
               {hint?.text}
             </p>
+            {checkFailed && (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="shrink-0"
+                onClick={() => {
+                  // The button goes while the till asks again: the keyboard goes back to the row first.
+                  keyboardToRow();
+                  void checkQ.refetch();
+                }}
+              >
+                Try again
+              </Button>
+            )}
             <Button variant="ghost" size="md" className="w-28" onClick={confirmLeave} disabled={saving}>
               Cancel
             </Button>

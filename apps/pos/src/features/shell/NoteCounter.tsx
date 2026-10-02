@@ -47,6 +47,12 @@ export const CLEAR_ALL_QUESTION = 'Clear every row of this count?';
 /** The CSS selector of the first row (Rs 5,000): where the box puts the keyboard when it opens. */
 export const NOTE_COUNTER_FIRST_ROW = `[data-note-row="${NOTE_COUNTER_ROWS[0]?.key ?? '5000'}"]`;
 
+/** The CSS selector of the chosen row: the one being typed into. */
+export const NOTE_COUNTER_CHOSEN_ROW = '[data-note-row][aria-pressed="true"]';
+
+/** The CSS selector of the on-screen pad beside the rows (the Close shift box wraps it in this). */
+export const NOTE_COUNTER_PAD = '[data-note-pad]';
+
 function cellNumber(cell: string): number {
   return cell === '' ? 0 : Number.parseInt(cell, 10);
 }
@@ -61,7 +67,11 @@ function cellNumber(cell: string): number {
  *   an input method is composing, a key in a text box (the closing note, the
  *   reason for unpaid orders), Enter on a button reached with Tab (Cancel,
  *   Close shift: Enter presses it), and every other key (Tab, Escape…).
- * Enter on a row always goes to the next row: the rows are buttons too.
+ * Enter on a row, or on a key of the pad, always goes to the next row. A
+ * tapped pad key keeps the keyboard, and Chromium counts it as reached with
+ * the keyboard as soon as a key is pressed: left to the browser, Enter would
+ * press that pad key again (5 typed twice, or one more digit taken off). The
+ * pad keys are never reached with Tab, so Enter is never meant for them.
  */
 export function noteCounterKeyAction(k: {
   key: string;
@@ -76,12 +86,14 @@ export function noteCounterKeyAction(k: {
   ownsEnter: boolean;
   /** The key went to one of the count's rows. */
   onRow: boolean;
+  /** The key went to a key of the on-screen pad (NOTE_COUNTER_PAD). */
+  onPad: boolean;
 }): 'count' | 'held' | null {
   if (k.ctrlKey || k.altKey || k.metaKey || k.isComposing || k.typing) return null;
   if (/^[0-9]$/.test(k.key)) return k.repeat ? 'held' : 'count';
   switch (k.key) {
     case 'Enter':
-      return k.ownsEnter && !k.onRow ? null : 'count';
+      return k.ownsEnter && !k.onRow && !k.onPad ? null : 'count';
     case 'Backspace':
     case 'Delete':
     case 'ArrowUp':
