@@ -30,7 +30,8 @@
  *   (5) Who may: a manager this till's shift within 15 minutes of its close
  *       (the till's clock, either side), DUPLICATE Reprint #1 then #2, and
  *       not the other till's; the owner any closed shift, one that came over
- *       the link too, with that till's name on it; a cashier's login with a
+ *       the link too, with that till's name on it, at this till's width,
+ *       with the note count as counted there; a cashier's login with a
  *       manager's or the owner's PIN or password and then by their rules
  *       (none: needs manager_pin; a wrong one: wrongSecret). Refused in plain
  *       words: a shift still open, one closed with no report, a newer till's
@@ -60,7 +61,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { escPosToText, paperMoney } from '@cheeseoclock/printer-core';
 import { parseShiftReportJson } from '@cheeseoclock/shared-schemas';
-import { SHIFT_REPORT_AGAIN_MS } from '@cheeseoclock/shared-types';
+import { CASH_NOTE_FACE_CENTS, SHIFT_REPORT_AGAIN_MS } from '@cheeseoclock/shared-types';
 import type {
   AuthenticatedUser,
   ClosedShift,
@@ -813,6 +814,45 @@ live('(5) printing it again: who may', () => {
     expect(text!.split('\n')).toContain('Till: TEST-TILL-2');
     expect(text!.split('\n')).not.toContain('Till: TEST-TILL-1');
     expect(printAudits(shiftId)).toEqual([expect.objectContaining({ actor: 'u_admin', copy: 'reprint', reprintNo: 1, outcome: 'ok' })]);
+  });
+
+  it('the other till’s shift, closed there counted by note with a 58 mm printer: the owner prints it here at this till’s width (48 columns), headed with that till’s name, its note count as counted there', async () => {
+    const b = openTill('till-b', { usersFrom: TILL, displayName: 'TEST-TILL-2 (win32)' });
+    const { setReceiptPrinterConfig } = await import('../../services/printer-config.js');
+    setReceiptPrinterConfig(b, { ...PRINTER, width: 32 });
+    const repo = await import('../../db/repositories/shift-repo.js');
+    const { makeShiftReport } = await import('../../services/shift-report-service.js');
+    const onB = { userId: 'u_mgr', deviceId: 'till-b' };
+    const shiftId = repo.openShift(b, { openingCashCents: FLOAT }, onB).id;
+    // The float counted on till B: Rs 1,000 × 4, 500 × 1, 100 × 4, 50 × 1, 20 × 2 and Rs 10 in coins.
+    const byFace: Record<number, number> = { 100_000: 4, 50_000: 1, 10_000: 4, 5_000: 1, 2_000: 2 };
+    const countedNotes = { notes: CASH_NOTE_FACE_CENTS.map((faceCents) => ({ faceCents, count: byFace[faceCents] ?? 0 })), otherCents: 1_000 };
+    repo.closeShift(b, { shiftId, countedCashCents: FLOAT, countedNotes, notes: null }, onB, null, { makeReport: makeShiftReport(b, 'till-b') });
+    await push(b, 'till-b', db);
+    // Both the count and the report came over the link.
+    expect(repo.findShift(db, shiftId)).toMatchObject({ countedCashCents: FLOAT, countedNotes });
+    expect(repo.getShiftCloseReport(db, shiftId)).toMatchObject({ deviceId: 'till-b' });
+
+    expect(await printAgain(shiftId, OWNER)).toEqual({ printed: true, copy: 'reprint', reprintNo: 1, error: null });
+    const [text] = await settledPapers(1);
+    const lines = text!.split('\n');
+    expect(lines).toContain('Till: TEST-TILL-2');
+    expect(lines).not.toContain('Till: TEST-TILL-1');
+    // At this till's width, not till B's: every row fits 48 columns, the count's rows right-aligned at 48.
+    expect(lines.filter((l) => l.length > 48)).toEqual([]);
+    const counted = lines.indexOf('CASH COUNTED');
+    expect(counted).toBeGreaterThan(0);
+    expect(lines.slice(counted, counted + 8)).toEqual([
+      'CASH COUNTED',
+      paperRow('Rs 1,000 x 4', '4,000.00'),
+      paperRow('Rs 500 x 1', '500.00'),
+      paperRow('Rs 100 x 4', '400.00'),
+      paperRow('Rs 50 x 1', '50.00'),
+      paperRow('Rs 20 x 2', '40.00'),
+      paperRow('Coins and other', '10.00'),
+      paperRow('COUNTED', '5,000.00'),
+    ]);
+    expect(printAudits(shiftId)).toEqual([expect.objectContaining({ actor: 'u_admin', copy: 'reprint', reprintNo: 1, width: 48, outcome: 'ok' })]);
   });
 
   it('refused in plain words, nothing printed or put on record: a shift still open, one closed with no report saved, a newer till’s report, one that cannot be read, an unknown shift', async () => {

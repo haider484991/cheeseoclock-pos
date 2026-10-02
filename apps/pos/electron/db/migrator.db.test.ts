@@ -37,9 +37,10 @@
  *     out for delivery with one of the shop's own riders): its shift, order
  *     and cash rows come through untouched, the order reads as an own
  *     rider's with no sentAt (its clock falls back to when it was started),
- *     the closed shift reads as it closed (no note count, no saved report)
- *     and its figures still add up with the new code, and the audit chain
- *     verifies;
+ *     the closed shift reads as it closed (no note count, no saved report,
+ *     none in Shift history) and its figures still add up with the new code,
+ *     the pre-migrate copy holds the database as v0.7.33 left it, and the
+ *     audit chain verifies;
  *   - a till with 0047 (0001..0047) runs just 0048_order_sent_at, then
  *     0049_outside_rider, 0050_shift_counted_notes and
  *     0051_shift_close_report: every order reads
@@ -56,6 +57,12 @@
  *     close_report_json NULL (a closed one has no note count and no saved
  *     report, its figures as they were), untouched, no sync or audit row
  *     added, and the shift still open there closes counted by note;
+ *   - the same v0.7.34 database with a closed shift and its orders (a
+ *     delivery an outside rider paid in cash, keeping his charge, and a card
+ *     takeaway): the pre-migrate copy holds it as v0.7.34 left it, every row
+ *     comes through untouched, the shift reads no note count and no saved
+ *     report (none in Shift history either), its figures add up as they did,
+ *     and the audit chain verifies;
  *   - a till already up to date runs nothing.
  *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for Electron
@@ -67,18 +74,25 @@ import { DEV, DatabaseSync, migrationFiles, openMigrated } from './costing-shop.
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 120_000 });
 
-const h = vi.hoisted(() => ({ snapshots: [] as string[] }));
+const h = vi.hoisted(() => ({
+  snapshots: [] as string[],
+  /** What each pre-migrate copy holds: the last migration run, and the shifts table's columns, when it was taken. */
+  copied: [] as Array<{ lastRan: string | undefined; shiftColumns: string[] }>,
+}));
 
 vi.mock('electron-log/main', () => ({ default: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } }));
 vi.mock('electron', () => ({
   app: { getVersion: () => '0.0.0-test', getPath: () => '' },
   BrowserWindow: { getAllWindows: () => [] },
 }));
-// The pre-migrate copy: recorded, never written to disk here.
+// The pre-migrate copy: recorded (what the database held at that moment), never written to disk here.
 vi.mock('../services/backup-service.js', () => ({
   ensureBackupDir: () => 'test-backups',
-  snapshotDatabaseTo: (_db: unknown, dest: string) => {
+  snapshotDatabaseTo: (db: { prepare: (sql: string) => { all: () => unknown[] } }, dest: string) => {
     h.snapshots.push(dest);
+    const names = (db.prepare(`SELECT name FROM _migrations ORDER BY name`).all() as Array<{ name: string }>).map((r) => r.name);
+    const shiftColumns = (db.prepare(`PRAGMA table_info(shifts)`).all() as Array<{ name: string }>).map((c) => c.name);
+    h.copied.push({ lastRan: names.at(-1), shiftColumns });
   },
 }));
 
@@ -462,6 +476,7 @@ live('migrations at boot (migrator.ts)', () => {
     const { verifyAuditChain } = await import('./audit-chain.js');
     const { isOutsideRiderOrder } = await import('@cheeseoclock/shared-types');
     h.snapshots.length = 0;
+    h.copied.length = 0;
     const db = openMigrated({ stopBefore: '0047' });
     db.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, ran_at TEXT NOT NULL)`);
     const log = db.prepare(`INSERT INTO _migrations (name, ran_at) VALUES (?, ?)`);
@@ -519,6 +534,9 @@ live('migrations at boot (migrator.ts)', () => {
       '0051_shift_close_report.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
+    // The copy was taken first: the database as v0.7.33 left it, before 0047 ran, with no note count or report column.
+    expect(h.copied).toEqual([{ lastRan: '0046_web_order_alerts.sql', shiftColumns: Object.keys(before.shifts[0] ?? {}) }]);
+    expect(h.copied[0]?.shiftColumns).not.toContain('counted_notes_json');
     // Every row as it was, with the new columns empty; the audit trail and the link's queue untouched.
     expect(all(`SELECT * FROM shifts ORDER BY id`)).toEqual(before.shifts.map((r) => ({ ...r, counted_notes_json: null, close_report_json: null })));
     expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, sent_at: null, rider_keeps_cents: null })));
@@ -539,7 +557,7 @@ live('migrations at boot (migrator.ts)', () => {
     expect(snap).not.toHaveProperty('deliveryChargeToRider');
 
     // The closed shift reads as it closed, and the new code's figures for it add up as v0.7.33's did: no rider charges.
-    const { findShift, getShiftSummary } = await import('./repositories/shift-repo.js');
+    const { findShift, getShiftCloseReport, getShiftSummary } = await import('./repositories/shift-repo.js');
     expect(findShift(db, 's_closed')).toMatchObject({
       closedAt: closed,
       openingCashCents: 500_000,
@@ -558,6 +576,10 @@ live('migrations at boot (migrator.ts)', () => {
       riderChargeCount: 0,
       expectedCashCents: 490_000,
     });
+    // No saved report to read back or print, and Shift history says so (no note count either).
+    expect(getShiftCloseReport(db, 's_closed')).toBeNull();
+    const { buildTeamTab } = await import('../services/business-report.js');
+    expect(buildTeamTab(db, ALL_TIME).shifts.find((s) => s.id === 's_closed')).toMatchObject({ countedNotes: null, hasCloseReport: false });
 
     // The audit chain verifies.
     const chainRows = all(
@@ -753,6 +775,135 @@ live('migrations at boot (migrator.ts)', () => {
       varianceCents: 0,
       countedNotes: notes,
     });
+
+    // The next boot: nothing to run, no copy.
+    await runMigrations(db);
+    expect(ran(db)).toHaveLength(had.length + 2);
+    expect(h.snapshots).toHaveLength(1);
+  });
+
+  it('a v0.7.34 database (0001..0049) with a closed shift and its orders (a delivery an outside rider paid in cash, keeping his charge; a card takeaway) runs 0050 then 0051 after a pre-migrate copy: every row as it was, the shift reads no note count and no saved report, its figures add up as they did, and the audit chain verifies', async () => {
+    const { runMigrations } = await import('./migrator.js');
+    const { writeAudit } = await import('./repositories/audit-repo.js');
+    const { verifyAuditChain } = await import('./audit-chain.js');
+    const { isOutsideRiderOrder } = await import('@cheeseoclock/shared-types');
+    h.snapshots.length = 0;
+    h.copied.length = 0;
+    const db = openMigrated({ stopBefore: '0050' });
+    db.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, ran_at TEXT NOT NULL)`);
+    const log = db.prepare(`INSERT INTO _migrations (name, ran_at) VALUES (?, ?)`);
+    for (const f of migrationFiles().filter((m) => m < '0050')) log.run(f, T0);
+    // What v0.7.34 left (made-up names and numbers): last night's shift on a Rs 5,000 float, closed even at Rs 9,515.
+    // In it a delivery (Rs 4,715) sent out with an outside rider, who paid it in cash and kept the Rs 200 charge (the
+    // payout linked to the order, 0049), and a takeaway (Rs 1,150) paid by card.
+    const user = db.prepare(`INSERT INTO users (id, full_name, pin_hash, role, created_at, updated_at, device_id) VALUES (?, ?, 'x', ?, ?, ?, ?)`);
+    user.run('u_admin', 'Test Owner', 'admin', T0, T0, DEV);
+    user.run('u_cash', 'Test Cashier', 'cashier', T0, T0, DEV);
+    const opened = '2026-10-02T13:00:00.000Z';
+    const closed = '2026-10-02T18:00:00.000Z';
+    db.prepare(
+      `INSERT INTO shifts (id, device_id, opened_by_user_id, opened_at, opening_cash_cents, closed_by_user_id, closed_at,
+                           counted_cash_cents, expected_cash_cents, variance_cents, created_at, updated_at, version)
+       VALUES ('s_closed', ?, 'u_cash', ?, 500000, 'u_admin', ?, 951500, 951500, 0, ?, ?, 2)`,
+    ).run(DEV, opened, closed, opened, closed);
+    const order = db.prepare(
+      `INSERT INTO orders (id, order_number, mode, status, cashier_id, subtotal_cents, tax_cents, total_cents, source, shift_id,
+                           sent_at, dispatched_at, delivered_at, rider_keeps_cents, paid_at, created_at, updated_at, device_id, version)
+       VALUES (?, ?, ?, 'paid', 'u_cash', ?, ?, ?, 'pos', 's_closed', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    order.run(
+      'o_out', '20261002-0031', 'delivery', 410_000, 61_500, 471_500,
+      '2026-10-02T14:30:00.000Z', '2026-10-02T14:50:00.000Z', '2026-10-02T15:20:00.000Z', 20_000,
+      '2026-10-02T15:10:00.000Z', '2026-10-02T14:00:00.000Z', '2026-10-02T15:20:00.000Z', DEV, 6,
+    );
+    order.run(
+      'o_card', '20261002-0032', 'takeaway', 100_000, 15_000, 115_000,
+      '2026-10-02T15:00:00.000Z', null, null, null,
+      '2026-10-02T15:00:00.000Z', '2026-10-02T14:58:00.000Z', '2026-10-02T15:00:00.000Z', DEV, 3,
+    );
+    const payment = db.prepare(
+      `INSERT INTO payments (id, order_id, method, amount_cents, tendered_cents, received_by_user_id, paid_at, shift_id, created_at, updated_at, device_id)
+       VALUES (?, ?, ?, ?, ?, 'u_cash', ?, 's_closed', ?, ?, ?)`,
+    );
+    payment.run('p_out', 'o_out', 'cash', 471_500, 471_500, '2026-10-02T15:10:00.000Z', '2026-10-02T15:10:00.000Z', '2026-10-02T15:10:00.000Z', DEV);
+    payment.run('p_card', 'o_card', 'card', 115_000, null, '2026-10-02T15:00:00.000Z', '2026-10-02T15:00:00.000Z', '2026-10-02T15:00:00.000Z', DEV);
+    db.prepare(
+      `INSERT INTO cash_movements (id, shift_id, type, amount_cents, reason, user_id, order_id, created_at, updated_at, device_id)
+       VALUES ('m_kept', 's_closed', 'payout', 20000, 'Delivery charge kept by the outside rider — Order #0031', 'u_cash', 'o_out', ?, ?, ?)`,
+    ).run('2026-10-02T15:10:00.000Z', '2026-10-02T15:10:00.000Z', DEV);
+    writeAudit(db, { entityType: 'orders', entityId: 'o_out', action: 'send_out', actorUserId: 'u_cash', before: null, after: { id: 'o_out', riderKeepsCents: 20_000 } });
+    writeAudit(db, { entityType: 'orders', entityId: 'o_out', action: 'rider_payment', actorUserId: 'u_cash', before: null, after: { id: 'o_out' } });
+    writeAudit(db, { entityType: 'orders', entityId: 'o_card', action: 'tender', actorUserId: 'u_cash', before: null, after: { id: 'o_card' } });
+    writeAudit(db, { entityType: 'shifts', entityId: 's_closed', action: 'shift_close', actorUserId: 'u_admin', before: null, after: { id: 's_closed', varianceCents: 0 } });
+    const all = (sql: string) => db.prepare(sql).all() as Array<Record<string, unknown>>;
+    const count = (t: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n;
+    const before = {
+      shifts: all(`SELECT * FROM shifts ORDER BY id`),
+      orders: all(`SELECT * FROM orders ORDER BY id`),
+      payments: all(`SELECT * FROM payments ORDER BY id`),
+      movements: all(`SELECT * FROM cash_movements ORDER BY id`),
+      audit: all(`SELECT * FROM audit_log ORDER BY rowid`),
+      sync: count('sync_queue'),
+    };
+    const had = ran(db);
+    expect(had.at(-1)).toBe('0049_outside_rider.sql');
+    expect(columns(db, 'shifts')).not.toContain('counted_notes_json');
+    expect(columns(db, 'shifts')).not.toContain('close_report_json');
+
+    await runMigrations(db);
+
+    // In order, after the pre-migrate copy — the database as v0.7.34 left it, before 0050 ran.
+    expect(ran(db)).toEqual([...had, '0050_shift_counted_notes.sql', '0051_shift_close_report.sql']);
+    expect(h.snapshots).toHaveLength(1);
+    expect(h.copied).toEqual([{ lastRan: '0049_outside_rider.sql', shiftColumns: Object.keys(before.shifts[0] ?? {}) }]);
+    // Every row as it was, the shift with the two new columns empty; the audit trail and the link's queue untouched.
+    expect(all(`SELECT * FROM shifts ORDER BY id`)).toEqual(before.shifts.map((r) => ({ ...r, counted_notes_json: null, close_report_json: null })));
+    expect({
+      orders: all(`SELECT * FROM orders ORDER BY id`),
+      payments: all(`SELECT * FROM payments ORDER BY id`),
+      movements: all(`SELECT * FROM cash_movements ORDER BY id`),
+      audit: all(`SELECT * FROM audit_log ORDER BY rowid`),
+      sync: count('sync_queue'),
+    }).toEqual({ orders: before.orders, payments: before.payments, movements: before.movements, audit: before.audit, sync: before.sync });
+
+    // The orders read as v0.7.34 left them: the delivery an outside rider's, its clock and his charge kept.
+    const { findOrder } = await import('./repositories/order-repo.js');
+    const out = findOrder(db, 'o_out')!;
+    expect(out).toMatchObject({ status: 'paid', sentAt: '2026-10-02T14:30:00.000Z', riderKeepsCents: 20_000 });
+    expect(isOutsideRiderOrder(out)).toBe(true);
+
+    // The closed shift reads as it closed — no note count, no saved report — and its figures add up as they did.
+    const { findShift, getShiftCloseReport, getShiftSummary } = await import('./repositories/shift-repo.js');
+    expect(findShift(db, 's_closed')).toMatchObject({
+      closedAt: closed,
+      openingCashCents: 500_000,
+      countedCashCents: 951_500,
+      expectedCashCents: 951_500,
+      varianceCents: 0,
+      countedNotes: null,
+    });
+    expect(getShiftCloseReport(db, 's_closed')).toBeNull();
+    expect(getShiftSummary(db, 's_closed')).toMatchObject({
+      paidOrderCount: 2,
+      cashSalesCents: 471_500,
+      cashOutCents: 20_000,
+      riderChargesCents: 20_000,
+      riderChargeCount: 1,
+      riderTripCount: 0,
+      netRevenueCents: 586_500,
+      expectedCashCents: 951_500,
+    });
+    const { buildTeamTab } = await import('../services/business-report.js');
+    expect(buildTeamTab(db, ALL_TIME).shifts.find((s) => s.id === 's_closed')).toMatchObject({ countedNotes: null, hasCloseReport: false });
+
+    // The audit chain verifies.
+    const chainRows = all(
+      `SELECT rowid, id, entity_type AS entityType, entity_id AS entityId, action, actor_user_id AS actorUserId,
+              before_json AS beforeJson, after_json AS afterJson, ip, created_at AS createdAt,
+              prev_hash AS prevHash, row_hash AS rowHash
+         FROM audit_log ORDER BY rowid`,
+    ).map((r) => ({ ...r, rowid: Number(r['rowid']) })) as unknown as Parameters<typeof verifyAuditChain>[0];
+    expect(verifyAuditChain(chainRows)).toMatchObject({ ok: true, checkedRows: 4 });
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);

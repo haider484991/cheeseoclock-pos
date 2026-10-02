@@ -20,6 +20,18 @@
  *   - an add-on rung on A while the first delivery for that phone (taken on
  *     B at the counter, or from the website) is in B's kitchen: no delivery
  *     charge.
+ * And v0.7.35's two shift columns (migrations 0050 counted_notes_json and
+ * 0051 close_report_json), the shift closed the way 'shifts:close' closes it
+ * (this till's makeShiftReport):
+ *   - A's close counted by note, its report made: B gets both as A saved
+ *     them and reads A's count, A's report under A's till name and A's line
+ *     in Shift history; B's own close travels back and leaves A's values;
+ *   - an image without the keys (a till still on v0.7.34 writes neither)
+ *     leaves B's values alone; a till that hears of the shift only that way
+ *     reads no count and no report, the rest as closed;
+ *   - the website delivery taken on B, sent out with an outside rider on B
+ *     and paid on A is on A's paper under 'Website delivery' / 'outside
+ *     riders (1)' and in A's ORDERS, and on nothing of B's.
  * The orders are the owner's whole-rupee example: Big Two + Fries + DHA
  * Phase 6's Rs 200 charge, all at 15% — the customer pays Rs 4,715, the
  * rider hands over Rs 4,515.
@@ -29,7 +41,19 @@
  * made up.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { deliveryBillOf, isOutsideRiderOrder, type WebOrder } from '@cheeseoclock/shared-types';
+import {
+  CASH_NOTE_FACE_CENTS,
+  SHIFT_REPORT_SECTIONS,
+  deliveryBillOf,
+  isOutsideRiderOrder,
+  shortOrderNumber,
+  type CashCount,
+  type ShiftReport,
+  type ShiftReportSection,
+  type WebOrder,
+} from '@cheeseoclock/shared-types';
+import { parseShiftReportJson } from '@cheeseoclock/shared-schemas';
+import { escPosToText, renderShiftReport } from '@cheeseoclock/printer-core';
 import type { SyncChange } from '@cheeseoclock/sync-core';
 import type { AppDatabase } from './connection.js';
 import { DatabaseSync } from './costing-shop.fixture.js';
@@ -94,6 +118,7 @@ const PK = {
   '20:20': '2026-10-02T15:20:00.000Z',
   '20:30': '2026-10-02T15:30:00.000Z',
   '23:00': '2026-10-02T18:00:00.000Z',
+  '23:30': '2026-10-02T18:30:00.000Z',
 } as const;
 type Clock = keyof typeof PK;
 const at = (t: Clock) => vi.setSystemTime(new Date(PK[t]));
@@ -116,15 +141,16 @@ interface Shop {
  * Two tills on the link: on A a 15% tax, 'Test Big Two' (Rs 3,400), 'Test
  * Fries' (Rs 500) and the area's 'Delivery Charge (Rs 200)'; a shift opened
  * at 18:00 on a Rs 5,000 float on each till; everything sent both ways.
+ * `names`: each till's device name (its id when not given).
  */
-async function shop(): Promise<Shop> {
+async function shop(names: { a?: string; b?: string } = {}): Promise<Shop> {
   const { createTaxCategory } = await import('./repositories/tax-category-repo.js');
   const { createCategory } = await import('./repositories/category-repo.js');
   const { createMenuItem } = await import('./repositories/menu-item-repo.js');
   const { openShift } = await shiftRepo();
   at('18:00');
-  const a = openTill(TILL_A);
-  const b = openTill(TILL_B, { usersFrom: TILL_A });
+  const a = openTill(TILL_A, names.a === undefined ? {} : { displayName: names.a });
+  const b = openTill(TILL_B, names.b === undefined ? { usersFrom: TILL_A } : { usersFrom: TILL_A, displayName: names.b });
   const tax = createTaxCategory(a, { name: 'Test GST', rateBps: 1_500 }, A.manager);
   const food = createCategory(a, { name: 'Test Burgers', displayOrder: 1, colorHex: '#aa5500' }, A.manager);
   const fees = createCategory(a, { name: 'Delivery Charges', displayOrder: 2, colorHex: '#555555' }, A.manager);
@@ -600,5 +626,241 @@ live('two tills: an add-on rung on A while the first delivery (taken on B) is in
     expect(charges(s.a, first.id)).toEqual([['Delivery Charge (Rs 200)', KEEP, 1]]);
     expect(chainWhole(s.a)).toBe(true);
     expect(chainWhole(s.b)).toBe(true);
+  });
+});
+
+// ---- v0.7.35: the note count (0050) and the shift report (0051) travel with the shift ----
+
+const NAMES = { a: 'TEST-TILL-A (win32)', b: 'TEST-TILL-B (win32)' } as const;
+/** Every section of the paper on (the owner's default). */
+const ALL_SECTIONS_ON = Object.fromEntries(SHIFT_REPORT_SECTIONS.map((x) => [x.key, true])) as Record<ShiftReportSection, boolean>;
+/** Every shift there is: Shift history's period here. */
+const ALL_TIME = { sinceIso: '2000-01-01T00:00:00.000Z', untilIso: '2100-01-01T00:00:00.000Z' };
+
+/** A drawer counted by note: `rupees` notes by face (in rupees), every other row 0, and `otherCents` in coins. */
+const countOf = (rupees: Readonly<Record<number, number>>, otherCents = 0): CashCount => ({
+  notes: CASH_NOTE_FACE_CENTS.map((faceCents) => ({ faceCents, count: rupees[faceCents / 100] ?? 0 })),
+  otherCents,
+});
+/** A's drawer with the rider's FOOD TOTAL in it, Rs 9,515: 5,000 × 1, 1,000 × 4, 500 × 1, 10 × 1 and a Rs 5 coin. */
+const COUNT_A = countOf({ 5_000: 1, 1_000: 4, 500: 1, 10: 1 }, 500);
+/** The float alone, Rs 5,000: 5,000 × 1. */
+const COUNT_FLOAT = countOf({ 5_000: 1 });
+
+/** The keys v0.7.35 added to a shift's image: a till still on v0.7.34 writes neither. */
+const V0735_SHIFT_KEYS: readonly string[] = ['countedNotesJson', 'closeReportJson'];
+const withoutV0735Keys = (c: SyncChange): SyncChange =>
+  c.entityType === 'shifts'
+    ? ({ ...c, payload: Object.fromEntries(Object.entries(c.payload as Row).filter(([k]) => !V0735_SHIFT_KEYS.includes(k))) } as SyncChange)
+    : c;
+
+const shiftRow = (db: AppDatabase, shiftId: string) => db.prepare(`SELECT * FROM shifts WHERE id = ?`).get(shiftId) as Row | undefined;
+
+/**
+ * Closed by the till's manager as 'shifts:close' closes it on `deviceId`
+ * (that till's makeShiftReport handed to closeShift), counted by note; the
+ * saved text and the report it holds.
+ */
+async function closeReported(
+  db: AppDatabase,
+  deviceId: string,
+  shiftId: string,
+  countedCashCents: number,
+  countedNotes: CashCount,
+): Promise<{ json: string; report: ShiftReport }> {
+  const { closeShift, getShiftCloseReport } = await shiftRepo();
+  const { makeShiftReport } = await import('../services/shift-report-service.js');
+  closeShift(db, { shiftId, countedCashCents, countedNotes }, on(deviceId).manager, null, { makeReport: makeShiftReport(db, deviceId) });
+  const json = getShiftCloseReport(db, shiftId)?.json;
+  const parsed = parseShiftReportJson(json);
+  if (json === undefined || parsed === null || !('report' in parsed)) throw new Error(`No report was saved: ${String(json)}`);
+  return { json, report: parsed.report };
+}
+
+/** The shift's line in Shift history (Reports → Team & leakage). */
+async function historyLine(db: AppDatabase, shiftId: string) {
+  const { buildTeamTab } = await import('../services/business-report.js');
+  return buildTeamTab(db, ALL_TIME).shifts.find((x) => x.id === shiftId);
+}
+
+/** The saved report as the 80 mm paper prints it (48 columns, every section on), line by line. */
+const paperOf = (report: ShiftReport): string[] =>
+  escPosToText(
+    renderShiftReport(report, { width: 48, sections: ALL_SECTIONS_ON, items: 'items', printedAt: report.closedAt, printedByName: 'Test Manager' }),
+  ).split('\n');
+/** A row as the 80 mm paper prints it: the label, and the amount right-aligned at 48 columns. */
+const paperRow = (label: string, amount: string) => label + ' '.repeat(48 - label.length - amount.length) + amount;
+
+live('two tills on v0.7.35: the note count and the shift report travel with the shift', () => {
+  it("A's close counted by note, its report made: B gets both as A saved them and reads A's count, A's report under A's name and A's Shift history line; B's own close travels back and leaves A's values", async () => {
+    const s = await shop(NAMES);
+    const r = await repo();
+    const { findShift, getShiftCloseReport } = await shiftRepo();
+    const o = await sentOutOnA(s);
+    at('20:10');
+    r.takeRiderPayment(s.a, { orderId: o.id, method: 'cash', riderKeepsCents: KEEP }, A.cashier);
+    at('23:00');
+    const onA = await closeReported(s.a, TILL_A, s.shiftA, FLOAT + FOOD_TOTAL, COUNT_A);
+    expect(onA.report).toMatchObject({ shiftId: s.shiftA, deviceId: TILL_A, tillName: 'TEST-TILL-A' });
+    expect(onA.report.drawer).toMatchObject({ expectedCents: FLOAT + FOOD_TOTAL, countedCents: FLOAT + FOOD_TOTAL, varianceCents: 0, countedNotes: COUNT_A });
+    const asOnA = shiftRow(s.a, s.shiftA);
+    expect(asOnA).toMatchObject({ counted_notes_json: expect.any(String), close_report_json: onA.json });
+
+    await pushOk(s.a, TILL_A, s.b);
+    // B holds A's close as A saved it, both new columns included, and reads it as A does.
+    expect(shiftRow(s.b, s.shiftA)).toEqual(asOnA);
+    expect(findShift(s.b, s.shiftA)).toMatchObject({
+      closedAt: PK['23:00'],
+      countedCashCents: FLOAT + FOOD_TOTAL,
+      expectedCashCents: FLOAT + FOOD_TOTAL,
+      varianceCents: 0,
+      countedNotes: COUNT_A,
+    });
+    expect(getShiftCloseReport(s.b, s.shiftA)).toEqual({ json: onA.json, deviceId: TILL_A, closedAt: PK['23:00'] });
+    expect(await historyLine(s.b, s.shiftA)).toMatchObject({ countedNotes: COUNT_A, hasCloseReport: true });
+    // B's own shift, still open, has neither.
+    expect(shiftRow(s.b, s.shiftB)).toMatchObject({ closed_at: null, counted_notes_json: null, close_report_json: null });
+
+    // B closes its own shift the same way, under B's name; it travels back, and A's close stays as A saved it on both tills.
+    const onB = await closeReported(s.b, TILL_B, s.shiftB, FLOAT, COUNT_FLOAT);
+    expect(onB.report).toMatchObject({ shiftId: s.shiftB, deviceId: TILL_B, tillName: 'TEST-TILL-B' });
+    await pushOk(s.b, TILL_B, s.a);
+    for (const db of [s.a, s.b]) {
+      expect(shiftRow(db, s.shiftA)).toEqual(asOnA);
+      expect(getShiftCloseReport(db, s.shiftA)?.json).toBe(onA.json);
+      expect(findShift(db, s.shiftB)).toMatchObject({ countedCashCents: FLOAT, varianceCents: 0, countedNotes: COUNT_FLOAT });
+      expect(getShiftCloseReport(db, s.shiftB)).toEqual({ json: onB.json, deviceId: TILL_B, closedAt: PK['23:00'] });
+      expect(await historyLine(db, s.shiftB)).toMatchObject({ countedNotes: COUNT_FLOAT, hasCloseReport: true });
+      expect(chainWhole(db)).toBe(true);
+    }
+    expect(shiftRow(s.a, s.shiftB)).toEqual(shiftRow(s.b, s.shiftB));
+  });
+
+  it('an image without the keys (a till still on v0.7.34 writes neither) leaves B’s values alone; a till that hears of the shift only that way reads no count and no report, the rest as closed', async () => {
+    const s = await shop(NAMES);
+    const sync = await import('./repositories/sync-repo.js');
+    const { applyRemoteBatch } = await import('./repositories/apply-remote.js');
+    const { readRowImage } = await import('./replicable-schema.js');
+    const { findShift, getShiftCloseReport } = await shiftRepo();
+    at('23:00');
+    const onA = await closeReported(s.a, TILL_A, s.shiftA, FLOAT, COUNT_FLOAT);
+    // What A sends of its close (left queued: it goes to more than one till here), both new keys in it.
+    const changes = sync.listPendingSync(s.a, 1_000_000).map((p) => sync.pendingToChange(p, TILL_A));
+    expect(changes.filter((c) => c.entityType === 'shifts').at(-1)?.payload).toMatchObject({
+      countedNotesJson: expect.any(String),
+      closeReportJson: onA.json,
+    });
+    await pushOk(s.a, TILL_A, s.b);
+    const onB = s.b.prepare(`SELECT counted_notes_json, close_report_json FROM shifts WHERE id = ?`).get(s.shiftA) as Row;
+    expect(onB).toEqual({ counted_notes_json: expect.any(String), close_report_json: onA.json });
+
+    // A later image of A's shift as a till still on v0.7.34 writes it: every column it has, a version on — neither key.
+    at('23:30');
+    const later = withoutV0735Keys({
+      entityType: 'shifts',
+      entityId: s.shiftA,
+      op: 'upsert',
+      payload: { ...readRowImage(s.a, 'shifts', s.shiftA)!, version: 9, updatedAt: PK['23:30'], closeNotes: 'Test close, checked' },
+      updatedAt: PK['23:30'],
+      deviceId: TILL_A,
+      version: 9,
+    } as SyncChange);
+    for (const k of V0735_SHIFT_KEYS) expect(later.payload).not.toHaveProperty(k);
+    expect(await applyRemoteBatch(s.b, [later], { pause: async () => {} })).toMatchObject({ applied: 1, waiting: 0, dropped: 0 });
+    expect(sync.readParked(s.b)).toEqual([]);
+    expect(s.b.prepare(`SELECT version, close_notes, counted_notes_json, close_report_json FROM shifts WHERE id = ?`).get(s.shiftA)).toEqual({
+      version: 9,
+      close_notes: 'Test close, checked',
+      ...onB,
+    });
+    expect(findShift(s.b, s.shiftA)?.countedNotes).toEqual(COUNT_FLOAT);
+    expect(getShiftCloseReport(s.b, s.shiftA)?.json).toBe(onA.json);
+    expect(await historyLine(s.b, s.shiftA)).toMatchObject({ countedNotes: COUNT_FLOAT, hasCloseReport: true });
+
+    // Till C, on this version, hears of A's shift only from a till still on v0.7.34: no count, no report; the rest as closed.
+    const c = openTill('till-c', { usersFrom: TILL_A });
+    const older = changes.map(withoutV0735Keys);
+    for (const ch of older.filter((x) => x.entityType === 'shifts')) for (const k of V0735_SHIFT_KEYS) expect(ch.payload).not.toHaveProperty(k);
+    expect(await applyRemoteBatch(c, older, { pause: async () => {} })).toMatchObject({ applied: older.length, waiting: 0, dropped: 0 });
+    expect(sync.readParked(c)).toEqual([]);
+    expect(c.prepare(`SELECT counted_notes_json, close_report_json FROM shifts WHERE id = ?`).get(s.shiftA)).toEqual({
+      counted_notes_json: null,
+      close_report_json: null,
+    });
+    expect(findShift(c, s.shiftA)).toMatchObject({
+      closedAt: PK['23:00'],
+      countedCashCents: FLOAT,
+      expectedCashCents: FLOAT,
+      varianceCents: 0,
+      countedNotes: null,
+    });
+    expect(getShiftCloseReport(c, s.shiftA)).toBeNull();
+    expect(await historyLine(c, s.shiftA)).toMatchObject({ countedNotes: null, hasCloseReport: false });
+  });
+
+  it('the website delivery taken on B, sent out with an outside rider on B and paid on A: on A’s paper under Website delivery, outside riders (1), and in A’s ORDERS; nothing of it on B’s', async () => {
+    const s = await shop(NAMES);
+    const r = await repo();
+    const { getShiftCloseReport } = await shiftRepo();
+    const web = await importOnB(s, webDelivery(s, 'web-v0735-1'));
+    await pushOk(s.b, TILL_B, s.a);
+    at('19:45');
+    r.markOrderReady(s.b, web.id, B.cashier);
+    at('19:50');
+    expect(r.sendOutOrder(s.b, web.id, B.cashier)).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: KEEP });
+    await pushOk(s.b, TILL_B, s.a);
+    // The rider comes back to A: Delivered + Pay in cash, he keeps his Rs 200.
+    at('20:20');
+    r.markOrderDelivered(s.a, { orderId: web.id, payment: { method: 'cash', amountCents: CUSTOMER_PAYS }, riderKeepsCents: KEEP }, A.cashier);
+    await pushOk(s.a, TILL_A, s.b);
+
+    // Each till closes its own shift, counted by note, its report made there.
+    at('23:00');
+    const onA = await closeReported(s.a, TILL_A, s.shiftA, FLOAT + FOOD_TOTAL, COUNT_A);
+    const onB = await closeReported(s.b, TILL_B, s.shiftB, FLOAT, COUNT_FLOAT);
+    await pushOk(s.a, TILL_A, s.b);
+    await pushOk(s.b, TILL_B, s.a);
+
+    // A's report: the order under Website delivery with an outside rider, in its ORDERS paid in cash; his Rs 200 out of A's drawer.
+    expect(onA.report.channels).toEqual([
+      { channel: 'web_delivery', orderCount: 1, billedCents: CUSTOMER_PAYS, outside: { orderCount: 1, billedCents: CUSTOMER_PAYS } },
+    ]);
+    expect(onA.report.orders).toEqual([
+      expect.objectContaining({ orderNumber: web.orderNumber, channel: 'web_delivery', outside: true, methods: ['cash'], totalCents: CUSTOMER_PAYS }),
+    ]);
+    expect(onA.report.drawer).toMatchObject({
+      cashSalesCents: CUSTOMER_PAYS,
+      riderKept: { count: 1, cents: KEEP, tripCount: 0 },
+      expectedCents: FLOAT + FOOD_TOTAL,
+      varianceCents: 0,
+      countedNotes: COUNT_A,
+    });
+    // …and A's paper says so, under A's name.
+    const paper = paperOf(onA.report);
+    expect(paper).toContain('Till: TEST-TILL-A');
+    const byChannel = paper.indexOf('BY CHANNEL');
+    expect(byChannel).toBeGreaterThan(0);
+    expect(paper.slice(byChannel, byChannel + 3)).toEqual([
+      'BY CHANNEL',
+      paperRow('Website delivery (1)', '4,715.00'),
+      paperRow('  outside riders (1)', '4,715.00'),
+    ]);
+    expect(paper).toContain(paperRow('ORDERS (1)', '4,715.00'));
+    expect(paper).toContain(paperRow(`${shortOrderNumber(web.orderNumber)} 20:20 Website delivery, Cash`, '4,715.00'));
+
+    // B's report: the order was taken on B but settled on A — nothing of it there.
+    expect(onB.report).toMatchObject({ deviceId: TILL_B, tillName: 'TEST-TILL-B', channels: [], orders: [] });
+    expect(onB.report.drawer).toMatchObject({ cashSalesCents: 0, riderKept: { count: 0, cents: 0, tripCount: 0 }, expectedCents: FLOAT, varianceCents: 0 });
+    const paperB = paperOf(onB.report);
+    expect(paperB).toContain('Till: TEST-TILL-B');
+    expect(paperB).toContain('ORDERS: none');
+    expect(paperB.some((l) => l.startsWith('Website delivery'))).toBe(false);
+
+    // Each report reaches the other till as it was saved.
+    for (const db of [s.a, s.b]) {
+      expect(getShiftCloseReport(db, s.shiftA)?.json).toBe(onA.json);
+      expect(getShiftCloseReport(db, s.shiftB)?.json).toBe(onB.json);
+      expect(chainWhole(db)).toBe(true);
+    }
   });
 });
