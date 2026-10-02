@@ -4,7 +4,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
-import { isLeaveOutChoice, paperCashierName, paperDateTime } from '@cheeseoclock/shared-types';
+import {
+  deliveryBillOf,
+  isDeliveryChargeLine,
+  isLeaveOutChoice,
+  paperCashierName,
+  paperDateTime,
+  salesTaxLabel,
+} from '@cheeseoclock/shared-types';
 import { CheckCircle2, Printer, Hourglass, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { ipc, onFbrQueueChanged } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
@@ -37,6 +44,13 @@ const METHOD_LABEL = {
 
 export function ReceiptDialog({ snapshot, onClose }: Props) {
   const { order, items, payments, discounts, tableLabel } = snapshot;
+  // A delivery with a delivery charge shows the owner's delivery bill, as the
+  // paper prints it (receipt-renderer appendDeliveryTotals): Food / Sales tax /
+  // Food total (with tax) / Delivery charge / Customer pays, from the same
+  // shared-types deliveryBillOf. Its charge lines show once, under Food total,
+  // never also as an item. Null keeps Subtotal / Tax / Total.
+  const bill = deliveryBillOf(snapshot);
+  const shownItems = bill ? items.filter((it) => !isDeliveryChargeLine(it)) : items;
   const [reprinting, setReprinting] = useState(false);
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -114,6 +128,19 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
       setReprinting(false);
     }
   }
+
+  // The order's discounts, one row each, under Subtotal (or under Food on the delivery bill).
+  // An automatic offer the cashier took off, or a discount at Rs 0 that left the value deals
+  // alone, takes nothing off: no line (as on the printed bill).
+  const discountRows = discounts.filter((d) => !billLeavesOut(d)).map((d) => (
+    <div key={d.id} className="flex justify-between text-emerald-700 dark:text-emerald-300">
+      {/* "(10%, food only)" / "(10%, not on value deals)" when the discount's own frozen rule left
+          the delivery charge or the value deals alone. */}
+      <span>{receiptDiscountLabel(d, items)}</span>
+      <span>−{formatCents(d.amountCents, { showSymbol: false })}</span>
+    </div>
+  ));
+
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
@@ -154,7 +181,7 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
 
             <hr className="my-3 border-stone-300 dark:border-stone-700" />
 
-            {items.map((it) => (
+            {shownItems.map((it) => (
               <div key={it.id} className="mb-2">
                 <div className="flex justify-between">
                   <span>
@@ -178,28 +205,57 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
             <hr className="my-3 border-stone-300 dark:border-stone-700" />
 
             <div className="space-y-1">
-              <div className="flex justify-between">
-                <span>Subtotal</span>
-                <span>{formatCents(order.subtotalCents, { showSymbol: false })}</span>
-              </div>
-              {/* An automatic offer the cashier took off, or a discount at Rs 0 that left the value deals
-                  alone, takes nothing off: no line (as on the printed bill). */}
-              {discounts.filter((d) => !billLeavesOut(d)).map((d) => (
-                <div key={d.id} className="flex justify-between text-emerald-700 dark:text-emerald-300">
-                  {/* "(10%, food only)" / "(10%, not on value deals)" when the discount's own frozen rule left
-                      the delivery charge or the value deals alone. */}
-                  <span>{receiptDiscountLabel(d, items)}</span>
-                  <span>−{formatCents(d.amountCents, { showSymbol: false })}</span>
-                </div>
-              ))}
-              <div className="flex justify-between">
-                <span>Tax</span>
-                <span>{formatCents(order.taxCents, { showSymbol: false })}</span>
-              </div>
-              <div className="flex justify-between border-t border-stone-300 pt-1 text-base font-bold dark:border-stone-700">
-                <span>Total</span>
-                <span>Rs {formatCents(order.totalCents, { showSymbol: false })}</span>
-              </div>
+              {bill ? (
+                <>
+                  {/* The delivery bill (owner, 2 Oct 2026), the paper's rows in the screen's words: the
+                      food before its discount and tax, the discounts as on every receipt, the food's tax,
+                      the charge's own tax when it is not 0 (owner, Q1: the charge keeps its 15%), what
+                      the food comes to, the charge, and what the customer pays (the stored total). */}
+                  <div className="flex justify-between">
+                    <span>Food</span>
+                    <span>{formatCents(bill.foodCents, { showSymbol: false })}</span>
+                  </div>
+                  {discountRows}
+                  <div className="flex justify-between">
+                    <span>{salesTaxLabel(bill.foodTaxBps)}</span>
+                    <span>{formatCents(bill.foodTaxCents, { showSymbol: false })}</span>
+                  </div>
+                  {bill.deliveryTaxCents !== null && bill.deliveryTaxCents !== 0 && (
+                    <div className="flex justify-between">
+                      <span>{salesTaxLabel(bill.deliveryTaxBps, true)}</span>
+                      <span>{formatCents(bill.deliveryTaxCents, { showSymbol: false })}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-semibold">
+                    <span>Food total (with tax)</span>
+                    <span>Rs {formatCents(bill.foodTotalCents, { showSymbol: false })}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Delivery charge</span>
+                    <span>{formatCents(bill.deliveryChargeCents, { showSymbol: false })}</span>
+                  </div>
+                  <div className="flex justify-between border-t border-stone-300 pt-1 text-base font-bold dark:border-stone-700">
+                    <span>Customer pays</span>
+                    <span>Rs {formatCents(bill.customerPaysCents, { showSymbol: false })}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex justify-between">
+                    <span>Subtotal</span>
+                    <span>{formatCents(order.subtotalCents, { showSymbol: false })}</span>
+                  </div>
+                  {discountRows}
+                  <div className="flex justify-between">
+                    <span>Tax</span>
+                    <span>{formatCents(order.taxCents, { showSymbol: false })}</span>
+                  </div>
+                  <div className="flex justify-between border-t border-stone-300 pt-1 text-base font-bold dark:border-stone-700">
+                    <span>Total</span>
+                    <span>Rs {formatCents(order.totalCents, { showSymbol: false })}</span>
+                  </div>
+                </>
+              )}
             </div>
 
             <hr className="my-3 border-stone-300 dark:border-stone-700" />
