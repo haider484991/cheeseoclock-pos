@@ -5,9 +5,9 @@ import { writeWithSync, nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { recordDrawerOpen } from './drawer-open-repo.js';
-import { shortOrderNumber } from '@cheeseoclock/shared-types';
+import { SHIFT_REPORT_VERSION, shortOrderNumber } from '@cheeseoclock/shared-types';
 import { cashCountInputSchema, parseCashCountJson } from '@cheeseoclock/shared-schemas';
-import { cashCountJson, cashCountTotalCents, formatCents } from '@cheeseoclock/pos-domain';
+import { cashCountJson, cashCountTotalCents, formatCents, type ShiftReportDrawerFacts } from '@cheeseoclock/pos-domain';
 import type {
   CashCount,
   CashMovement,
@@ -338,13 +338,68 @@ function orderList(orders: readonly UnpaidOrderAtClose[]): string {
   return orders.length > 5 ? `${shown} and ${orders.length - 5} more` : shown;
 }
 
+/**
+ * The drawer exactly as a close works it out and stores it: the float, the
+ * cash sales and cash refunds of the shift, cashMovementTotals' breakdown
+ * (cash in, the payouts typed by hand, the rider tips, the outside riders'
+ * payouts and how many were trips), and the expected, counted and over /
+ * short the close writes. The shift report's drawer facts less the note
+ * count, which the context carries on its own (ShiftCloseContext.countedNotes).
+ */
+export type ShiftCloseDrawer = Omit<ShiftReportDrawerFacts, 'countedNotes'>;
+
+/**
+ * What a close hands the shift report's maker (CloseShiftOptions.makeReport):
+ * its own figures, worked out once inside its transaction after every check
+ * that can refuse it, so the paper says what the shift row says.
+ */
+export interface ShiftCloseContext {
+  /** The shift as it was before this close: still open. */
+  shift: Shift;
+  /** The moment of the close: the closed_at the close writes. */
+  closedAt: string;
+  /** Who closed it: the manager signed in, or the manager whose PIN approved it. */
+  closedByUserId: string;
+  /** Approved by a manager's PIN on a cashier's login (then who was signed in); null for the manager signed in. */
+  approval: CloseApproval | null;
+  /** The drawer as this close works it out and stores it. */
+  drawer: ShiftCloseDrawer;
+  /** The drawer counted note by note, as stored (counted_notes_json read back); null when typed as one figure. */
+  countedNotes: CashCount | null;
+  /** The orders this close carries over unpaid, oldest first (listUnpaidForClose); empty when none. */
+  unpaid: readonly UnpaidOrderAtClose[];
+  /** The reason stored for carrying them over (carry_over_reason); null when nothing is carried over. */
+  carryOverReason: string | null;
+}
+
+/** A shift report made at the close: the text to store and its SHA-256 (hex), which the audit row keeps. */
+export interface ShiftCloseReport {
+  json: string;
+  sha256: string;
+}
+
+export interface CloseShiftOptions {
+  /**
+   * Makes the shift report from the close's own figures (step 19d-3's
+   * makeShiftReport). Called once, inside the close's transaction, after
+   * every check that can refuse the close and before the shift is written,
+   * so a refused close never makes one. It only reads. Null means no report
+   * (another till's shift); so does a throw, which is logged, and the shift
+   * closes all the same with close_report_json NULL: the report never stops
+   * a close. Omitted: no report.
+   */
+  makeReport?: (c: ShiftCloseContext) => ShiftCloseReport | null;
+}
+
 export function closeShift(
   db: AppDatabase,
   input: CloseShiftInput,
   actor: Actor & { userId: string },
   approval: CloseApproval | null = null,
+  opts: CloseShiftOptions = {},
 ): Shift {
   let result!: Shift;
+  let reportMade = false;
   const tx = db.transaction(() => {
     const before = findShift(db, input.shiftId);
     if (!before) throw new Error('Shift not found');
@@ -407,6 +462,35 @@ export function closeShift(
     const counted = Math.round(input.countedCashCents);
     const variance = counted - expected;
     const now = nowIso();
+    const storedReason = unpaid.length > 0 ? carryOverReason : null;
+
+    // The shift report (migration 0051), made here from this close's own
+    // figures — after every check that can refuse the close, before the
+    // shift is written — so it is frozen with the close, every section in
+    // it whatever the print settings say (owner, 2 Oct 2026).
+    const report = opts.makeReport
+      ? closeReportOf(db, opts.makeReport, {
+          shift: before,
+          closedAt: now,
+          closedByUserId: actor.userId,
+          approval,
+          drawer: {
+            openingCents: before.openingCashCents,
+            cashSalesCents: Number(cashRow.sales),
+            cashRefundsCents: Number(cashRow.refunds),
+            cashIn: { count: moves.inCount, cents: moves.inCents },
+            payouts: { count: moves.payoutCount, cents: moves.payoutCents },
+            tips: { count: moves.tipCount, cents: moves.tipCents },
+            riderKept: { count: moves.riderCount, cents: moves.riderCents, tripCount: moves.riderTripCount },
+            expectedCents: expected,
+            countedCents: counted,
+            varianceCents: variance,
+          },
+          countedNotes: parseCashCountJson(countedNotesJson),
+          unpaid,
+          carryOverReason: storedReason,
+        })
+      : null;
 
     // The closing note goes in its own column: it used to be written over
     // the note typed when the shift was opened (audit 2026-09-27).
@@ -415,7 +499,7 @@ export function closeShift(
           SET closed_by_user_id = ?, closed_at = ?, counted_cash_cents = ?,
               expected_cash_cents = ?, variance_cents = ?,
               close_notes = ?, carried_unpaid_count = ?, carry_over_reason = ?,
-              counted_notes_json = ?,
+              counted_notes_json = ?, close_report_json = ?,
               updated_at = ?, version = version + 1
         WHERE id = ? AND closed_at IS NULL`,
     ).run(
@@ -426,8 +510,9 @@ export function closeShift(
       variance,
       input.notes?.trim() || null,
       unpaid.length,
-      unpaid.length > 0 ? carryOverReason : null,
+      storedReason,
       countedNotesJson,
+      report?.json ?? null,
       now,
       input.shiftId,
     );
@@ -446,13 +531,19 @@ export function closeShift(
     });
     // The actor is the manager who closed it. On a cashier's login the
     // audit row also says so: approved by the manager's PIN, on whose till.
+    // The report saved with the close goes in as its version and SHA-256, so
+    // the hash chain fixes the stored text (null: none was saved).
     writeAudit(db, {
       entityType: 'shifts',
       entityId: input.shiftId,
       action: 'shift_close',
       actorUserId: actor.userId,
       before,
-      after: approval ? { ...after, approval } : after,
+      after: {
+        ...after,
+        ...(approval ? { approval } : {}),
+        closeReport: report ? { v: SHIFT_REPORT_VERSION, sha256: report.sha256 } : null,
+      },
     });
     // One row per carried order: which order, why, who approved, which shift.
     for (const o of unpaid) {
@@ -475,6 +566,7 @@ export function closeShift(
     }
 
     result = after;
+    reportMade = report !== null;
   });
   tx();
   log.info('Shift closed', {
@@ -484,8 +576,55 @@ export function closeShift(
     carriedUnpaid: result.carriedUnpaidCount,
     viaManagerPin: approval !== null,
     byNote: result.countedNotes != null,
+    reportMade,
   });
   return result;
+}
+
+/**
+ * Runs the report's maker for a close (inside its transaction). A throw is
+ * logged and gives no report: the shift closes all the same. Except when
+ * the database itself ended the transaction under it (a disk or memory
+ * error rolls it back): nothing of the close is written yet, and going on
+ * would write the close outside any transaction, so the close fails as it
+ * would on that error anywhere else.
+ */
+function closeReportOf(
+  db: AppDatabase,
+  makeReport: (c: ShiftCloseContext) => ShiftCloseReport | null,
+  ctx: ShiftCloseContext,
+): ShiftCloseReport | null {
+  try {
+    return makeReport(ctx) ?? null;
+  } catch (e) {
+    if (db.inTransaction === false) throw e;
+    log.error('Shift report not made', { shiftId: ctx.shift.id, error: e instanceof Error ? e.message : String(e) });
+    return null;
+  }
+}
+
+/** A shift's saved report as stored, with the till it was closed on and when. */
+export interface StoredShiftCloseReport {
+  /** shifts.close_report_json as stored: read it with parseShiftReportJson. */
+  json: string;
+  /** The till the shift was on (shifts.device_id). */
+  deviceId: string;
+  closedAt: string;
+}
+
+/**
+ * The shift report saved at a shift's close (shifts.close_report_json,
+ * migration 0051), exactly as stored, or null: a shift still open, unknown
+ * or deleted, closed before 0.7.35 or on an older till, or one whose report
+ * could not be made. Read on its own, never in SHIFT_SELECT or the Shift
+ * type, so shift lists and the top bar's poll never carry the report.
+ */
+export function getShiftCloseReport(db: AppDatabase, shiftId: string): StoredShiftCloseReport | null {
+  const row = db
+    .prepare(`SELECT close_report_json, device_id, closed_at FROM shifts WHERE id = ? AND deleted_at IS NULL`)
+    .get(shiftId) as { close_report_json: string | null; device_id: string; closed_at: string | null } | undefined;
+  if (!row || typeof row.close_report_json !== 'string' || row.close_report_json === '' || row.closed_at === null) return null;
+  return { json: row.close_report_json, deviceId: row.device_id, closedAt: row.closed_at };
 }
 
 /**
