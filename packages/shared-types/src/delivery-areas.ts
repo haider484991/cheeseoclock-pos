@@ -426,6 +426,147 @@ export function discountBillLabel(
 }
 
 /**
+ * What the order's delivery-charge lines come to (paisa): Σ lineTotalCents
+ * of the lines sold under a "Delivery Charge…" name (isDeliveryChargeLine
+ * with no fee item ids, the after-the-fact rule: addOrderItem always sells
+ * a fee line under that name); 0 when there is none. What an outside rider
+ * keeps, before tax and never discounted on paper; Send out freezes
+ * min(this, total).
+ */
+export function deliveryChargeLinesCents(s: {
+  readonly items: ReadonlyArray<{ readonly menuItemName?: string | null; readonly lineTotalCents: number }>;
+}): number {
+  let cents = 0;
+  for (const l of s.items) if (isDeliveryChargeLine(l)) cents += l.lineTotalCents;
+  return cents;
+}
+
+/**
+ * A delivery order's bill, split the owner's way (owner, 2 Oct 2026: "Food /
+ * Sales tax / FOOD TOTAL (with tax) / Delivery charge / CUSTOMER PAYS"):
+ *
+ *   Food                          3,900.00   foodCents
+ *   (the discount lines, as before)
+ *   Sales tax 15%                   585.00   foodTaxCents, foodTaxBps
+ *   Sales tax on delivery 15%        30.00   deliveryTaxCents, deliveryTaxBps
+ *   FOOD TOTAL (with tax)      Rs 4,515.00   foodTotalCents
+ *   Delivery charge                 200.00   deliveryChargeCents
+ *   CUSTOMER PAYS              Rs 4,715.00   customerPaysCents
+ *
+ * The delivery charge keeps its tax (owner, 2 Oct 2026 01:45, Q1): the
+ * outside rider keeps exactly the charge and hands over the FOOD TOTAL.
+ */
+export interface DeliveryBill {
+  /** The stored subtotal less the delivery charge: the food before its discount and tax. */
+  foodCents: number;
+  /** deliveryChargeLinesCents: the charge as sold, before tax. */
+  deliveryChargeCents: number;
+  /** The stored tax less the charge's own (all of it when the charge's tax is not shown apart). */
+  foodTaxCents: number;
+  /** The one rate on the food lines (on every line when the charge's tax is not shown apart); null when they differ or one has none. */
+  foodTaxBps: number | null;
+  /** The charge's own tax; null when it is not shown apart (the discount came off the charge too, or a charge line has no rate). */
+  deliveryTaxCents: number | null;
+  /** The one rate on the charge lines; null when they differ or one has none. */
+  deliveryTaxBps: number | null;
+  /** CUSTOMER PAYS less the delivery charge: what the rider hands over. */
+  foodTotalCents: number;
+  /** The stored total. */
+  customerPaysCents: number;
+}
+
+/** The one tax rate on these lines; null when they differ, there are none, or one has no whole-number rate. */
+function oneTaxRate(lines: ReadonlyArray<{ readonly taxRateBps?: number }>): number | null {
+  let rate: number | null = null;
+  for (const l of lines) {
+    const bps = l.taxRateBps;
+    if (bps === undefined || !Number.isInteger(bps)) return null;
+    if (rate === null) rate = bps;
+    else if (rate !== bps) return null;
+  }
+  return rate;
+}
+
+/**
+ * The delivery bill of an order (DeliveryBill), or null when the order keeps
+ * the usual Subtotal / Tax / TOTAL layout: not a delivery, no delivery
+ * charge (or a Rs 0 one), or a total below the charge (a discount that also
+ * came off the charge can take it there: the paper never shows a negative
+ * FOOD TOTAL).
+ *
+ * FOOD TOTAL + Delivery charge = CUSTOMER PAYS = the stored total, always.
+ * It reads the stored figures only, never recomputing them: the paper,
+ * ReceiptDialog, Send out, the rider dialog and the drawer all read this one
+ * function, or the value Send out froze from it.
+ *
+ * The charge's own tax is shown apart only when the order's discount left
+ * the charge alone (its newest row's alsoOffDeliveryCharge false, as the
+ * snapshot reads it against the stored bill), or there is no discount, and
+ * every charge line carries its rate: it is then exactly what the till
+ * stored for those lines, per line, Math.round(line × rate / 10000) — the
+ * rounding of pos-domain applyBps and the FBR mapper. Otherwise the whole tax
+ * prints on one line. Whether the discount left the value deals alone does
+ * not matter here: that only moves the food's share.
+ */
+export function deliveryBillOf(s: {
+  readonly order: {
+    readonly mode: string;
+    readonly subtotalCents: number;
+    readonly discountCents: number;
+    readonly taxCents: number;
+    readonly totalCents: number;
+  };
+  readonly items: ReadonlyArray<{
+    readonly menuItemName?: string | null;
+    readonly lineTotalCents: number;
+    readonly taxRateBps?: number;
+  }>;
+  readonly discounts: ReadonlyArray<{ readonly alsoOffDeliveryCharge?: boolean }>;
+}): DeliveryBill | null {
+  const { order } = s;
+  if (order.mode !== 'delivery') return null;
+  const charge = deliveryChargeLinesCents(s);
+  if (!(charge > 0)) return null;
+  if (order.totalCents < charge) return null;
+
+  const chargeLines = s.items.filter((l) => isDeliveryChargeLine(l));
+  const foodLines = s.items.filter((l) => !isDeliveryChargeLine(l));
+  const tookDiscount = order.discountCents > 0 && s.discounts[s.discounts.length - 1]?.alsoOffDeliveryCharge !== false;
+  const split =
+    !tookDiscount && chargeLines.every((l) => l.taxRateBps !== undefined && Number.isInteger(l.taxRateBps));
+  let deliveryTaxCents: number | null = null;
+  if (split) {
+    deliveryTaxCents = 0;
+    // As the till stored it: each line taxed on its own (what is left of it, never below 0).
+    for (const l of chargeLines) deliveryTaxCents += Math.round((Math.max(0, l.lineTotalCents) * (l.taxRateBps ?? 0)) / 10_000);
+  }
+  return {
+    foodCents: order.subtotalCents - charge,
+    deliveryChargeCents: charge,
+    foodTaxCents: order.taxCents - (deliveryTaxCents ?? 0),
+    foodTaxBps: oneTaxRate(split ? foodLines : s.items),
+    deliveryTaxCents,
+    deliveryTaxBps: oneTaxRate(chargeLines),
+    foodTotalCents: order.totalCents - charge,
+    customerPaysCents: order.totalCents,
+  };
+}
+
+/**
+ * A tax line's words on the delivery bill: "Sales tax 15%", "Sales tax"
+ * (no rate, or several), "Sales tax on delivery 15%", "Sales tax on
+ * delivery". The rate as the receipt's "Tax (16.5%)" writes it: 1500 →
+ * "15", 1650 → "16.5", 1625 → "16.25"; null, 0 or less, or a part basis
+ * point gives no number.
+ */
+export function salesTaxLabel(bps: number | null, onDelivery = false): string {
+  const words = onDelivery ? 'Sales tax on delivery' : 'Sales tax';
+  if (bps === null || !Number.isInteger(bps) || bps <= 0) return words;
+  const pct = bps % 100 === 0 ? String(bps / 100) : (bps / 100).toFixed(2).replace(/0$/, '');
+  return `${words} ${pct}%`;
+}
+
+/**
  * The "Delivery Charge (Rs N)" item whose price is this fee, or undefined
  * when the menu has none. Matched on price rather than the exact name so a
  * cashier retyping the name cannot break it.
