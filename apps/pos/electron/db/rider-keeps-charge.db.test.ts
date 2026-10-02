@@ -13,6 +13,11 @@
  *   (2) Rider paid (takeRiderPayment) while he is out: the order stays out for
  *       delivery, paid at or after it left, audited 'rider_paid'; Delivered
  *       then closes it with no second payment and no second payout;
+ *  (2b) Send out with "Paid now" (sendOutRiderPaid, e2e fix A): Send out and
+ *       Rider paid in one transaction, paid 1 ms after it left; the shift
+ *       expects the float plus the food total; any refusal (no shift, a card,
+ *       a keep the box got wrong, a prepaid order, a failure part-way) writes
+ *       nothing at all — the order is still Ready;
  *   (3) EasyPaisa / JazzCash: the wallet for the food total, cash for his fee,
  *       the payout, and no drawer row — the shift expects the float;
  *   (4) a prepaid order sent out (owner Q2: "pay the rider's fee AT SEND
@@ -54,7 +59,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deliveryBillOf, type AuthenticatedUser, type PaymentMethod, type UUID } from '@cheeseoclock/shared-types';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import { riderSettledWhileOut } from '@cheeseoclock/printer-core';
+import { receiptDocumentFor, riderSettledWhileOut } from '@cheeseoclock/printer-core';
 import type { AppDatabase } from './connection.js';
 import { DatabaseSync } from './costing-shop.fixture.js';
 import { openTill } from './two-tills.fixture.js';
@@ -1599,5 +1604,126 @@ live('(9) one trip, one fee: an order refunded on the trip and rung again does n
     await call('orders:sendOut', { orderId: stranger.id, riderAlreadyPaid: 'yes' });
     expect(r.findOrder(shop.db, stranger.id)!.riderKeepsCents).toBe(20_000);
     expect(h.kicks).toHaveLength(1);
+  });
+});
+
+live('(2b) Send out with "Paid now" (sendOutRiderPaid, e2e fix A): sent out and paid in one transaction', () => {
+  /** A counter delivery like out()'s — Big Two + Fries + the charge — ready at 19:45; at 19:50 the rider is at the counter. */
+  async function ready(shop: Shop) {
+    const r = await repo();
+    at('19:00');
+    const o = r.createOrder(shop.db, { mode: 'delivery' }, CASHIER);
+    for (const menuItemId of [shop.bigTwo, shop.fries, shop.charge]) {
+      r.addOrderItem(shop.db, { orderId: o.id, menuItemId, quantity: 1, modifierIds: [] }, CASHIER);
+    }
+    at('19:30');
+    r.sendOrderToKitchen(shop.db, o.id, CASHIER);
+    at('19:45');
+    r.markOrderReady(shop.db, o.id, CASHIER);
+    at('19:50');
+    const snap = r.getOrderSnapshot(shop.db, o.id)!;
+    const bill = deliveryBillOf(snap)!;
+    return { id: o.id, total: snap.order.totalCents as number, keep: bill.deliveryChargeCents as number, foodTotal: bill.foodTotalCents as number };
+  }
+  const leftAt = (db: AppDatabase, id: string) => (db.prepare(`SELECT dispatched_at AS d FROM orders WHERE id = ?`).get(id) as Row)['d'];
+
+  it("cash: 'send_out' then 'rider_paid', paid 1 ms after it left; the shift expects the float plus the FOOD TOTAL (Rs 4,515); Delivered adds nothing", async () => {
+    const shop = await till();
+    const r = await repo();
+    const { getShiftSummary } = await shiftRepo();
+    const o = await ready(shop);
+    // The owner's example, from the bill itself.
+    expect([o.total, o.keep, o.foodTotal]).toEqual([471_500, 20_000, 451_500]);
+    const before = ledger(shop.db, o.id);
+
+    const paid = r.sendOutRiderPaid(shop.db, { orderId: o.id, method: 'cash', riderKeepsCents: o.keep }, CASHIER);
+
+    // The clock did not move between the two: still sent out first, paid after.
+    expect(paid).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: o.keep, dispatchedAt: PK['19:50'], sentDrawerOpenId: null });
+    expect(paid.paidAt).toBe(new Date(Date.parse(PK['19:50']) + 1).toISOString());
+    expect(riderSettledWhileOut(paid)).toBe(true);
+    const snap = r.getOrderSnapshot(shop.db, o.id)!;
+    expect(receiptDocumentFor(snap)).toBe('bill');
+
+    expect(paymentsOf(shop.db, o.id)).toEqual([expect.objectContaining({ method: 'cash', amount_cents: o.total, tendered_cents: null, shift_id: shop.shiftId })]);
+    const payouts = payoutsOf(shop.db, o.id);
+    expect(payouts).toEqual([expect.objectContaining({ type: 'payout', amount_cents: o.keep, order_id: o.id })]);
+    expect(drawerOf(shop.db, paid.drawerOpenId!)).toMatchObject({ kind: 'sale', amount_cents: o.foodTotal, cash_movement_id: payouts[0]!['id'] });
+    expect(auditAfter(shop.db, before.audit).map((a) => `${String(a.entityType)}:${String(a.action)}`)).toEqual([
+      'orders:send_out',
+      'payments:create',
+      'cash_movements:delivery_charge_to_rider',
+      'drawer_opens:drawer_sale',
+      'orders:rider_paid',
+    ]);
+    expect(getShiftSummary(shop.db, shop.shiftId)).toMatchObject({
+      cashSalesCents: o.total,
+      riderChargesCents: o.keep,
+      riderChargeCount: 1,
+      expectedCashCents: FLOAT + o.foodTotal,
+    });
+
+    // The release checklist: a second identical delivery, Pays after delivery
+    // then Delivered + Pay — the drawer expects 5,000 + 4,515 + 4,515.
+    const o2 = await out(shop);
+    at('20:20');
+    r.markOrderDelivered(shop.db, { orderId: o2.id, payment: { method: 'cash', amountCents: o2.total }, riderKeepsCents: o2.keep }, CASHIER);
+    // Delivered on the Paid now order: no second payment, payout or drawer row.
+    const mid = ledger(shop.db, o.id);
+    const done = r.markOrderDelivered(shop.db, { orderId: o.id, riderKeepsCents: o.keep }, CASHIER);
+    expect(done).toMatchObject({ status: 'paid', drawerOpenId: null });
+    expect(ledger(shop.db, o.id)).toMatchObject({ payments: mid.payments, movements: mid.movements, drawer: mid.drawer });
+    expect(payoutsOf(shop.db, o.id)).toHaveLength(1);
+    expect(getShiftSummary(shop.db, shop.shiftId)).toMatchObject({
+      riderChargesCents: 2 * o.keep,
+      riderChargeCount: 2,
+      expectedCashCents: 1_403_000,
+    });
+    expect(FLOAT + o.foodTotal + o2.foodTotal).toBe(1_403_000);
+    expect(chainOk(shop.db)).toBe(true);
+  });
+
+  it('EasyPaisa: the wallet for the food total, cash for his fee, the payout — no drawer row; the shift expects the float', async () => {
+    const shop = await till();
+    const r = await repo();
+    const { getShiftSummary } = await shiftRepo();
+    const o = await ready(shop);
+    const paid = r.sendOutRiderPaid(shop.db, { orderId: o.id, method: 'easypaisa', referenceNo: ' TEST-EP-0003 ', riderKeepsCents: o.keep }, CASHIER);
+    expect(paid).toMatchObject({ status: 'out_for_delivery', drawerOpenId: null, sentDrawerOpenId: null });
+    expect(Date.parse(paid.paidAt!)).toBeGreaterThan(Date.parse(paid.dispatchedAt!));
+    expect(paymentsOf(shop.db, o.id).map((p) => [p['method'], p['amount_cents'], p['reference_no']])).toEqual([
+      ['easypaisa', o.foodTotal, 'TEST-EP-0003'],
+      ['cash', o.keep, null],
+    ]);
+    expect(payoutsOf(shop.db, o.id)).toHaveLength(1);
+    expect(getShiftSummary(shop.db, shop.shiftId)).toMatchObject({ riderChargeCount: 1, expectedCashCents: FLOAT });
+  });
+
+  it("both or nothing: no shift, a card, a keep that is not what Send out freezes, a prepaid order, a failure part-way — refused in that step's words, still Ready, nothing written", async () => {
+    const r = await repo();
+    const check = async (shop: Shop, id: string, input: { method: PaymentMethod; riderKeepsCents: number }, words: string) => {
+      const before = ledger(shop.db, id);
+      expect(() => r.sendOutRiderPaid(shop.db, { orderId: id, ...input }, CASHIER)).toThrow(words);
+      expect(ledger(shop.db, id)).toEqual(before);
+      expect(leftAt(shop.db, id)).toBeNull();
+    };
+    const shop = await till();
+    const o = await ready(shop);
+    await check(shop, o.id, { method: 'card', riderKeepsCents: o.keep }, NO_CARD);
+    await check(shop, o.id, { method: 'cash', riderKeepsCents: o.keep + 1 }, CHANGED);
+    // A prepaid order: its Send out payout (owner Q2) is rolled back with the refusal.
+    const pre = await prepaid(shop);
+    await check(shop, pre.id, { method: 'cash', riderKeepsCents: 20_000 }, 'Order is already paid');
+    expect(payoutsOf(shop.db, pre.id)).toEqual([]);
+    // The order's own paid_at UPDATE fails: the Send out goes back too.
+    failOrderUpdates(shop.db);
+    await check(shop, o.id, { method: 'cash', riderKeepsCents: o.keep }, 'Test: the disk is full');
+    expect(chainOk(shop.db)).toBe(true);
+
+    const closed = await till({ shift: false });
+    const c = await ready(closed);
+    await check(closed, c.id, { method: 'cash', riderKeepsCents: c.keep }, NO_SHIFT);
+    // The box's fallback, a plain Send out, still works with no shift: he owes.
+    expect(r.sendOutOrder(closed.db, c.id, CASHIER)).toMatchObject({ status: 'out_for_delivery', paidAt: null, riderKeepsCents: c.keep });
   });
 });

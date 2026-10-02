@@ -18,6 +18,10 @@
  *  - The request carries what he keeps (frozen at Send out) and the method;
  *    the payment is the full total, whatever the method.
  *  - riderPaidOnly: "Rider paid · #0042", orders:riderPaid, the order stays out.
+ *  - sendOutFirst (Send out's "Paid now", e2e fix A): the order is still
+ *    Ready; Confirm is ONE call, orders:sendOut with riderPayment (out and
+ *    paid, then the bill); a refusal keeps the box; "Pays after delivery",
+ *    the X or Esc send it out alone, once (it still goes out with its bill).
  *  - "Customer refused an item": his cash is taken at the food total, as it
  *    is, and the request says refusedItem (the till keeps the item's refund
  *    as owed until it is done); then the Refund box opens on Part of it with
@@ -42,6 +46,7 @@ import { SecretInput } from '../../components/secret/SecretInput';
 import { useSessionStore } from '../../stores/sessionStore';
 import { MarkDeliveredDialog, REFUSED_ITEM_REFUND, type RefundItemNext } from './MarkDeliveredDialog';
 import { REFUSED_ITEM_OWED_TEXT } from './refusedItemWords';
+import type { PaidNowAtSendOut } from './boardLogic';
 import { RefundOrderDialog } from './RefundOrderDialog';
 import { OrdersBoardPage } from './OrdersBoardPage';
 import { OrderDetailDrawer } from './OrderDetailDrawer';
@@ -74,6 +79,8 @@ const seen = vi.hoisted(() => ({
   /** The till's answer to markDelivered / riderPaid: this snapshot, or a refusal in its own words. */
   answer: null as unknown,
   refuse: null as string | null,
+  /** The open box's Root onOpenChange (Esc, or a tap outside). */
+  openChange: null as ((open: boolean) => void) | null,
 }));
 
 /**
@@ -120,7 +127,11 @@ vi.mock('@radix-ui/react-dialog', async () => {
     ({ children, className }: P) =>
       h(t, { className, ...extra }, children);
   return {
-    Root: pass,
+    // Esc (or a tap outside) is the Root's onOpenChange(false): kept so a test can press it.
+    Root: ({ children, onOpenChange }: P & { onOpenChange?: (open: boolean) => void }) => {
+      seen.openChange = onOpenChange ?? null;
+      return h(React.Fragment, null, children);
+    },
     Portal: pass,
     Overlay: () => null,
     Content: ({ children, className }: P) => {
@@ -182,6 +193,7 @@ vi.mock('../../ipc/client', async (importOriginal) => {
         markDelivered: answer('orders.markDelivered'),
         markServed: answer('orders.markServed'),
         riderPaid: answer('orders.riderPaid'),
+        sendOut: answer('orders.sendOut'),
         refund: async (req: unknown) => {
           seen.calls.push(['orders.refund', req]);
           return { order: { status: 'paid' }, stock: null };
@@ -922,5 +934,132 @@ describe('own rider, takeaway, foodpanda and a prepaid outside order: as before'
     await settle();
     expect(seen.toasts).toEqual([{ title: 'Cash given must cover the total', variant: 'warning' }]);
     expect(seen.calls).toEqual([]);
+  });
+});
+
+describe('Send out\'s "Paid now" (sendOutFirst, e2e fix A): sent out and paid in one step, then the bill', () => {
+  /** #0042 still Ready: nothing sent out, nothing kept yet. */
+  const readyOrder = () => outsideOrder({ status: 'ready', dispatchedAt: null, riderKeepsCents: undefined });
+  const PLAN = { request: { orderId: 'o1' }, keepsCents: 20_000, tripCents: 0 };
+  /** The Paid now box open on the Ready order, with what onDone and onClose heard. */
+  function openPaidNow(plan: PaidNowAtSendOut = PLAN) {
+    signIn('cashier');
+    const done: Array<RefundItemNext | undefined> = [];
+    const closed: string[] = [];
+    seen.openChange = null;
+    const box = mount(() => (
+      <MarkDeliveredDialog
+        snap={readyOrder()}
+        riderPaidOnly
+        sendOutFirst={plan}
+        onClose={() => closed.push('closed')}
+        onDone={(next) => {
+          done.push(next);
+        }}
+      />
+    ));
+    return Object.assign(box, { done, closed });
+  }
+
+  it('"Rider paid · #0042", it goes out and then the bill prints; the figures the Send out box showed; "Pays after delivery" in place of Back', () => {
+    const box = openPaidNow();
+    expect(box.words).toContain('Rider paid · #0042 Test Customer · it goes out, then the bill prints');
+    expect(box.words).toContain('Customer pays Rs 4,715 Rider keeps — delivery charge − Rs 200 Take from the rider Rs 4,515');
+    expect(box.methods).toEqual(['Cash', 'EasyPaisa', 'JazzCash']);
+    expect(box.words).not.toContain('Customer refused an item');
+    expect(box.words).toContain('Pays after delivery Confirm');
+    expect(box.words).not.toContain('Back');
+    expect(box.html).toContain('aria-label="Pays after delivery"');
+  });
+
+  it('Confirm (cash): ONE till call — Send out with his payment — and "Rider paid · Rs 4,515 for the shop", the change his', async () => {
+    seen.answer = { ...outsideOrder({ paidAt: NOW }), payments: [pay('cash', 471_500)] };
+    const box = openPaidNow();
+    box.type('cash', '5000');
+    expect(box.words).toContain('Change to give the rider Rs 485');
+    box.enter();
+    await settle();
+    expect(seen.calls).toEqual([
+      ['orders.sendOut', { orderId: 'o1', riderPayment: { method: 'cash', referenceNo: null, riderKeepsCents: 20_000 } }],
+    ]);
+    expect(seen.toasts).toEqual([{ title: 'Rider paid · Rs 4,515 for the shop', description: 'Give the rider change: Rs 485' }]);
+    expect(box.done).toEqual([undefined]);
+    expect(box.closed).toEqual([]);
+  });
+
+  it('EasyPaisa with a reference, and the Send out request as the box made it (one trip, one fee; the trip and its PIN)', async () => {
+    const plan = { request: { orderId: 'o1', riderAlreadyPaid: true, payRiderForTrip: true, approverPin: '2468' }, keepsCents: 0, tripCents: 20_000 };
+    const box = openPaidNow(plan);
+    expect(box.words).toContain('Rider keeps nothing (already paid for this trip) Take from the rider Rs 4,715');
+    box.tap('EasyPaisa');
+    box.type('ref', 'EP-TEST-7');
+    box.enter();
+    await settle();
+    expect(calls('orders.sendOut')).toEqual([
+      { ...plan.request, riderPayment: { method: 'easypaisa', referenceNo: 'EP-TEST-7', riderKeepsCents: 0 } },
+    ]);
+    expect(seen.toasts).toEqual([
+      { title: 'Rider paid Rs 200 for the trip — the drawer opens.', variant: 'success' },
+      { title: 'Rider paid · Rs 4,715 for the shop' },
+    ]);
+  });
+
+  it('short cash is refused before the till is asked', async () => {
+    const box = openPaidNow();
+    box.type('cash', '4500');
+    box.enter();
+    await settle();
+    expect(seen.toasts).toEqual([{ title: "The rider's cash must cover Rs 4,515", variant: 'warning' }]);
+    expect(seen.calls).toEqual([]);
+  });
+
+  it('a refused Confirm: "Could not send out" in the till’s words (nothing went out, nothing was taken); the box stays, and does not send it out by itself', async () => {
+    seen.refuse = 'No shift is open on this till — open a shift before taking or returning money';
+    const box = openPaidNow();
+    box.enter();
+    await settle();
+    expect(seen.toasts).toEqual([
+      { title: 'Could not send out', description: 'No shift is open on this till — open a shift before taking or returning money', variant: 'error' },
+    ]);
+    expect(calls('orders.sendOut')).toHaveLength(1);
+    expect(box.done).toEqual([]);
+    expect(box.closed).toEqual([]);
+  });
+
+  it('not paid now — "Pays after delivery", the X or Esc: Send out alone, once, so the order still goes out with its bill; then the box is done', async () => {
+    for (const how of ['Pays after delivery', 'the X', 'Esc'] as const) {
+      seen.calls.length = 0;
+      seen.toasts.length = 0;
+      seen.answer = outsideOrder();
+      const box = openPaidNow();
+      if (how === 'Pays after delivery') box.press('Pays after delivery');
+      else if (how === 'the X') box.tap('');
+      else seen.openChange!(false);
+      await settle();
+      expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o1' }]]);
+      expect(seen.toasts).toEqual([]);
+      expect(box.done).toEqual([undefined]);
+      expect(box.closed).toEqual([]);
+    }
+  });
+
+  it('not paid now with the trip ticked: Send out alone pays the trip, and says the drawer opens', async () => {
+    const plan = { request: { orderId: 'o1', payRiderForTrip: true, approverPin: '2468' }, keepsCents: 0, tripCents: 20_000 };
+    const box = openPaidNow(plan);
+    box.press('Pays after delivery');
+    await settle();
+    expect(calls('orders.sendOut')).toEqual([plan.request]);
+    expect(seen.toasts).toEqual([{ title: 'Rider paid Rs 200 for the trip — the drawer opens.', variant: 'success' }]);
+  });
+
+  it('not paid now, and Send out is refused too: "Could not send out" in its words, and the box closes — nothing went out, so no bill', async () => {
+    seen.refuse = 'This order is already out for delivery';
+    const box = openPaidNow();
+    box.press('Pays after delivery');
+    await settle();
+    expect(calls('orders.sendOut')).toEqual([{ orderId: 'o1' }]);
+    expect(seen.toasts).toEqual([{ title: 'Could not send out', description: 'This order is already out for delivery', variant: 'error' }]);
+    expect(box.closed).toEqual(['closed']);
+    expect(box.done).toEqual([]);
   });
 });

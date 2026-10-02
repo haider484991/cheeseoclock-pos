@@ -19,7 +19,10 @@
  *  - the order panel's "Papers printed" and what the print button would do;
  *  - v0.7.34: an outside rider who pays the shop (Rider paid) while his bill
  *    still waits for the printer: the customer's copy is still the bill to
- *    collect, the SHOP COPY says what he paid, and no second paper prints.
+ *    collect, the SHOP COPY says what he paid, and no second paper prints;
+ *    e2e fix A: Send out with "Paid now" on an idle printer — the drawer,
+ *    then one bill whose SHOP COPY says RIDER PAID THE SHOP Rs 4,515.00 —
+ *    and "Pays after delivery", whose bill says RIDER GIVES THE SHOP.
  *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for Electron
  * here); skipped where it is missing. Every name and amount is made up.
@@ -500,6 +503,65 @@ describe.skipIf(!DatabaseSync)('an outside rider pays the shop before his bill c
     expect(logRows(o)).toEqual([
       { document: 'bill', copy: 'customer', printNo: 0, reason: 'dispatch', outcome: 'printed' },
       { document: 'bill', copy: 'shop', printNo: 0, reason: 'dispatch', outcome: 'printed' },
+    ]);
+  });
+
+  it('Send out with "Paid now" on an idle printer (the e2e run, fix A): the drawer, then ONE bill — the customer still pays Rs 4,715.00 at the door, the SHOP COPY says RIDER PAID THE SHOP Rs 4,515.00', async () => {
+    const s = await spooler();
+    await policy({ deliveryBillOnDispatch: true, shopCopy: 'delivery' });
+    const o = await readyOutsideDelivery();
+    await s.whenIdle();
+    h.sends.length = 0;
+
+    // As orders:sendOut does with riderPayment: both in one step, then the one event.
+    const paid = r.sendOutRiderPaid(db, { orderId: o, method: 'cash', riderKeepsCents: 20_000 }, CASHIER);
+    expect(paid).toMatchObject({ status: 'out_for_delivery', totalCents: 471_500, riderKeepsCents: 20_000 });
+    s.onOrderEvent(o, 'sent_out_paid', { drawerOpenId: paid.drawerOpenId });
+    await s.whenIdle();
+
+    // The drawer opens first, then the bill and its SHOP COPY.
+    expect(h.sends).toHaveLength(2);
+    expect(escPosToText(h.sends[0]!)).toMatch(/^\[drawer pin \d, \d+ ms\]/);
+    const bill = papersOf(h.sends[1]!);
+    expect(bill).toHaveLength(2);
+    const [customer, shopCopy] = bill;
+    expect(customer).toContain('BILL - NOT PAID');
+    expect(customer!.some((row) => /^TO COLLECT\s+Rs 4,715\.00$/.test(row))).toBe(true);
+    expect(customer).toContain('Pay the rider Rs 4,715.00');
+    expect(customer!.join('\n')).not.toMatch(/PAID - |RIDER PAID|RIDER GIVES|SHOP COPY|DUPLICATE/);
+    expect(shopCopy).toContain('SHOP COPY');
+    expect(shopCopy!.some((row) => /^Outside rider keeps\s+200\.00$/.test(row))).toBe(true);
+    expect(shopCopy!.some((row) => /^RIDER PAID THE SHOP\s+Rs 4,515\.00$/.test(row))).toBe(true);
+    expect(shopCopy!.join('\n')).not.toMatch(/RIDER GIVES THE SHOP/);
+    expect(logRows(o)).toEqual([
+      { document: 'bill', copy: 'customer', printNo: 0, reason: 'dispatch', outcome: 'printed' },
+      { document: 'bill', copy: 'shop', printNo: 0, reason: 'dispatch', outcome: 'printed' },
+    ]);
+  });
+
+  it('"Pays after delivery" (and the Paid now box closed without paying): the bill prints at Send out saying RIDER GIVES THE SHOP; Rider paid later opens the drawer and prints nothing more', async () => {
+    const s = await spooler();
+    await policy({ deliveryBillOnDispatch: true, shopCopy: 'delivery' });
+    const o = await readyOutsideDelivery();
+    await s.whenIdle();
+    h.sends.length = 0;
+
+    r.sendOutOrder(db, o, CASHIER);
+    s.onOrderEvent(o, 'dispatched');
+    await s.whenIdle();
+    expect(h.sends).toHaveLength(1);
+    const [, shopCopy] = papersOf(h.sends[0]!);
+    expect(shopCopy!.some((row) => /^RIDER GIVES THE SHOP\s+Rs 4,515\.00$/.test(row))).toBe(true);
+    expect(shopCopy!.join('\n')).not.toMatch(/RIDER PAID THE SHOP/);
+
+    const paid = r.takeRiderPayment(db, { orderId: o, method: 'cash', riderKeepsCents: 20_000 }, CASHIER);
+    s.onOrderEvent(o, 'payment_captured', { drawerOpenId: paid.drawerOpenId });
+    await s.whenIdle();
+    expect(h.sends).toHaveLength(2);
+    expect(escPosToText(h.sends[1]!)).toMatch(/^\[drawer pin \d, \d+ ms\]/);
+    expect(logRows(o).map((x) => [x.document, x.copy, x.reason])).toEqual([
+      ['bill', 'customer', 'dispatch'],
+      ['bill', 'shop', 'dispatch'],
     ]);
   });
 });

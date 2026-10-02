@@ -222,6 +222,36 @@ export function sendOutSplit(
   return { customerPaysCents: total, keepsCents: keeps, givesCents: total - keeps };
 }
 
+/** Send out's request as the box sends it (orders:sendOut, without the rider's payment). */
+export interface SendOutRequest {
+  orderId: string;
+  riderAlreadyPaid?: boolean;
+  payRiderForTrip?: boolean;
+  approverPin?: string;
+}
+
+/**
+ * Send out's "Paid now" (e2e fix A): nothing is sent yet. The Send out box
+ * hands this to the Rider paid box, which sends it out and takes the rider's
+ * money in one step (orders:sendOut with riderPayment), so the bill prints
+ * after he paid and its SHOP COPY says RIDER PAID THE SHOP. Closed without
+ * paying, the Rider paid box sends `request` alone (as Pays after delivery):
+ * the order still goes out, and its bill prints once.
+ */
+export interface PaidNowAtSendOut {
+  /** The Send out request the box would have sent (one trip, one fee; the trip and its PIN). */
+  request: SendOutRequest;
+  /** What the box showed the rider keeps: what Send out will freeze (sendOutSplit). */
+  keepsCents: number;
+  /** The trip paid from the drawer at Send out (an add-on going alone, ticked); 0 for none. */
+  tripCents: number;
+}
+
+/** The toast when Send out paid the rider for the trip from the drawer. */
+export function tripPaidToast(tripCents: number): string {
+  return `Rider paid ${formatCents(tripCents)} for the trip — the drawer opens.`;
+}
+
 /**
  * One trip, one fee (the owner, 2 Oct 2026: refunded and sent again on the
  * same trip, the rider gets one Rs 200, not two): the order the rider was

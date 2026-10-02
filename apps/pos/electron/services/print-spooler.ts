@@ -136,6 +136,11 @@ export type OrderPrintEvent =
   | 'payment_captured'
   /** A rider was assigned or the order was sent out: the food is leaving. */
   | 'dispatched'
+  /**
+   * Send out with "Paid now": the food is leaving and the outside rider paid
+   * the shop in the same step (sendOutRiderPaid).
+   */
+  | 'sent_out_paid'
   | 'refunded'
   /** Cancelled or refunded in full while the kitchen still had it. */
   | 'cancelled';
@@ -369,6 +374,17 @@ class PrintSpooler {
         // this till or the other one) when the rider brings the money back:
         // then the drawer is all.
         if (!this.dispatchBillOut(db, orderId)) receipt('payment');
+        break;
+
+      case 'sent_out_paid':
+        // His cash opens the drawer first. Then ONE paper, after his money is
+        // in, so its SHOP COPY says RIDER PAID THE SHOP (it is drawn when it
+        // prints): the bill that leaves with the food, once per order on
+        // either till as 'dispatched' prints it — or, with that bill off in
+        // Settings → Printer, the paper his money brings, as 'payment_captured'
+        // prints it. Never both.
+        drawer();
+        if (!this.dispatchBillOut(db, orderId)) receipt(delivery && policy.deliveryBillOnDispatch ? 'dispatch' : 'payment');
         break;
 
       case 'refunded': {

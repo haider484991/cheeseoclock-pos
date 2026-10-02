@@ -60,6 +60,7 @@ import {
   lateCountText,
   type AgeTone,
   type BoardTiming,
+  type PaidNowAtSendOut,
   type SecondaryBoardAction,
 } from './boardLogic';
 import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
@@ -85,7 +86,10 @@ import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
  * rider keeps nothing goes in one tap, and not even that when the same
  * customer has another delivery to say something about ("send them
  * together", or "#0042 has already gone out" on a bill with no charge;
- * samePhoneDelivery, from this board's own list). While an outside rider owes, his Out
+ * samePhoneDelivery, from this board's own list). "Paid now" opens Rider
+ * paid on the Ready order: it sends it out and takes his money in one step,
+ * then the bill prints (its SHOP COPY says RIDER PAID THE SHOP); closed
+ * without paying, it still sends it out. While an outside rider owes, his Out
  * card says "Rider owes Rs …" beside the total and has "Rider paid" next to
  * "Delivered + Pay"; once paid it has the PAID chip and "Delivered".
  */
@@ -139,8 +143,11 @@ export function OrdersBoardPage() {
     pin?: string;
   } | null>(null);
   // Rider paid: the outside rider pays the shop while the order stays out
-  // (the Out card's button, or Send out's "Paid now" on the order as sent).
+  // (the Out card's button).
   const [riderPaidFor, setRiderPaidFor] = useState<OrderSnapshot | null>(null);
+  // Send out's "Paid now" (e2e fix A): Rider paid on the order still Ready —
+  // it sends it out and takes his money in one step, then the bill prints.
+  const [paidNowFor, setPaidNowFor] = useState<{ snap: OrderSnapshot; paidNow: PaidNowAtSendOut } | null>(null);
   const [voidFor, setVoidFor] = useState<OrderSnapshot | null>(null);
   // A paid order can't be voided (the server refuses): its Cancel is a refund.
   // refusedItem: opened after Delivered + Pay with "Customer refused an item" (Part of it, Cash, the note).
@@ -392,11 +399,15 @@ export function OrdersBoardPage() {
           pin={sendOutFor.pin ?? ''}
           onPin={(pin) => setSendOutFor((s) => (s ? { ...s, pin } : s))}
           onClose={() => setSendOutFor(null)}
-          onSent={(next, riderPaidNow) => {
+          onSent={() => {
             setSendOutFor(null);
             void refresh();
-            // "Paid now": Rider paid on the order as the till sent it out (what he keeps, frozen).
-            if (riderPaidNow) setRiderPaidFor(next);
+          }}
+          // "Paid now": nothing sent yet — Rider paid sends it out with his money.
+          onPaidNow={(paidNow) => {
+            const { snap } = sendOutFor;
+            setSendOutFor(null);
+            setPaidNowFor({ snap, paidNow });
           }}
           onAssignInstead={() => {
             const { snap } = sendOutFor;
@@ -412,6 +423,21 @@ export function OrdersBoardPage() {
           onClose={() => setRiderPaidFor(null)}
           onDone={() => {
             setRiderPaidFor(null);
+            void refresh();
+          }}
+        />
+      )}
+      {paidNowFor && (
+        <MarkDeliveredDialog
+          snap={paidNowFor.snap}
+          riderPaidOnly
+          sendOutFirst={paidNowFor.paidNow}
+          onClose={() => {
+            setPaidNowFor(null);
+            void refresh();
+          }}
+          onDone={() => {
+            setPaidNowFor(null);
             void refresh();
           }}
         />

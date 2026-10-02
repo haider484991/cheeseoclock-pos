@@ -995,3 +995,274 @@ describe.skipIf(!DatabaseSync)("orders:riderPaid and Delivered + Pay: an outside
     await idle();
   });
 });
+
+describe.skipIf(!DatabaseSync)('orders:sendOut with "Paid now": sent out and paid in one step, then ONE bill (e2e fix A, v0.7.34)', () => {
+  /**
+   * The e2e finding: the bill printed at Send out, before Rider paid, so its
+   * SHOP COPY said "RIDER GIVES THE SHOP … NOT PAID" and nothing ever said
+   * "RIDER PAID THE SHOP". Now "Paid now" sends `riderPayment` with Send out:
+   * the till sends it out, takes his money (both or neither), and only then
+   * prints the bill — once, drawn as it is then.
+   */
+  const OTHER_TILL = 'dev-till-2';
+  let chargeId = '';
+  beforeEach(async () => {
+    if (!DatabaseSync) return;
+    const MGR = { userId: 'u_mgr', deviceId: DEV };
+    const tax = await import('../../db/repositories/tax-category-repo.js');
+    const cat = await import('../../db/repositories/category-repo.js');
+    const menu = await import('../../db/repositories/menu-item-repo.js');
+    const t = tax.createTaxCategory(db as never, { name: 'Test no tax', rateBps: 0 }, MGR);
+    const fees = cat.createCategory(db as never, { name: 'Delivery Charges', displayOrder: 2, colorHex: '#555555' }, MGR);
+    chargeId = menu.createMenuItem(
+      db as never,
+      { categoryId: fees.id, name: 'Delivery Charge (Rs 200)', basePriceCents: 20_000, taxCategoryId: t.id },
+      MGR,
+    ).id;
+  });
+
+  const idle = async () => (await import('../../services/print-spooler.js')).printSpooler.whenIdle();
+  /** A cash-on-delivery order (the pizza and the area's Rs 200 charge: Rs 1,200), sent, made and ready, its kitchen ticket printed. */
+  async function readyDelivery(): Promise<string> {
+    const r = await import('../../db/repositories/order-repo.js');
+    const c = await import('../../db/repositories/customer-repo.js');
+    const o = r.createOrder(db as never, { mode: 'delivery' }, ACTOR);
+    c.snapshotCustomerOntoOrder(db as never, { orderId: o.id, customerId, addressId }, ACTOR);
+    r.addOrderItem(db as never, { orderId: o.id, menuItemId: pizzaId, quantity: 1, modifierIds: [], notes: null }, ACTOR);
+    r.addOrderItem(db as never, { orderId: o.id, menuItemId: chargeId, quantity: 1, modifierIds: [], notes: null }, ACTOR);
+    await call('orders:sendToKitchen', { orderId: o.id });
+    await call('orders:markPreparing', { orderId: o.id });
+    await call('orders:markReady', { orderId: o.id });
+    await idle();
+    return o.id;
+  }
+  /** Send out with "Paid now": the Rider paid box's request. */
+  const paidNow = async (orderId: string, pay: unknown = { method: 'cash', riderKeepsCents: 20_000 }) =>
+    (await call('orders:sendOut', { orderId, riderPayment: pay })).data as OrderSnapshot;
+  const orderRow = (orderId: string) =>
+    db.prepare(`SELECT status, paid_at AS paidAt, dispatched_at AS dispatchedAt, rider_keeps_cents AS keeps, version FROM orders WHERE id = ?`).get(orderId);
+  const receiptJobs = (orderId: string) =>
+    db
+      .prepare(`SELECT payload_json AS p FROM print_queue WHERE order_id = ? AND job_kind = 'receipt' ORDER BY rowid`)
+      .all(orderId)
+      .map((r) => {
+        const p = JSON.parse(String(r['p'])) as { reason: string; copies: string[] };
+        return [p.reason, p.copies];
+      });
+  const drawerJobs = (orderId: string) =>
+    db
+      .prepare(`SELECT payload_json AS p FROM print_queue WHERE order_id = ? AND job_kind = 'drawer' ORDER BY rowid`)
+      .all(orderId)
+      .map((x) => (JSON.parse(String(x['p'])) as { drawerOpenId?: string }).drawerOpenId);
+  const moneyOf = (orderId: string) => ({
+    payments: db
+      .prepare(`SELECT method, amount_cents AS amount FROM payments WHERE order_id = ? ORDER BY rowid`)
+      .all(orderId)
+      .map((p) => [p['method'], Number(p['amount'])]),
+    payouts: db
+      .prepare(`SELECT amount_cents AS amount FROM cash_movements WHERE order_id = ? AND type = 'payout' AND deleted_at IS NULL`)
+      .all(orderId)
+      .map((p) => Number(p['amount'])),
+    drawer: db
+      .prepare(`SELECT id, kind, amount_cents AS amount FROM drawer_opens WHERE order_id = ? ORDER BY rowid`)
+      .all(orderId)
+      .map((d) => ({ id: d['id'], kind: d['kind'], amount: Number(d['amount']) })),
+  });
+  const orderAudit = (orderId: string) =>
+    db
+      .prepare(`SELECT action FROM audit_log WHERE entity_type = 'orders' AND entity_id = ? ORDER BY rowid`)
+      .all(orderId)
+      .map((a) => a['action']);
+  const fbrCount = (orderId: string) =>
+    Number(db.prepare(`SELECT COUNT(*) AS n FROM fbr_submission_queue WHERE order_id = ?`).get(orderId)?.['n']);
+  const cheeseTakenFor = (orderId: string) =>
+    db
+      .prepare(`SELECT delta_qty AS d FROM stock_movements WHERE ref_order_id = ? AND ingredient_id = ? AND deleted_at IS NULL ORDER BY rowid`)
+      .all(orderId, cheeseId)
+      .map((m) => Number(m['d']));
+  /** What the printer got since `from`, one entry per send: its papers (cut by cut), each as its rows. */
+  const printedSince = async (from: number) => {
+    const { escPosToText } = await import('@cheeseoclock/printer-core');
+    return h.sends.slice(from).map((bytes) => {
+      const out: string[][] = [[]];
+      for (const row of escPosToText(bytes).split('\n')) {
+        if (row === '[cut]') out.push([]);
+        else out.at(-1)!.push(row);
+      }
+      return out.filter((p) => p.some((row) => row.trim() !== ''));
+    });
+  };
+  const has = (paper: string[] | undefined, re: RegExp) => (paper ?? []).some((row) => re.test(row));
+  /** The bill the other till printed for the trip, as sync brings it here. */
+  const fromOtherTill = (orderId: string) => {
+    const at = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO document_prints
+         (id, order_id, document, doc_key, copy, print_no, outcome, reason, print_job_id,
+          created_at, updated_at, synced_at, deleted_at, device_id, version)
+       VALUES (?, ?, 'bill', 'bill', 'customer', 0, 'printed', 'dispatch', 'job-on-till-2', ?, ?, ?, NULL, ?, 1)`,
+    ).run(`dp-${orderId}-other`, orderId, at, at, at, OTHER_TILL);
+  };
+
+  it('cash: out and paid (dispatched_at < paid_at), the drawer opens first, then ONE bill: the customer still pays Rs 1,200 at the door, the SHOP COPY says RIDER PAID THE SHOP Rs 1,000.00', async () => {
+    const o = await readyDelivery();
+    const { printSpooler } = await import('../../services/print-spooler.js');
+    const events = vi.spyOn(printSpooler, 'onOrderEvent');
+    const cheeseBefore = cheese();
+    const from = h.sends.length;
+    const snap = await paidNow(o);
+
+    // Out with him and paid, in that order.
+    expect(snap.order).toMatchObject({ status: 'out_for_delivery', assignedRiderId: null, riderKeepsCents: 20_000, totalCents: 120_000 });
+    expect(Date.parse(snap.order.paidAt!)).toBeGreaterThan(Date.parse(snap.order.dispatchedAt!));
+    expect(orderAudit(o).slice(-2)).toEqual(['send_out', 'rider_paid']);
+    // One payment of the total, his Rs 200 paid out, the drawer expects the Rs 1,000 he handed in.
+    const money = moneyOf(o);
+    expect(money).toEqual({ payments: [['cash', 120_000]], payouts: [20_000], drawer: [{ id: expect.any(String), kind: 'sale', amount: 100_000 }] });
+    // One event for the paper, carrying the drawer's row.
+    expect(events.mock.calls).toEqual([[o, 'sent_out_paid', { drawerOpenId: money.drawer[0]!.id }]]);
+
+    await idle();
+    expect(drawerJobs(o)).toEqual([money.drawer[0]!.id]);
+    expect(receiptJobs(o)).toEqual([['dispatch', ['customer', 'shop']]]);
+    const sent = await printedSince(from);
+    // The drawer pulse goes first, then the bill: two sends, nothing more.
+    expect(sent).toHaveLength(2);
+    expect(sent[0]!.flat().join('\n')).toMatch(/^\[drawer pin \d, \d+ ms\]$/);
+    expect(sent[1]).toHaveLength(2);
+    const [customer, shopCopy] = sent[1]!;
+    // The customer's copy: the bill he pays the rider at the door — nothing about the rider's money.
+    expect(customer).toContain('BILL - NOT PAID');
+    expect(has(customer, /^TO COLLECT\s+Rs 1,200\.00$/)).toBe(true);
+    expect(customer).toContain('Pay the rider Rs 1,200.00');
+    expect(customer!.join('\n')).not.toMatch(/PAID - |RIDER PAID|RIDER GIVES|SHOP COPY|DUPLICATE/);
+    // The shop's copy: what he keeps, and that he PAID the shop.
+    expect(shopCopy).toContain('SHOP COPY');
+    expect(has(shopCopy, /^Outside rider keeps\s+200\.00$/)).toBe(true);
+    expect(has(shopCopy, /^RIDER PAID THE SHOP\s+Rs 1,000\.00$/)).toBe(true);
+    expect(shopCopy!.join('\n')).not.toMatch(/RIDER GIVES THE SHOP/);
+    // FBR once; the stock once (taken when it went to the kitchen), nothing more now.
+    expect(fbrCount(o)).toBe(1);
+    expect(cheeseTakenFor(o)).toEqual([-90]);
+    expect(cheese()).toBe(cheeseBefore);
+
+    // Delivered: closed with nothing more — no payment, payout, paper or drawer.
+    events.mockClear();
+    const done = (await call('orders:markDelivered', { orderId: o })).data as OrderSnapshot;
+    expect(done.order.status).toBe('paid');
+    expect(moneyOf(o)).toEqual(money);
+    expect(events).not.toHaveBeenCalled();
+    await idle();
+    expect(receiptJobs(o)).toEqual([['dispatch', ['customer', 'shop']]]);
+    expect(h.sends.length).toBe(from + 2);
+  });
+
+  it('EasyPaisa: the wallet for the food total, cash for his fee, the payout; no drawer row, so no pulse — and the one bill says RIDER PAID THE SHOP', async () => {
+    const o = await readyDelivery();
+    const from = h.sends.length;
+    const snap = await paidNow(o, { method: 'easypaisa', referenceNo: ' EP-TEST-9 ', riderKeepsCents: 20_000 });
+    expect(snap.order).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: 20_000 });
+    expect(Date.parse(snap.order.paidAt!)).toBeGreaterThan(Date.parse(snap.order.dispatchedAt!));
+    expect(moneyOf(o)).toEqual({ payments: [['easypaisa', 100_000], ['cash', 20_000]], payouts: [20_000], drawer: [] });
+    expect(db.prepare(`SELECT reference_no AS ref FROM payments WHERE order_id = ? AND method = 'easypaisa'`).get(o)).toEqual({ ref: 'EP-TEST-9' });
+    await idle();
+    expect(drawerJobs(o)).toEqual([]);
+    expect(receiptJobs(o)).toEqual([['dispatch', ['customer', 'shop']]]);
+    const sent = await printedSince(from);
+    expect(sent).toHaveLength(1);
+    const [customer, shopCopy] = sent[0]!;
+    expect(has(customer, /^TO COLLECT\s+Rs 1,200\.00$/)).toBe(true);
+    expect(has(shopCopy, /^RIDER PAID THE SHOP\s+Rs 1,000\.00$/)).toBe(true);
+    expect(fbrCount(o)).toBe(1);
+  });
+
+  it('a refusal sends nothing out, takes nothing and prints nothing; the plain Send out the box falls back to then prints the bill once, and a later Rider paid prints no second one', async () => {
+    const { OUTSIDE_RIDER_NO_CARD, RIDER_WINDOW_CHANGED, RIDER_PAYMENT_UNREADABLE } = await import('../../db/repositories/order-repo.js');
+    const o = await readyDelivery();
+    const before = { row: orderRow(o), audit: orderAudit(o), from: h.sends.length };
+    const refused = (pay: unknown, message: string) =>
+      expect(paidNow(o, pay)).rejects.toMatchObject({ apiError: { code: 'precondition_failed', message } });
+    // A card; a keep the box got wrong (Send out freezes Rs 200) or left out; a payment that is not one.
+    await refused({ method: 'card', riderKeepsCents: 20_000 }, OUTSIDE_RIDER_NO_CARD);
+    await refused({ method: 'cash', riderKeepsCents: 25_000 }, RIDER_WINDOW_CHANGED);
+    await refused({ method: 'cash' }, RIDER_WINDOW_CHANGED);
+    await refused('cash', RIDER_PAYMENT_UNREADABLE);
+    await idle();
+    expect(orderRow(o)).toEqual(before.row);
+    expect(orderAudit(o)).toEqual(before.audit);
+    // No shift open on this till (closed with the order carried over): his
+    // money can't be taken, so it does not go out either.
+    const shift = await import('../../db/repositories/shift-repo.js');
+    shift.closeShift(
+      db as never,
+      { shiftId: shift.getCurrentShift(db as never, DEV)!.id, countedCashCents: 0, carryOverReason: 'Test: still on the pass' },
+      { userId: 'u_mgr', deviceId: DEV },
+    );
+    before.row = orderRow(o);
+    before.audit = orderAudit(o);
+    await refused({ method: 'cash', riderKeepsCents: 20_000 }, 'No shift is open on this till — open a shift before taking or returning money');
+    await idle();
+    expect(orderRow(o)).toEqual(before.row);
+    expect(orderRow(o)).toMatchObject({ status: 'ready', paidAt: null, keeps: null });
+    expect(orderAudit(o)).toEqual(before.audit);
+    expect(moneyOf(o)).toEqual({ payments: [], payouts: [], drawer: [] });
+    expect(receiptJobs(o)).toEqual([]);
+    expect(fbrCount(o)).toBe(0);
+    expect(h.sends.length).toBe(before.from);
+
+    // The box's fallback (Pays after delivery, or the box closed): plain Send out — the bill prints, once; he owes.
+    expect(((await call('orders:sendOut', { orderId: o })).data as OrderSnapshot).order).toMatchObject({
+      status: 'out_for_delivery',
+      riderKeepsCents: 20_000,
+    });
+    await idle();
+    expect(receiptJobs(o)).toEqual([['dispatch', ['customer', 'shop']]]);
+    const sent = await printedSince(before.from);
+    expect(sent).toHaveLength(1);
+    expect(has(sent[0]![1], /^RIDER GIVES THE SHOP\s+Rs 1,000\.00$/)).toBe(true);
+    // Rider paid later (a shift open again): the drawer, no second bill.
+    shift.openShift(db as never, { openingCashCents: 0 }, { userId: 'u_mgr', deviceId: DEV });
+    await call('orders:riderPaid', { orderId: o, method: 'cash', riderKeepsCents: 20_000 });
+    await idle();
+    expect(receiptJobs(o)).toEqual([['dispatch', ['customer', 'shop']]]);
+    expect(drawerJobs(o)).toHaveLength(1);
+    expect(h.sends.length).toBe(before.from + 2);
+  });
+
+  it('once per order across both tills: the other till already printed its bill, or this till before Back to Ready — Paid now opens the drawer and prints no second bill', async () => {
+    const a = await readyDelivery();
+    fromOtherTill(a);
+    await paidNow(a);
+    await idle();
+    expect(receiptJobs(a)).toEqual([]);
+    expect(drawerJobs(a)).toHaveLength(1);
+
+    const b = await readyDelivery();
+    await call('orders:sendOut', { orderId: b });
+    await call('orders:unassignRider', { orderId: b });
+    await idle();
+    await paidNow(b);
+    await idle();
+    expect(receiptJobs(b)).toEqual([['dispatch', ['customer', 'shop']]]);
+    expect(drawerJobs(b)).toHaveLength(1);
+
+    // Already out: refused in Send out's words, nothing taken again.
+    await expect(paidNow(b)).rejects.toMatchObject({
+      apiError: { code: 'precondition_failed', message: 'This order is already out for delivery' },
+    });
+    expect(moneyOf(b).payments).toHaveLength(1);
+  });
+
+  it('with "Print the delivery bill when it leaves" off: the paper his money brings, once, as Rider paid prints it', async () => {
+    const { getPrintPolicy, setPrintPolicy } = await import('../../services/printer-config.js');
+    setPrintPolicy(db as never, { ...getPrintPolicy(db as never), deliveryBillOnDispatch: false });
+    const o = await readyDelivery();
+    const from = h.sends.length;
+    await paidNow(o);
+    await idle();
+    expect(receiptJobs(o)).toEqual([['payment', ['customer', 'shop']]]);
+    const sent = await printedSince(from);
+    expect(sent).toHaveLength(2);
+    expect(has(sent[1]![1], /^RIDER PAID THE SHOP\s+Rs 1,000\.00$/)).toBe(true);
+  });
+});

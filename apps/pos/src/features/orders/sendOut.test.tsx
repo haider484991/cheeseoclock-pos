@@ -29,11 +29,13 @@
  * and [Delivered + Pay]; Q2: a prepaid order's drawer opens at Send out):
  *  - The Send out box, word for word: not paid (with a delivery charge and
  *    without), paid with a charge (the drawer opens), a walk-in. "Pays after
- *    delivery" is focused; every answer asks the till to send it out before
- *    anything else; Esc and the X change nothing; a refusal keeps it open.
+ *    delivery" is focused and sends it out; "Paid now" sends nothing (e2e
+ *    fix A): it hands Rider paid the request and what he keeps, and Rider
+ *    paid sends it out with his money, so the bill prints after he paid; Esc
+ *    and the X change nothing; a refusal keeps it open.
  *  - On Live Orders: Send out opens the box, except a paid order whose rider
  *    keeps nothing (one tap); "Paid now" then opens "Rider paid · #0042" on
- *    the order as the till sent it; the link opens Assign rider instead.
+ *    the Ready order; the link opens Assign rider instead.
  *  - Out cards: "Rider owes Rs 4,515" and "Rider paid" while he owes; the
  *    PAID chip and "Delivered" once paid; own-rider cards as before.
  *  Live Orders is rendered again after each tap with React's useState kept
@@ -83,7 +85,7 @@ import { OrdersBoardPage } from './OrdersBoardPage';
 import { AssignRiderDialog, BACK_TO_READY_TITLE, backToReadyNote } from './AssignRiderDialog';
 import { OrderDetailDrawer } from './OrderDetailDrawer';
 import { OrderHistoryPage } from './OrderHistoryPage';
-import { ASSIGN_RIDER_LINK_TITLE } from './boardLogic';
+import { ASSIGN_RIDER_LINK_TITLE, type PaidNowAtSendOut } from './boardLogic';
 import { SendOutDialog } from './SendOutDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
 import { HISTORY_PAGE_SIZE, historyRange } from './historyFilters';
@@ -826,8 +828,11 @@ describe('Order History: the row', () => {
 describe('the Send out box (step 18-6): "Has the rider paid the shop?"', () => {
   /** What onSent was handed: the order as the till sent it out. */
   const sent: OrderSnapshot[] = [];
+  /** What onPaidNow was handed (e2e fix A): the request and figures for Rider paid; nothing sent yet. */
+  const handedOn: PaidNowAtSendOut[] = [];
   beforeEach(() => {
     sent.length = 0;
+    handedOn.length = 0;
   });
 
   function box(snap: OrderSnapshot, chargeAgain = false): string {
@@ -839,9 +844,13 @@ describe('the Send out box (step 18-6): "Has the rider paid the shop?"', () => {
           chargeAgain={chargeAgain}
           onChargeAgain={() => seen.events.push('charge again')}
           onClose={() => seen.events.push('closed')}
-          onSent={(next, riderPaidNow) => {
-            seen.events.push(riderPaidNow ? 'sent, Paid now' : 'sent');
+          onSent={(next) => {
+            seen.events.push('sent');
             sent.push(next);
+          }}
+          onPaidNow={(paidNow) => {
+            seen.events.push('Paid now');
+            handedOn.push(paidNow);
           }}
           onAssignInstead={() => seen.events.push('assign instead')}
         />,
@@ -911,24 +920,16 @@ describe('the Send out box (step 18-6): "Has the rider paid the shop?"', () => {
     expect(box(o)).toContain('Send out #0042 The bill prints now · Walk-in Customer pays the rider Rs 4,715');
   });
 
-  it('every answer asks the till to send it out first, then hands on the order as it went out', async () => {
+  it('"Pays after delivery" asks the till to send it out, then hands on the order as it went out', async () => {
     const out = ownerExample(42, 'out_for_delivery', { riderKeepsCents: 20_000 as never });
-    for (const [words, heard] of [
-      ['Pays after delivery', 'sent'],
-      ['Paid now · Rs 4,515', 'sent, Paid now'],
-    ] as const) {
-      seen.events.length = 0;
-      seen.calls.length = 0;
-      sent.length = 0;
-      seen.answer = out;
-      box(ownerExample(42, 'ready'));
-      tap(words);
-      await settle();
-      expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o42' }]]);
-      expect(seen.events).toEqual(['orders.sendOut', heard]);
-      expect(sent).toHaveLength(1);
-      expect(sent[0]).toBe(out);
-    }
+    seen.answer = out;
+    box(ownerExample(42, 'ready'));
+    tap('Pays after delivery');
+    await settle();
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o42' }]]);
+    expect(seen.events).toEqual(['orders.sendOut', 'sent']);
+    expect(sent).toEqual([out]);
+    expect(handedOn).toEqual([]);
     // Paid already: the same; the drawer is the till's part.
     seen.events.length = 0;
     seen.calls.length = 0;
@@ -938,6 +939,27 @@ describe('the Send out box (step 18-6): "Has the rider paid the shop?"', () => {
     expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o43' }]]);
     expect(seen.events).toEqual(['orders.sendOut', 'sent']);
     expect(seen.toasts).toEqual([]);
+  });
+
+  // e2e fix A: the bill printed at Send out, before the rider paid, so its SHOP COPY said
+  // "RIDER GIVES THE SHOP … NOT PAID". "Paid now" now sends nothing: Rider paid sends it out with his money.
+  it('"Paid now" sends nothing: it hands Rider paid the request and what the box showed he keeps', async () => {
+    box(ownerExample(42, 'ready'));
+    tap('Paid now · Rs 4,515');
+    await settle();
+    expect(seen.calls).toEqual([]);
+    expect(seen.events).toEqual(['Paid now']);
+    expect(handedOn).toEqual([{ request: { orderId: 'o42' }, keepsCents: 20_000, tripCents: 0 }]);
+    expect(sent).toEqual([]);
+    expect(seen.toasts).toEqual([]);
+    // No delivery charge on the bill: he keeps nothing and hands over the whole bill.
+    handedOn.length = 0;
+    seen.events.length = 0;
+    box(noCharge(delivery(44, 'ready', { subtotalCents: toCents(390_000), taxCents: toCents(58_500), totalCents: toCents(448_500) })));
+    tap('Paid now · Rs 4,485');
+    await settle();
+    expect(seen.calls).toEqual([]);
+    expect(handedOn).toEqual([{ request: { orderId: 'o44' }, keepsCents: 0, tripCents: 0 }]);
   });
 
   it('a refusal says "Could not send out" in the till’s words, and nothing else happens', async () => {
@@ -972,10 +994,12 @@ describe('the Send out box (step 18-6): "Has the rider paid the shop?"', () => {
 });
 
 describe('Live Orders: Send out asks, then Rider owes / Rider paid (step 18-6)', () => {
-  it('Send out on an unpaid delivery opens the box; "Paid now" sends it out, then opens "Rider paid · #0042" on the order as sent', async () => {
-    const out = ownerExample(42, 'out_for_delivery', { riderKeepsCents: 20_000 as never });
-    seen.answer = out;
-    const b = liveOrders([ownerExample(42, 'ready')]);
+  // Changed on purpose by e2e fix A: "Paid now" sent the order out first, so its bill printed
+  // before the rider paid (SHOP COPY "RIDER GIVES THE SHOP … NOT PAID"). Now nothing is sent until
+  // Rider paid sends it out with his money; its bill prints after (markDeliveredOutside.test.tsx).
+  it('Send out on an unpaid delivery opens the box; "Paid now" sends nothing and opens "Rider paid · #0042" on the Ready order, with what the box showed', async () => {
+    const ready = ownerExample(42, 'ready');
+    const b = liveOrders([ready]);
     expect(b.words).not.toContain('Has the rider paid the shop?');
     b.press('Send out');
     expect(b.words).toContain('Send out #0042 The bill prints now · Test Customer');
@@ -985,20 +1009,41 @@ describe('Live Orders: Send out asks, then Rider owes / Rider paid (step 18-6)',
     b.press('Paid now · Rs 4,515');
     await settle();
     b.view();
-    // Sent out first, then Rider paid: the rider can only pay for an order that has left.
-    expect(seen.events).toEqual(['orders.sendOut', 'opened Rider paid']);
-    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o42' }]]);
+    expect(seen.events).toEqual(['opened Rider paid']);
+    expect(seen.calls).toEqual([]);
     expect(b.words).not.toContain('Has the rider paid the shop?');
     const riderPaid = stubs.deliver.at(-1) as DeliverProps;
-    expect(riderPaid.snap).toBe(out);
+    expect(riderPaid.snap).toBe(ready);
     expect(riderPaid.riderPaidOnly).toBe(true);
+    expect(riderPaid.sendOutFirst).toEqual({ request: { orderId: 'o42' }, keepsCents: 20_000, tripCents: 0 });
     expect(seen.toasts).toEqual([]);
 
-    // The real box, opened with exactly those: Rider paid, the food total from him.
+    // The real box, opened with exactly those: Rider paid, the food total from him; it goes out on Confirm.
     stubs.on = false;
     const words = text(render(<MarkDeliveredDialog {...riderPaid} />));
-    expect(words).toContain('Rider paid · #0042 Test Customer · the order stays out for delivery');
+    expect(words).toContain('Rider paid · #0042 Test Customer · it goes out, then the bill prints');
     expect(words).toContain('Customer pays Rs 4,715 Rider keeps — delivery charge − Rs 200 Take from the rider Rs 4,515');
+    expect(words).toContain('Pays after delivery Confirm');
+
+    // Done (paid, or closed and sent out anyway): the box goes, the board asks again.
+    stubs.on = true;
+    riderPaid.onDone();
+    const rendered = stubs.deliver.length;
+    b.view();
+    expect(stubs.deliver).toHaveLength(rendered);
+  });
+
+  it('the Paid now box closed by the board (its fallback refused): it goes, nothing more is asked', () => {
+    const b = liveOrders([ownerExample(42, 'ready')]);
+    b.press('Send out');
+    b.press('Paid now · Rs 4,515');
+    const riderPaid = stubs.deliver.at(-1) as DeliverProps;
+    riderPaid.onClose();
+    const rendered = stubs.deliver.length;
+    b.view();
+    expect(stubs.deliver).toHaveLength(rendered);
+    expect(b.words).not.toContain('Has the rider paid the shop?');
+    expect(seen.calls).toEqual([]);
   });
 
   it('"Pays after delivery" sends it out and opens nothing more: the card moving is the feedback', async () => {
@@ -1168,13 +1213,22 @@ describe('one trip, one fee (step 18-9): the rider was already paid on a refunde
           chargeAgain={chargeAgain}
           onChargeAgain={() => seen.events.push('charge again')}
           onClose={() => seen.events.push('closed')}
-          onSent={(_next, riderPaidNow) => seen.events.push(riderPaidNow ? 'sent, Paid now' : 'sent')}
+          onSent={() => seen.events.push('sent')}
+          onPaidNow={(paidNow) => {
+            seen.events.push('Paid now');
+            handedOn.push(paidNow);
+          }}
           onAssignInstead={() => seen.events.push('assign instead')}
         />,
       ),
     );
   }
   const button = (words: string) => seen.buttons.find((b) => b.words === words);
+  /** What "Paid now" handed on (it sends nothing itself: e2e fix A). */
+  const handedOn: PaidNowAtSendOut[] = [];
+  beforeEach(() => {
+    handedOn.length = 0;
+  });
 
   it('not paid: "The rider already kept Rs 200 on #0041." and, by default, no delivery charge for him: Rs 0, he gives the shop the whole bill', () => {
     expect(box(reRung(42))).toBe(
@@ -1223,7 +1277,7 @@ describe('one trip, one fee (step 18-9): the rider was already paid on a refunde
     );
   });
 
-  it('the request says riderAlreadyPaid true by default and false after Charge again, for every answer', async () => {
+  it('the request says riderAlreadyPaid true by default and false after Charge again, for every answer (Paid now hands it on to Rider paid)', async () => {
     for (const [snap, chargeAgain, words] of [
       [reRung(42), false, 'Pays after delivery'],
       [reRung(42), false, 'Paid now · Rs 4,715'],
@@ -1233,10 +1287,17 @@ describe('one trip, one fee (step 18-9): the rider was already paid on a refunde
       [reRung(43, { paidAt: minsAgo(30) }), true, 'Send out · drawer opens'],
     ] as const) {
       seen.calls.length = 0;
+      handedOn.length = 0;
       box(snap, chargeAgain);
       tap(words);
       await settle();
-      expect(seen.calls).toEqual([['orders.sendOut', { orderId: snap.order.id, riderAlreadyPaid: !chargeAgain }]]);
+      const request = { orderId: snap.order.id, riderAlreadyPaid: !chargeAgain };
+      if (words.startsWith('Paid now')) {
+        expect(seen.calls).toEqual([]);
+        expect(handedOn).toEqual([{ request, keepsCents: chargeAgain ? 20_000 : 0, tripCents: 0 }]);
+      } else {
+        expect(seen.calls).toEqual([['orders.sendOut', request]]);
+      }
     }
   });
 
@@ -1253,10 +1314,9 @@ describe('one trip, one fee (step 18-9): the rider was already paid on a refunde
     expect(box({ ...ownerExample(42, 'ready'), riderPaidEarlier: null } as OrderSnapshot)).toBe(box(ownerExample(42, 'ready')));
   });
 
-  it('on Live Orders: Send out opens on no charge; Charge again switches the figures; closed and opened again it starts on no charge; Paid now sends riderAlreadyPaid false, then Rider paid', async () => {
-    const out = ownerExample(42, 'out_for_delivery', { riderKeepsCents: 20_000 as never });
-    seen.answer = out;
-    const b = liveOrders([reRung(42)]);
+  it('on Live Orders: Send out opens on no charge; Charge again switches the figures; closed and opened again it starts on no charge; Paid now hands Rider paid riderAlreadyPaid false', async () => {
+    const ready = reRung(42);
+    const b = liveOrders([ready]);
     b.press('Send out');
     expect(b.words).toContain(
       'The rider already kept Rs 200 on #0041. No delivery charge for him this time Charge again ' +
@@ -1276,25 +1336,31 @@ describe('one trip, one fee (step 18-9): the rider was already paid on a refunde
     b.press('Paid now · Rs 4,515');
     await settle();
     b.view();
-    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o42', riderAlreadyPaid: false }]]);
-    expect(seen.events).toEqual(['orders.sendOut', 'opened Rider paid']);
-    expect((stubs.deliver.at(-1) as DeliverProps).snap).toBe(out);
+    expect(seen.calls).toEqual([]);
+    expect(seen.events).toEqual(['opened Rider paid']);
+    const riderPaid = stubs.deliver.at(-1) as DeliverProps;
+    expect(riderPaid.snap).toBe(ready);
+    expect(riderPaid.sendOutFirst).toEqual({ request: { orderId: 'o42', riderAlreadyPaid: false }, keepsCents: 20_000, tripCents: 0 });
   });
 
-  it('on Live Orders, the default: "Paid now · Rs 4,715" sends riderAlreadyPaid true and opens Rider paid for the whole bill; a paid one asks too and opens no drawer', async () => {
-    const out = ownerExample(42, 'out_for_delivery', { riderKeepsCents: 0 as never });
-    seen.answer = out;
-    const b = liveOrders([reRung(42)]);
+  it('on Live Orders, the default: "Paid now · Rs 4,715" hands Rider paid riderAlreadyPaid true and the whole bill; a paid one asks too and opens no drawer', async () => {
+    const ready = reRung(42);
+    const b = liveOrders([ready]);
     b.press('Send out');
     b.press('Paid now · Rs 4,715');
     await settle();
     b.view();
-    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o42', riderAlreadyPaid: true }]]);
+    expect(seen.calls).toEqual([]);
     const riderPaid = stubs.deliver.at(-1) as DeliverProps;
-    expect(riderPaid).toMatchObject({ snap: out, riderPaidOnly: true });
-    // The real Rider paid box on the order as sent: he hands over the whole bill.
+    expect(riderPaid).toMatchObject({
+      snap: ready,
+      riderPaidOnly: true,
+      sendOutFirst: { request: { orderId: 'o42', riderAlreadyPaid: true }, keepsCents: 0, tripCents: 0 },
+    });
+    // The real Rider paid box on the Ready order: he keeps nothing and hands over the whole bill.
     stubs.on = false;
-    expect(text(render(<MarkDeliveredDialog {...riderPaid} />))).toContain('Take from the rider Rs 4,715');
+    const words = text(render(<MarkDeliveredDialog {...riderPaid} />));
+    expect(words).toContain('Rider keeps nothing (already paid for this trip) Take from the rider Rs 4,715');
 
     seen.calls.length = 0;
     const p = liveOrders([reRung(43, { paidAt: minsAgo(30) })]);
@@ -1324,7 +1390,8 @@ describe('add-on delivery (step 18-11): Send out names the same customer’s oth
           chargeAgain={false}
           onChargeAgain={() => seen.events.push('charge again')}
           onClose={() => seen.events.push('closed')}
-          onSent={(_next, riderPaidNow) => seen.events.push(riderPaidNow ? 'sent, Paid now' : 'sent')}
+          onSent={() => seen.events.push('sent')}
+          onPaidNow={() => seen.events.push('Paid now')}
           onAssignInstead={() => seen.events.push('assign instead')}
           {...(sameCustomer !== undefined ? { sameCustomer } : {})}
         />,
@@ -1350,7 +1417,16 @@ describe('add-on delivery (step 18-11): Send out names the same customer’s oth
 
   it('#0042 already out, and no delivery charge on this one: the amber “has already gone out” line', () => {
     const markup = render(
-      <SendOutDialog snap={addOn()} sameCustomer={GONE} chargeAgain={false} onChargeAgain={() => {}} onClose={() => {}} onSent={() => {}} onAssignInstead={() => {}} />,
+      <SendOutDialog
+        snap={addOn()}
+        sameCustomer={GONE}
+        chargeAgain={false}
+        onChargeAgain={() => {}}
+        onClose={() => {}}
+        onSent={() => {}}
+        onPaidNow={() => {}}
+        onAssignInstead={() => {}}
+      />,
     );
     expect(text(markup)).toBe(
       'Send out #0045 The bill prints now · Test Customer ' +
@@ -1455,7 +1531,11 @@ describe('an add-on that now goes alone (review fixes C): "#0042 is no longer he
         chargeAgain={false}
         onChargeAgain={() => seen.events.push('charge again')}
         onClose={() => seen.events.push('closed')}
-        onSent={(_next, riderPaidNow) => seen.events.push(riderPaidNow ? 'sent, Paid now' : 'sent')}
+        onSent={() => seen.events.push('sent')}
+        onPaidNow={(paidNow) => {
+          seen.events.push('Paid now');
+          seen.calls.push(['handed to Rider paid', paidNow]);
+        }}
         onAssignInstead={() => seen.events.push('assign instead')}
         onPayTrip={(on) => seen.events.push(on ? 'ticked' : 'unticked')}
         onPin={(pin) => seen.events.push(`pin ${pin}`)}
@@ -1503,29 +1583,37 @@ describe('an add-on that now goes alone (review fixes C): "#0042 is no longer he
     expect(seen.calls).toEqual([]);
   });
 
-  it('ticked with no PIN typed: nothing is sent, and the toast says a PIN is needed', async () => {
-    box(alone(), { payTrip: true, pin: '   ' });
-    tap('Pays after delivery');
-    await settle();
-    expect(seen.calls).toEqual([]);
-    expect(seen.toasts).toEqual([{ title: "A manager's PIN or password is needed", variant: 'warning' }]);
-  });
-
-  it('ticked with the PIN: every answer asks the till to pay the trip; the toast says the drawer opens', async () => {
-    for (const [answer, event] of [
-      ['Pays after delivery', 'sent'],
-      ['Paid now · Rs 4,485', 'sent, Paid now'],
-    ] as const) {
+  it('ticked with no PIN typed: nothing is sent, nothing is handed on, and the toast says a PIN is needed', async () => {
+    for (const answer of ['Pays after delivery', 'Paid now · Rs 4,485']) {
       seen.calls.length = 0;
       seen.toasts.length = 0;
-      seen.events.length = 0;
-      box(alone(), { payTrip: true, pin: ' 2468 ' });
+      box(alone(), { payTrip: true, pin: '   ' });
       tap(answer);
       await settle();
-      expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o45', payRiderForTrip: true, approverPin: '2468' }]]);
-      expect(seen.toasts).toEqual([{ title: 'Rider paid Rs 200 for the trip — the drawer opens.', variant: 'success' }]);
-      expect(seen.events).toEqual(['orders.sendOut', event]);
+      expect(seen.calls).toEqual([]);
+      expect(seen.toasts).toEqual([{ title: "A manager's PIN or password is needed", variant: 'warning' }]);
     }
+  });
+
+  it('ticked with the PIN: Pays after delivery asks the till to pay the trip (the toast says the drawer opens); Paid now hands the same request and the trip on to Rider paid', async () => {
+    const request = { orderId: 'o45', payRiderForTrip: true, approverPin: '2468' };
+    box(alone(), { payTrip: true, pin: ' 2468 ' });
+    tap('Pays after delivery');
+    await settle();
+    expect(seen.calls).toEqual([['orders.sendOut', request]]);
+    expect(seen.toasts).toEqual([{ title: 'Rider paid Rs 200 for the trip — the drawer opens.', variant: 'success' }]);
+    expect(seen.events).toEqual(['orders.sendOut', 'sent']);
+
+    seen.calls.length = 0;
+    seen.toasts.length = 0;
+    seen.events.length = 0;
+    box(alone(), { payTrip: true, pin: ' 2468 ' });
+    tap('Paid now · Rs 4,485');
+    await settle();
+    // Nothing sent yet: Rider paid sends it, and toasts the trip once it went.
+    expect(seen.calls).toEqual([['handed to Rider paid', { request, keepsCents: 0, tripCents: 20_000 }]]);
+    expect(seen.toasts).toEqual([]);
+    expect(seen.events).toEqual(['Paid now']);
     // Prepaid: the one button says the drawer opens only while ticked.
     expect(text(box(alone({ paidAt: minsAgo(30) })))).toContain(
       'Paid already, and no delivery charge: nothing comes out of the drawer. Send out One of',

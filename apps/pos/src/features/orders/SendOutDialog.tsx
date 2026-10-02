@@ -15,7 +15,10 @@ import {
   riderPaidEarlierChoice,
   sameCustomerLine,
   sendOutSplit,
+  tripPaidToast,
+  type PaidNowAtSendOut,
   type SamePhoneDelivery,
+  type SendOutRequest,
 } from './boardLogic';
 
 /** The box's tick for an add-on that now goes alone (goesAloneLine), word for word. */
@@ -23,18 +26,22 @@ export function payTripWords(tripCents: number): string {
   return `Pay the rider ${formatCents(tripCents)} for this trip`;
 }
 
-/** Which answer sent it out: the rider paid now, pays after delivery, or the customer paid already. */
+/** Which answer: the rider paid now, pays after delivery, or the customer paid already. */
 type Answer = 'paid_now' | 'after' | 'prepaid';
 
 interface Props {
   snap: OrderSnapshot;
   onClose: () => void;
   /**
-   * Sent out. `next` is the order as the till answered, with what the rider
-   * keeps frozen on it; `riderPaidNow` is "Paid now": open Rider paid next,
-   * on `next`.
+   * Sent out (Pays after delivery, or paid already). `next` is the order as
+   * the till answered, with what the rider keeps frozen on it.
    */
-  onSent: (next: OrderSnapshot, riderPaidNow: boolean) => void;
+  onSent: (next: OrderSnapshot) => void;
+  /**
+   * "Paid now": nothing is sent yet. Open Rider paid with this; it sends the
+   * order out and takes his money in one step, then the bill prints.
+   */
+  onPaidNow: (paidNow: PaidNowAtSendOut) => void;
   /** "One of your own riders? Assign rider instead": the Assign rider box, nothing sent. */
   onAssignInstead: () => void;
   /**
@@ -75,10 +82,13 @@ interface Props {
  * Paid already: the drawer gives the rider his charge (owner Q2), so it
  * says so and opens.
  *
- * Every answer sends it out first, so the rider can only pay for an order
- * that has left; "Paid now" then opens Rider paid on the order as the till
- * answered. Esc or the X closes with nothing changed. A refusal keeps the
- * box open and says "Could not send out" in the till's own words.
+ * Pays after delivery and paid already send it out at once. "Paid now"
+ * sends nothing yet (e2e fix A): it hands the request and the figures on to
+ * Rider paid (onPaidNow), which sends it out and takes his money in one
+ * step — only then does the bill print, so its SHOP COPY says RIDER PAID THE
+ * SHOP; closed without paying, Rider paid sends it out anyway. Esc or the X
+ * closes with nothing changed. A refusal keeps the box open and says "Could
+ * not send out" in the till's own words.
  *
  * One trip, one fee (the owner, 2 Oct 2026): when the rider was already paid
  * on a refunded order of this customer (riderPaidEarlierChoice), the box
@@ -106,6 +116,7 @@ export function SendOutDialog({
   snap,
   onClose,
   onSent,
+  onPaidNow,
   onAssignInstead,
   chargeAgain,
   onChargeAgain,
@@ -127,26 +138,29 @@ export function SendOutDialog({
   // 'Pay the rider Rs 200 for this trip': not ticked to start; ticked, a manager's PIN or password.
   const tripCents = alone && alone.tripCents > 0 && payTrip ? alone.tripCents : 0;
   const { toast } = useToast();
+  // What Send out asks the till (Paid now hands it on to Rider paid instead).
+  const request: SendOutRequest = {
+    orderId: order.id,
+    ...(earlier ? { riderAlreadyPaid } : {}),
+    ...(tripCents > 0 ? { payRiderForTrip: true, approverPin: pin.trim() } : {}),
+  };
 
   const send = useMutation({
-    mutationFn: (_answer: Answer) =>
-      ipc.orders.sendOut({
-        orderId: order.id,
-        ...(earlier ? { riderAlreadyPaid } : {}),
-        ...(tripCents > 0 ? { payRiderForTrip: true, approverPin: pin.trim() } : {}),
-      }),
-    onSuccess: (next, answer) => {
-      if (tripCents > 0) {
-        toast({ title: `Rider paid ${formatCents(tripCents)} for the trip — the drawer opens.`, variant: 'success' });
-      }
-      onSent(next, answer === 'paid_now');
+    mutationFn: (_answer: Exclude<Answer, 'paid_now'>) => ipc.orders.sendOut(request),
+    onSuccess: (next) => {
+      if (tripCents > 0) toast({ title: tripPaidToast(tripCents), variant: 'success' });
+      onSent(next);
     },
     onError: (e) =>
       toast({ title: 'Could not send out', description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' }),
   });
   const busy = send.isPending;
-  const saying = (answer: Answer, words: string) => (busy && send.variables === answer ? 'Saving…' : words);
-  /** Send it out. The trip ticked needs the manager's PIN or password typed first: without it nothing is sent. */
+  const saying = (answer: Exclude<Answer, 'paid_now'>, words: string) => (busy && send.variables === answer ? 'Saving…' : words);
+  /**
+   * Send it out, or (Paid now) hand it on to Rider paid. The trip ticked
+   * needs the manager's PIN or password typed first: without it nothing is
+   * sent and nothing opens.
+   */
   const go = (answer: Answer) => {
     if (tripCents > 0) {
       const problem = approvalProblem(pin);
@@ -155,7 +169,8 @@ export function SendOutDialog({
         return;
       }
     }
-    send.mutate(answer);
+    if (answer === 'paid_now') onPaidNow({ request, keepsCents, tripCents });
+    else send.mutate(answer);
   };
 
   return (
@@ -307,7 +322,7 @@ export function SendOutDialog({
                   onClick={() => go('paid_now')}
                   disabled={busy}
                 >
-                  {saying('paid_now', `Paid now · ${formatCents(givesCents)}`)}
+                  {`Paid now · ${formatCents(givesCents)}`}
                 </Button>
                 <Button
                   variant="primary"

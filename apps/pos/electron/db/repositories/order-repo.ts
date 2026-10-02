@@ -4546,6 +4546,9 @@ export const OUTSIDE_RIDER_NO_CARD = "An outside rider can't take a card: choose
  */
 export const RIDER_WINDOW_CHANGED = 'This order changed since this window opened — close it and open the order again.';
 
+/** Send out's "Paid now" with a rider's payment that is not one (orders:sendOut riderPayment): nothing is sent. */
+export const RIDER_PAYMENT_UNREADABLE = "The rider's payment could not be read — close this window and try again.";
+
 /** How shift-repo's recordDeliveryChargeToRider words a wasted trip's payout (its 'kept' one says "Delivery charge kept…"). */
 const TRIP_PAYOUT_REASON_START = 'Trip paid to the outside rider';
 
@@ -4855,6 +4858,12 @@ export function takeRiderPayment(
   db: AppDatabase,
   input: TakeRiderPaymentInput,
   actor: Actor & { userId: string },
+  /**
+   * `after`: the payment is stamped later than this instant, even within the
+   * same millisecond (sendOutRiderPaid passes the dispatched_at it just
+   * wrote, so dispatched_at < paid_at). Left out, as before.
+   */
+  opts: { after?: string | null } = {},
 ): OrderWithDrawer {
   let result!: OrderWithDrawer;
   const tx = db.transaction(() => {
@@ -4869,7 +4878,9 @@ export function takeRiderPayment(
     }
     if (!(order.totalCents > 0)) throw new Error('This order has nothing to pay');
 
-    const now = nowIso();
+    let now = nowIso();
+    const notUntil = opts.after ? Date.parse(opts.after) : NaN;
+    if (Number.isFinite(notUntil) && notUntil >= Date.parse(now)) now = new Date(notUntil + 1).toISOString();
     const drawerOpenId = settleOutsideRider(db, order, { method: input.method, referenceNo: input.referenceNo ?? null }, actor, now);
 
     // Paid while out: never stamped before the food left (a clock set back).
@@ -4898,6 +4909,41 @@ export function takeRiderPayment(
   });
   tx();
   log.info('Outside rider paid the shop', { id: input.orderId, method: input.method, total: result.totalCents });
+  return result;
+}
+
+/** Send out with "Paid now": the order as it is after, with both drawer rows (null: none). */
+export type SentOutRiderPaid = OrderWithDrawer & {
+  /** The drawer row Send out itself wrote (an add-on going alone, its trip paid); `drawerOpenId` is the rider's cash. */
+  sentDrawerOpenId: string | null;
+};
+
+/**
+ * Send out with "Paid now" (e2e fix A, v0.7.34): the outside rider pays the
+ * shop as the order leaves. Send out (sendOutOrder, with its options) and
+ * then Rider paid (takeRiderPayment) in ONE transaction: both or nothing.
+ * Any refusal — no shift open, a card, a window whose riderKeepsCents is not
+ * what Send out froze, an order already paid — leaves the order where it was
+ * (not out, nothing paid, nothing audited), in that step's own words. The
+ * payment is stamped after it left, even within the same millisecond
+ * (dispatched_at < paid_at), so the papers read it as paid while out
+ * (riderSettledWhileOut). The audit says 'send_out', then 'rider_paid'. The
+ * caller prints the bill once, after the commit: its SHOP COPY then says
+ * RIDER PAID THE SHOP.
+ */
+export function sendOutRiderPaid(
+  db: AppDatabase,
+  input: TakeRiderPaymentInput,
+  actor: Actor & { userId: string },
+  opts: Parameters<typeof sendOutOrder>[3] = {},
+): SentOutRiderPaid {
+  let result!: SentOutRiderPaid;
+  const tx = db.transaction(() => {
+    const sent = sendOutOrder(db, input.orderId, actor, opts);
+    const paid = takeRiderPayment(db, input, actor, { after: sent.dispatchedAt });
+    result = { ...paid, sentDrawerOpenId: sent.drawerOpenId };
+  });
+  tx();
   return result;
 }
 

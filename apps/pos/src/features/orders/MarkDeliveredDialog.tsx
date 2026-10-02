@@ -7,7 +7,7 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { isOutsideRiderOrder, riderKeepsNothingWhy, type OrderSnapshot, type PaymentMethod } from '@cheeseoclock/shared-types';
-import { parseRupeesToCents } from './boardLogic';
+import { parseRupeesToCents, tripPaidToast, type PaidNowAtSendOut } from './boardLogic';
 import { quickCashRupees } from '../checkout/tenderAmounts';
 
 /**
@@ -44,6 +44,16 @@ interface Props {
    * and the order stays out; Delivered closes it later.
    */
   riderPaidOnly?: boolean;
+  /**
+   * Send out's "Paid now" (e2e fix A): the order is still Ready. Confirm
+   * sends it out and takes his money in one step (orders:sendOut with
+   * riderPayment); only then does the bill print, so its SHOP COPY says
+   * RIDER PAID THE SHOP. What he keeps is the figure the Send out box showed.
+   * Closed without paying — "Pays after delivery", the X or Esc — it sends
+   * the order out anyway (Send out alone): the bill prints once, and the Out
+   * card says Rider owes. A refused Confirm changes nothing and keeps the box.
+   */
+  sendOutFirst?: PaidNowAtSendOut;
 }
 
 /**
@@ -62,16 +72,21 @@ interface Props {
  * till pays his share out of it (owner, 2 Oct 2026). With `riderPaidOnly` it
  * records Rider paid instead and the order stays out. On Delivered + Pay,
  * "Customer refused an item" takes his cash at the food total and then
- * opens the Refund box (onDone with refundItem).
+ * opens the Refund box (onDone with refundItem). With `sendOutFirst` (Send
+ * out's "Paid now") it is Rider paid on an order not sent out yet: see the
+ * prop.
  */
-export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly = false }: Props) {
+export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: riderPaidProp = false, sendOutFirst }: Props) {
   const { order } = snap;
   const isDelivery = order.mode === 'delivery';
+  // Send out's "Paid now" is Rider paid too, on an order still Ready.
+  const riderPaidOnly = riderPaidProp || sendOutFirst !== undefined;
   // An outside rider's money, not settled yet (Rider paid always is: the till refuses a paid order itself).
   const outside = riderPaidOnly || (isOutsideRiderOrder(order) && order.paidAt === null);
   const alreadyPaid = !outside && order.paidAt !== null;
   // What he keeps, frozen at Send out; never worked out again from the lines.
-  const keepCents = outside ? (order.riderKeepsCents ?? 0) : 0;
+  // Not sent out yet (Paid now): what the Send out box showed, which Send out freezes.
+  const keepCents = sendOutFirst ? sendOutFirst.keepsCents : outside ? (order.riderKeepsCents ?? 0) : 0;
   // What the rider hands the shop: the food total.
   const takeCents = order.totalCents - keepCents;
   // What this dialog takes: the food total from an outside rider, else the whole bill.
@@ -101,7 +116,11 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly = fal
       const referenceNo = method !== 'cash' ? reference.trim() || null : null;
       if (outside) {
         // As the window showed it; the till refuses if the order changed since.
-        const riderKeepsCents = order.riderKeepsCents ?? 0;
+        const riderKeepsCents = keepCents;
+        // Paid now: out and paid in one step (both or nothing), then the bill.
+        if (sendOutFirst) {
+          return ipc.orders.sendOut({ ...sendOutFirst.request, riderPayment: { method, referenceNo, riderKeepsCents } });
+        }
         if (riderPaidOnly) return ipc.orders.riderPaid({ orderId: order.id, method, referenceNo, riderKeepsCents });
         // The full total, whatever the method: the till splits it and pays his share itself.
         // A refused item: the till keeps its part refund as owed until it is done.
@@ -124,6 +143,7 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly = fal
       return isDelivery ? ipc.orders.markDelivered(args) : ipc.orders.markServed(args);
     },
     onSuccess: (after, { refuse }) => {
+      if (sendOutFirst && sendOutFirst.tripCents > 0) toast({ title: tripPaidToast(sendOutFirst.tripCents), variant: 'success' });
       const change =
         changeCents > 0
           ? { description: outside ? `Give the rider change: ${formatCents(changeCents)}` : `Give change: ${formatCents(changeCents)}` }
@@ -141,14 +161,35 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly = fal
     },
     onError: (e) =>
       toast({
-        title: riderPaidOnly ? "Could not take the rider's payment" : `Could not mark ${verb}`,
+        // Paid now refused: not sent out, nothing taken.
+        title: sendOutFirst ? 'Could not send out' : riderPaidOnly ? "Could not take the rider's payment" : `Could not mark ${verb}`,
         description: e instanceof Error ? e.message : 'Unknown error',
         variant: 'error',
       }),
   });
 
+  // Paid now closed without paying: it goes out anyway (Send out alone), and its bill prints once.
+  const goesOut = useMutation({
+    mutationFn: (request: PaidNowAtSendOut['request']) => ipc.orders.sendOut(request),
+    onSuccess: () => {
+      if (sendOutFirst && sendOutFirst.tripCents > 0) toast({ title: tripPaidToast(sendOutFirst.tripCents), variant: 'success' });
+      onDone();
+    },
+    onError: (e) => {
+      toast({ title: 'Could not send out', description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' });
+      onClose();
+    },
+  });
+  const saving = deliverMut.isPending || goesOut.isPending;
+  /** The X, Esc and Back: closes — or, on Paid now, sends it out with the rider owing (once; never while saving). */
+  const close = () => {
+    if (!sendOutFirst) return onClose();
+    if (saving) return;
+    goesOut.mutate(sendOutFirst.request);
+  };
+
   function submit() {
-    if (deliverMut.isPending) return;
+    if (saving) return;
     if (!alreadyPaid && method === 'cash' && !(tenderedCents >= dueCents)) {
       toast({
         title: outside ? `The rider's cash must cover ${formatCents(takeCents)}` : 'Cash given must cover the total',
@@ -188,7 +229,7 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly = fal
   const quickNotes = outside ? quickCashRupees(takeCents) : quickCashRupees(order.totalCents);
 
   return (
-    <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
+    <Dialog.Root open onOpenChange={(o) => !o && close()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[460px] max-w-[95vw] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900">
@@ -204,7 +245,9 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly = fal
                   {riderPaidOnly ? `Rider paid · #${short}` : alreadyPaid ? `Mark ${verb}` : `${verbCap} + take payment`}
                 </Dialog.Title>
                 <Dialog.Description className="mt-0.5 text-xs text-stone-500">
-                  {riderPaidOnly ? (
+                  {sendOutFirst ? (
+                    <>{snap.customerName ?? 'Walk-in'} · it goes out, then the bill prints</>
+                  ) : riderPaidOnly ? (
                     <>{snap.customerName ?? 'Walk-in'} · the order stays out for delivery</>
                   ) : (
                     <>
@@ -216,8 +259,8 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly = fal
               </div>
               <button
                 type="button"
-                onClick={onClose}
-                aria-label="Close"
+                onClick={close}
+                aria-label={sendOutFirst ? 'Pays after delivery' : 'Close'}
                 className="rounded p-1 text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800"
               >
                 <X className="h-4 w-4" />
@@ -378,15 +421,16 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly = fal
             )}
 
             <div className="mt-5 flex gap-2">
-              <Button type="button" variant="ghost" size="md" className="flex-1" onClick={onClose}>
-                Back
+              <Button type="button" variant="ghost" size="md" className="flex-1" onClick={close} disabled={sendOutFirst !== undefined && saving}>
+                {/* Paid now: not paying now still sends it out — he pays after delivery. */}
+                {sendOutFirst ? (goesOut.isPending ? 'Saving…' : 'Pays after delivery') : 'Back'}
               </Button>
               <Button
                 type="submit"
                 variant="success"
                 size="md"
                 className="flex-1"
-                disabled={deliverMut.isPending}
+                disabled={saving}
                 autoFocus={alreadyPaid || method !== 'cash'}
               >
                 <CheckCircle2 className="h-4 w-4" />

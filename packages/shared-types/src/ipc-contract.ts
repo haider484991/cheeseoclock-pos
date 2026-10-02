@@ -842,9 +842,22 @@ export interface IpcContract {
    * trip payout has): one payout linked to the order and one drawer row, and
    * the drawer opens. The till checks it again; on an order that does not go
    * alone it refuses and nothing is sent. Absent or false: nothing is paid.
+   *
+   * `riderPayment` (Send out's "Paid now", e2e fix A): the outside rider pays
+   * the shop as the order leaves — what orders:riderPaid takes, in the same
+   * step: sent out and paid, or (any refusal, e.g. no shift open) neither,
+   * with nothing printed. Only then does the bill print, once, so its SHOP
+   * COPY says RIDER PAID THE SHOP. `riderKeepsCents` is what the box showed
+   * he keeps; it must be what Send out freezes. Absent: Send out alone.
    */
   'orders:sendOut': {
-    request: { orderId: string; riderAlreadyPaid?: boolean; payRiderForTrip?: boolean; approverPin?: string };
+    request: {
+      orderId: string;
+      riderAlreadyPaid?: boolean;
+      payRiderForTrip?: boolean;
+      approverPin?: string;
+      riderPayment?: { method: PaymentMethod; referenceNo?: string | null; riderKeepsCents: number };
+    };
     response: ApiResult<OrderSnapshot>;
   };
   'orders:assignRider': {

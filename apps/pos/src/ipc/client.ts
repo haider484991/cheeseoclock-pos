@@ -179,6 +179,7 @@ export const ipc = {
     /**
      * Send out: an outside rider takes the order; the customer's bill prints with it.
      * riderAlreadyPaid: he was already paid for this trip on a refunded order of the customer (keeps nothing here).
+     * riderPayment ("Paid now"): his money is taken in the same step; the bill prints after it.
      */
     sendOut: (input: IpcRequest<'orders:sendOut'>) => unwrap(window.api.orders.sendOut(input)),
     assignRider: (input: IpcRequest<'orders:assignRider'>) =>

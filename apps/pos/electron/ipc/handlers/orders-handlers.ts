@@ -3,7 +3,7 @@ import { defineHandler, IpcGuardError } from '../registry.js';
 import { requireAdmin, requireCapability, REFUSED } from '../guards.js';
 import { assertCounterAddress, assertCounterMaySee, assertOrderStillBeingTaken } from '../order-access.js';
 import { COST_CAPABILITY, ok, hasCapability } from '@cheeseoclock/shared-types';
-import type { AuthenticatedUser, CameBy, OrderSnapshot, OrderStockAnswer, StockSettlement } from '@cheeseoclock/shared-types';
+import type { AuthenticatedUser, CameBy, OrderSnapshot, OrderStockAnswer, PaymentMethod, StockSettlement } from '@cheeseoclock/shared-types';
 import {
   cameBySchema,
   deleteTestOrderInputSchema,
@@ -42,6 +42,8 @@ import {
   markOrderPreparing,
   markOrderReady,
   sendOutOrder,
+  sendOutRiderPaid,
+  RIDER_PAYMENT_UNREADABLE,
   assignRiderToOrder,
   unassignRiderFromOrder,
   markOrderServed,
@@ -695,6 +697,39 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     return ok(snap);
   });
 
+  /**
+   * A rider's money just came in (Delivered + Pay, Rider paid, or Send out
+   * with "Paid now"): the drawer (only for the row the repository wrote with
+   * the cash) and the paper, the FBR invoice and the stock — after the sale
+   * is saved, and never stopping it. `when` names the step in the log;
+   * `printEvent` is what the spooler hears ('sent_out_paid' when the food
+   * left in the same step: the bill that goes with it prints now).
+   */
+  const riderMoneyTaken = (
+    snap: OrderSnapshot,
+    drawerOpenId: string | null,
+    s: AuthenticatedUser,
+    when: string,
+    printEvent: 'payment_captured' | 'sent_out_paid' = 'payment_captured',
+  ) => {
+    const orderId = snap.order.id;
+    printSpooler.onOrderEvent(orderId, printEvent, { drawerOpenId });
+    try {
+      const cfg = getFbrConfig(ctx.db);
+      const fbrPayload = mapOrderToFbrPayload(snap, toSellerInfo(cfg));
+      enqueueFbrSubmission(ctx.db, orderId, fbrPayload, cfg.mode);
+      fbrWorker.kick();
+    } catch (e) {
+      // FBR mapping failure must not block the delivery flow.
+      console.warn(`FBR enqueue failed on ${when} (sale not affected):`, e);
+    }
+    try {
+      decrementForOrder(ctx.db, orderId, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      console.warn(`Stock decrement failed on ${when} (sale not affected):`, e);
+    }
+  };
+
   // Send out (owner, 2 Oct 2026): an outside rider takes the order. Like
   // Assign rider, any login that takes orders and no manager PIN (the drawer
   // log and the close's riders row are the check). The repository freezes
@@ -705,12 +740,25 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   // An add-on that now goes alone: 'Pay the rider Rs 200 for this trip'
   // ticked pays his trip from the drawer, with a manager's PIN or password as
   // a cancel's trip payout has (the repository checks there is a trip to pay).
+  // "Paid now" (e2e fix A): `riderPayment` sends it out and takes the rider's
+  // money in one step (sendOutRiderPaid: both or nothing); only then does
+  // the bill print, once, so its SHOP COPY says RIDER PAID THE SHOP.
   defineHandler('orders:sendOut', ctx, async (_ctx, payload) => {
     const s = requireOrderCreate();
     let drawerOpenId: string | null;
     // One trip, one fee: only a true says the rider was already paid on another
     // order of this customer (the repository checks it again).
     const riderAlreadyPaid = payload.riderAlreadyPaid === true;
+    // Paid now: how he paid, as the Rider paid box sent it (the repository
+    // checks the method and what he keeps); anything but an object is refused.
+    const rp: unknown = payload.riderPayment;
+    if (rp !== undefined && rp !== null && typeof rp !== 'object') {
+      throw new IpcGuardError({ code: 'precondition_failed', message: RIDER_PAYMENT_UNREADABLE });
+    }
+    const riderPayment =
+      rp && typeof rp === 'object'
+        ? (rp as { method?: unknown; referenceNo?: unknown; riderKeepsCents?: unknown })
+        : null;
     // Only a true asks to pay the trip; it needs the manager's approval first.
     let payRiderForTrip: { approverUserId: string } | null = null;
     if (payload.payRiderForTrip === true) {
@@ -726,16 +774,40 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
         });
       }
     }
+    const sendOpts = {
+      ...(riderAlreadyPaid ? { riderAlreadyPaid } : {}),
+      ...(payRiderForTrip ? { payRiderForTrip } : {}),
+    };
+    if (riderPayment) {
+      let done: ReturnType<typeof sendOutRiderPaid>;
+      try {
+        done = sendOutRiderPaid(
+          ctx.db,
+          {
+            orderId: payload.orderId,
+            method: riderPayment.method as PaymentMethod,
+            referenceNo: typeof riderPayment.referenceNo === 'string' ? riderPayment.referenceNo : null,
+            riderKeepsCents: riderPayment.riderKeepsCents as number,
+          },
+          { userId: s.id, deviceId: ctx.deviceId },
+          sendOpts,
+        );
+      } catch (e) {
+        // Nothing was written: the order is where it was, and nothing prints.
+        throw new IpcGuardError({
+          code: 'precondition_failed',
+          message: e instanceof Error ? e.message : 'Send out failed',
+        });
+      }
+      // His trip (an add-on going alone), paid from the drawer at Send out.
+      if (done.sentDrawerOpenId) printSpooler.kickDrawerSoon(done.sentDrawerOpenId);
+      const paidSnap = getOrderSnapshot(ctx.db, payload.orderId);
+      if (!paidSnap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+      riderMoneyTaken(paidSnap, done.drawerOpenId, s, 'Send out (Paid now)', 'sent_out_paid');
+      return ok(paidSnap);
+    }
     try {
-      drawerOpenId = sendOutOrder(
-        ctx.db,
-        payload.orderId,
-        { userId: s.id, deviceId: ctx.deviceId },
-        {
-          ...(riderAlreadyPaid ? { riderAlreadyPaid } : {}),
-          ...(payRiderForTrip ? { payRiderForTrip } : {}),
-        },
-      ).drawerOpenId;
+      drawerOpenId = sendOutOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId }, sendOpts).drawerOpenId;
     } catch (e) {
       throw new IpcGuardError({
         code: 'precondition_failed',
@@ -826,31 +898,6 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     return ok(snap);
   });
-
-  /**
-   * A rider's money just came in (Delivered + Pay, or Rider paid): the drawer
-   * (only for the row the repository wrote with the cash) and the paper, the
-   * FBR invoice and the stock — after the sale is saved, and never stopping
-   * it. `when` names the step in the log.
-   */
-  const riderMoneyTaken = (snap: OrderSnapshot, drawerOpenId: string | null, s: AuthenticatedUser, when: string) => {
-    const orderId = snap.order.id;
-    printSpooler.onOrderEvent(orderId, 'payment_captured', { drawerOpenId });
-    try {
-      const cfg = getFbrConfig(ctx.db);
-      const fbrPayload = mapOrderToFbrPayload(snap, toSellerInfo(cfg));
-      enqueueFbrSubmission(ctx.db, orderId, fbrPayload, cfg.mode);
-      fbrWorker.kick();
-    } catch (e) {
-      // FBR mapping failure must not block the delivery flow.
-      console.warn(`FBR enqueue failed on ${when} (sale not affected):`, e);
-    }
-    try {
-      decrementForOrder(ctx.db, orderId, { userId: s.id, deviceId: ctx.deviceId });
-    } catch (e) {
-      console.warn(`Stock decrement failed on ${when} (sale not affected):`, e);
-    }
-  };
 
   defineHandler('orders:markDelivered', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
