@@ -22,6 +22,7 @@ import {
   isLeaveOutChoice,
   isOutsideRiderOrder,
   orderNotesOf,
+  type OrderSnapshot,
 } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { failedRetryToast, reprintReceipt, reprintToast } from '../printing/reprint';
@@ -33,7 +34,7 @@ import { DeleteTestOrderDialog } from './DeleteTestOrderDialog';
 import { mayDeleteTestOrder } from './testDeleteCopy';
 import { useSessionStore } from '../../stores/sessionStore';
 import { RefundOrderDialog } from './RefundOrderDialog';
-import { MarkDeliveredDialog } from './MarkDeliveredDialog';
+import { MarkDeliveredDialog, REFUSED_ITEM_REFUND } from './MarkDeliveredDialog';
 import { drawerDiscountLabel } from '../checkout/discountWords';
 import { CameByRow } from './CameByRow';
 import { ModeBadge, PaidChip, StatusBadge } from './OrderBadges';
@@ -59,7 +60,9 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   const [refundOpen, setRefundOpen] = useState(false);
   const [collectOpen, setCollectOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const dialogOpen = voidOpen || refundOpen || collectOpen || deleteOpen;
+  // Collect payment with "Customer refused an item" (outside rider, order-edit #5): the Refund box next, on the order as now paid.
+  const [refusedItemSnap, setRefusedItemSnap] = useState<OrderSnapshot | null>(null);
+  const dialogOpen = voidOpen || refundOpen || collectOpen || deleteOpen || refusedItemSnap !== null;
   // "Delete test order…" is the owner's alone (the main process checks again,
   // and asks for the owner's PIN or password in the dialog).
   const role = useSessionStore((st) => st.user?.role ?? null);
@@ -486,7 +489,22 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
         <DeleteTestOrderDialog snap={snap} onClose={() => setDeleteOpen(false)} onDone={afterDelete} />
       )}
       {collectOpen && snap && (
-        <MarkDeliveredDialog snap={snap} onClose={() => setCollectOpen(false)} onDone={afterChange(() => setCollectOpen(false))} />
+        <MarkDeliveredDialog
+          snap={snap}
+          onClose={() => setCollectOpen(false)}
+          onDone={(next) => {
+            afterChange(() => setCollectOpen(false))();
+            if (next?.refundItem) setRefusedItemSnap(next.snap);
+          }}
+        />
+      )}
+      {refusedItemSnap && (
+        <RefundOrderDialog
+          snap={refusedItemSnap}
+          {...REFUSED_ITEM_REFUND}
+          onClose={() => setRefusedItemSnap(null)}
+          onDone={afterChange(() => setRefusedItemSnap(null))}
+        />
       )}
     </>
   );

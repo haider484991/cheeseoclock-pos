@@ -28,7 +28,7 @@ import type { OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared
 import { orderNotesOf } from '@cheeseoclock/shared-types';
 import { NoShiftBanner } from '../shell/NoShiftBanner';
 import { AssignRiderDialog } from './AssignRiderDialog';
-import { MarkDeliveredDialog } from './MarkDeliveredDialog';
+import { MarkDeliveredDialog, REFUSED_ITEM_REFUND } from './MarkDeliveredDialog';
 import { VoidOrderDialog } from './VoidOrderDialog';
 import { RefundOrderDialog } from './RefundOrderDialog';
 import { ModeBadge, PaidChip, TicketNotPrinted } from './OrderBadges';
@@ -114,7 +114,8 @@ export function OrdersBoardPage() {
   const [deliverFor, setDeliverFor] = useState<OrderSnapshot | null>(null);
   const [voidFor, setVoidFor] = useState<OrderSnapshot | null>(null);
   // A paid order can't be voided (the server refuses): its Cancel is a refund.
-  const [refundFor, setRefundFor] = useState<OrderSnapshot | null>(null);
+  // refusedItem: opened after Delivered + Pay with "Customer refused an item" (Part of it, Cash, the note).
+  const [refundFor, setRefundFor] = useState<{ snap: OrderSnapshot; refusedItem: boolean } | null>(null);
   const qc = useQueryClient();
   const { toast } = useToast();
   const now = useNow(20_000);
@@ -316,7 +317,7 @@ export function OrdersBoardPage() {
                         onChangeRider={() => setAssignFor(snap)}
                         onReprint={() => reprint.mutate(snap.order.id)}
                         onReprintKitchen={() => reprintKitchen.mutate(snap.order.id)}
-                        onCancel={() => (snap.order.paidAt !== null ? setRefundFor(snap) : setVoidFor(snap))}
+                        onCancel={() => (snap.order.paidAt !== null ? setRefundFor({ snap, refusedItem: false }) : setVoidFor(snap))}
                       />
                     );
                   })
@@ -341,15 +342,19 @@ export function OrdersBoardPage() {
         <MarkDeliveredDialog
           snap={deliverFor}
           onClose={() => setDeliverFor(null)}
-          onDone={() => {
+          onDone={(next) => {
             setDeliverFor(null);
             void refresh();
+            // The customer refused an item (outside rider, order-edit #5): the
+            // Refund box next, on this till, with the order as the till now has it.
+            if (next?.refundItem) setRefundFor({ snap: next.snap, refusedItem: true });
           }}
         />
       )}
       {refundFor && (
         <RefundOrderDialog
-          snap={refundFor}
+          snap={refundFor.snap}
+          {...(refundFor.refusedItem ? REFUSED_ITEM_REFUND : {})}
           onClose={() => setRefundFor(null)}
           onDone={() => {
             setRefundFor(null);
