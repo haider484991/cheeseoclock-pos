@@ -371,8 +371,19 @@ describe.skipIf(!Sqlite)('a discount leaves the delivery charge alone (the defau
     expect(note.items.find((i) => i.productDescription === 'Delivery Charge (Rs 200)')?.discount).toBeUndefined();
     // Profit and food cost: the charge is fee sales at its full Rs 200; the food carries the whole discount.
     expect(await reportsSay()).toEqual({ food: 180_000, fee: 20_000, chargeSales: 20_000 });
-    // The receipt says so.
-    expect(receiptText(s)).toContain('Discount 10% (food only)');
+    // The receipt says so…
+    const paper = receiptText(s);
+    expect(paper).toContain('Discount 10% (food only)');
+    // …on the delivery bill (v0.7.34, updated deliberately: it printed Subtotal / Tax / TOTAL Rs 2,320.00
+    // and the charge as an item): Food / Sales tax / FOOD TOTAL / Delivery charge / CUSTOMER PAYS.
+    expect(paper).toMatch(/^Food\s+2,000\.00$/m);
+    expect(paper).toMatch(/^Sales tax 16%\s+288\.00$/m);
+    expect(paper).toMatch(/^Sales tax on delivery 16%\s+32\.00$/m);
+    expect(paper).toMatch(/^FOOD TOTAL \(with tax\)\s+Rs 2,120\.00$/m);
+    expect(paper).toMatch(/^Delivery charge\s+200\.00$/m);
+    expect(paper).toMatch(/^CUSTOMER PAYS\s+Rs 2,320\.00$/m);
+    expect(paper).not.toContain('Delivery Charge (Rs 200)');
+    expect(paper).not.toMatch(/^Subtotal/m);
   });
 
   it('100% off leaves the delivery charge and its tax to pay (a manager’s PIN)', async () => {

@@ -44,18 +44,51 @@
  *
  *           FBR block (live FBR only)
  *        ** DUPLICATE - Reprint #1 **
+ *
+ * A delivery order with a delivery charge prints the owner's delivery bill
+ * (2 Oct 2026: "Food / Sales tax / FOOD TOTAL (with tax) / Delivery charge /
+ * CUSTOMER PAYS") in place of Subtotal / Tax / TOTAL, from shared-types
+ * deliveryBillOf; the "1x Delivery Charge (Rs 200)" item row is left out (the
+ * charge prints once, under FOOD TOTAL). With the charge zero-rated:
+ *
+ *      1x Big Two                       3,600.00
+ *      1x Fries                           300.00
+ *      ----------------------------------------
+ *      Food                             3,900.00
+ *      Sales tax 15%                      585.00
+ *      FOOD TOTAL (with tax)         Rs 4,485.00
+ *      Delivery charge                    200.00
+ *      ========================================
+ *      CUSTOMER PAYS                 Rs 4,685.00
+ *
+ * and with it taxed at 15%, as the live menu has it (owner, Q1: the charge
+ * keeps its tax; the outside rider keeps exactly the Rs 200):
+ *
+ *      Food                             3,900.00
+ *      Sales tax 15%                      585.00
+ *      Sales tax on delivery 15%           30.00
+ *      FOOD TOTAL (with tax)         Rs 4,515.00
+ *      Delivery charge                    200.00
+ *      ========================================
+ *      CUSTOMER PAYS                 Rs 4,715.00
+ *
+ * Every other order (and a delivery with no charge, or one whose total is
+ * below its charge) keeps Subtotal / Tax / TOTAL, byte for byte.
  */
 
-import type { DrawerSettings, OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
+import type { DeliveryBill, DrawerSettings, OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
 import {
   RECEIPT_EXTRA_LINES_MAX,
+  deliveryBillOf,
   discountBillLabel,
+  isDeliveryChargeLine,
   isLeaveOutChoice,
   orderNotesOf,
   paperCashierName,
   paperClock,
   paperDateTime,
   paperDayMonthClock,
+  salesTaxLabel,
 } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode, toPrinterAscii } from './escpos.js';
 import {
@@ -328,6 +361,15 @@ const METHOD_LABEL: Record<string, string> = {
  * website, thank-you, FBR, DUPLICATE footer, cut. Everything between the two
  * DUPLICATE marks is exactly what the original said: same order number,
  * times, amounts, FBR number and QR.
+ *
+ * The totals of a delivery with a delivery charge are the delivery bill
+ * (deliveryBillOf), on the receipt and the bill, customer and shop copy
+ * alike. Zero-rated charge: Food 3,900.00 / Sales tax 15% 585.00 / FOOD
+ * TOTAL (with tax) Rs 4,485.00 / Delivery charge 200.00 / CUSTOMER PAYS Rs
+ * 4,685.00. Taxed charge: Food 3,900.00 / Sales tax 15% 585.00 / Sales tax on
+ * delivery 15% 30.00 / FOOD TOTAL (with tax) Rs 4,515.00 / Delivery charge
+ * 200.00 / CUSTOMER PAYS Rs 4,715.00. The figures are the stored ones: FOOD
+ * TOTAL + Delivery charge = CUSTOMER PAYS = the order's total.
  */
 export function renderReceipt(
   snapshot: OrderSnapshot,
@@ -480,9 +522,15 @@ function appendOrderMeta(b: EscPosBuilder, snapshot: OrderSnapshot): void {
   b.bold(true).line(`Order #${order.orderNumber}`, orderTopRight).bold(false);
 }
 
-/** Items with their prices and choices (receipts and bills). */
-function appendPricedItems(b: EscPosBuilder, snapshot: OrderSnapshot, width: PrinterWidth): void {
+/**
+ * Items with their prices and choices (receipts and bills). On the delivery
+ * bill (skipDeliveryCharge) the delivery-charge lines are left out: the
+ * charge prints once, as "Delivery charge" under FOOD TOTAL, never also as
+ * "1x Delivery Charge (Rs 200)".
+ */
+function appendPricedItems(b: EscPosBuilder, snapshot: OrderSnapshot, width: PrinterWidth, skipDeliveryCharge = false): void {
   for (const it of snapshot.items) {
+    if (skipDeliveryCharge && isDeliveryChargeLine(it)) continue;
     const qty = `${it.quantity}x`;
     const name = `${qty} ${it.menuItemName}`;
     const total = money(it.lineTotalCents);
@@ -524,7 +572,7 @@ function appendSaleBody(
   shopCopy: boolean,
   width: PrinterWidth,
 ): void {
-  const { order, payments, discounts } = snapshot;
+  const { order, payments } = snapshot;
   appendOrderMeta(b, snapshot);
   // Paid: when it was paid. A bill: when the order was sent (0048), not when
   // its cart was started; an order from before 0.7.34 has no sentAt and keeps
@@ -553,41 +601,23 @@ function appendSaleBody(
   }
   b.rule();
 
-  appendPricedItems(b, snapshot, width);
+  // A delivery with a delivery charge: the owner's delivery bill (null keeps
+  // Subtotal / Tax / TOTAL). Its charge lines print once, under FOOD TOTAL.
+  const bill = deliveryBillOf(snapshot);
+  appendPricedItems(b, snapshot, width, bill !== null);
   b.rule();
 
   // Totals
-  b.line('Subtotal', money(order.subtotalCents));
-  for (const d of discounts) {
-    // The shop's foodpanda deal prints as itself ("Foodpanda deal 20% off"),
-    // with foodpanda's part on a line of its own when the deal is shared.
-    // foodpanda's commission never prints.
-    if (d.source === 'foodpanda' && d.amountCents === 0) {
-      // Nothing off the shop's bill: foodpanda pays all of the deal (say so,
-      // not "- 0.00"), or the order is under the deal's minimum (no line).
-      const fp = d.foodpanda;
-      if (fp && fp.platformCents > 0) b.line(`Foodpanda deal ${fp.dealPercent}% off, paid by foodpanda`, money(fp.platformCents));
-      continue;
-    }
-    // One of the owner's automatic offers the cashier took off: nothing off, no line.
-    if (d.source === 'offer' && d.amountCents === 0) continue;
-    // A discount that leaves the value deals alone and found nothing else to
-    // come off (the food was taken off, the deals stayed): no "- 0.00" line.
-    if (d.amountCents === 0 && d.skipsNoDiscountLines === true) continue;
-    // "Discount (Staff)" — or, when its frozen rule left the delivery charge
-    // or the value deals alone, "Discount 10% (Staff, food only)", "Discount
-    // 10% (Staff, not on value deals)"; an automatic offer by its name.
-    const tag = discountBillLabel(d, snapshot.items);
-    b.line(tag, `- ${money(d.amountCents)}`);
-    if (d.foodpanda && d.foodpanda.platformCents > 0) {
-      b.line('foodpanda pays another', money(d.foodpanda.platformCents));
-    }
+  if (bill) {
+    appendDeliveryTotals(b, snapshot, bill, dup, width);
+  } else {
+    b.line('Subtotal', money(order.subtotalCents));
+    appendDiscountLines(b, snapshot);
+    b.line(taxLabel(snapshot), money(order.taxCents));
+    appendTotalsRule(b, dup, width);
+    b.bold(true).doubleHeight(true).line('TOTAL', `Rs ${money(order.totalCents)}`);
+    b.bold(false).doubleHeight(false);
   }
-  b.line(taxLabel(snapshot), money(order.taxCents));
-  if (dup) b.text(ruleWith('=', ' DUPLICATE ', width)).newline();
-  else b.rule('=');
-  b.bold(true).doubleHeight(true).line('TOTAL', `Rs ${money(order.totalCents)}`);
-  b.bold(false).doubleHeight(false);
   b.rule();
 
   // Money taken, then money given back.
@@ -628,6 +658,82 @@ function appendSaleBody(
     b.newline().text(`Received by: ${'_'.repeat(Math.max(8, width - 13))}`).newline();
   }
   b.newline();
+}
+
+/**
+ * The order's discounts, one line each, as the bill has always printed them
+ * (under Subtotal, or under Food on the delivery bill).
+ */
+function appendDiscountLines(b: EscPosBuilder, snapshot: OrderSnapshot): void {
+  for (const d of snapshot.discounts) {
+    // The shop's foodpanda deal prints as itself ("Foodpanda deal 20% off"),
+    // with foodpanda's part on a line of its own when the deal is shared.
+    // foodpanda's commission never prints.
+    if (d.source === 'foodpanda' && d.amountCents === 0) {
+      // Nothing off the shop's bill: foodpanda pays all of the deal (say so,
+      // not "- 0.00"), or the order is under the deal's minimum (no line).
+      const fp = d.foodpanda;
+      if (fp && fp.platformCents > 0) b.line(`Foodpanda deal ${fp.dealPercent}% off, paid by foodpanda`, money(fp.platformCents));
+      continue;
+    }
+    // One of the owner's automatic offers the cashier took off: nothing off, no line.
+    if (d.source === 'offer' && d.amountCents === 0) continue;
+    // A discount that leaves the value deals alone and found nothing else to
+    // come off (the food was taken off, the deals stayed): no "- 0.00" line.
+    if (d.amountCents === 0 && d.skipsNoDiscountLines === true) continue;
+    // "Discount (Staff)" — or, when its frozen rule left the delivery charge
+    // or the value deals alone, "Discount 10% (Staff, food only)", "Discount
+    // 10% (Staff, not on value deals)"; an automatic offer by its name.
+    const tag = discountBillLabel(d, snapshot.items);
+    b.line(tag, `- ${money(d.amountCents)}`);
+    if (d.foodpanda && d.foodpanda.platformCents > 0) {
+      b.line('foodpanda pays another', money(d.foodpanda.platformCents));
+    }
+  }
+}
+
+/** The '=' rule over the amount to pay: "==== DUPLICATE ====" on a duplicate. */
+function appendTotalsRule(b: EscPosBuilder, dup: CopyStamp | null, width: PrinterWidth): void {
+  if (dup) b.text(ruleWith('=', ' DUPLICATE ', width)).newline();
+  else b.rule('=');
+}
+
+/**
+ * The delivery bill's totals (owner, 2 Oct 2026), from deliveryBillOf's
+ * stored figures only:
+ *
+ *      Food                             3,900.00
+ *      (the discount lines, as on every bill)
+ *      Sales tax 15%                      585.00
+ *      Sales tax on delivery 15%           30.00   <- only when not 0
+ *      FOOD TOTAL (with tax)         Rs 4,515.00
+ *      Delivery charge                    200.00
+ *      ========================================    <- or ==== DUPLICATE ====
+ *      CUSTOMER PAYS                 Rs 4,715.00
+ *
+ * When the discount also came off the charge (the owner's discounts.delivery
+ * switch, or an order from before 0.7.26) the whole tax prints on the one
+ * "Sales tax N%" line. On 58 mm paper a row that cannot fit wraps, the
+ * amount right-aligned under it (EscPosBuilder.line).
+ */
+function appendDeliveryTotals(
+  b: EscPosBuilder,
+  snapshot: OrderSnapshot,
+  bill: DeliveryBill,
+  dup: CopyStamp | null,
+  width: PrinterWidth,
+): void {
+  b.line('Food', money(bill.foodCents));
+  appendDiscountLines(b, snapshot);
+  b.line(salesTaxLabel(bill.foodTaxBps), money(bill.foodTaxCents));
+  if (bill.deliveryTaxCents !== null && bill.deliveryTaxCents !== 0) {
+    b.line(salesTaxLabel(bill.deliveryTaxBps, true), money(bill.deliveryTaxCents));
+  }
+  b.bold(true).line('FOOD TOTAL (with tax)', `Rs ${money(bill.foodTotalCents)}`).bold(false);
+  b.line('Delivery charge', money(bill.deliveryChargeCents));
+  appendTotalsRule(b, dup, width);
+  b.bold(true).doubleHeight(true).line('CUSTOMER PAYS', `Rs ${money(bill.customerPaysCents)}`);
+  b.bold(false).doubleHeight(false);
 }
 
 /** PAID - CASH, PART REFUNDED, or REFUNDED IN FULL — and what the rider collects. */

@@ -9,7 +9,8 @@
  * website order), so a change that moves a single byte of a paper with no
  * extra lines fails receipt-extra-lines.test.ts. Papers that did not exist
  * before a version are added with it, never regenerated: v0.7.34's value
- * deals (the receipt-deals-* papers).
+ * deals (the receipt-deals-* papers) and its delivery bill (the *-cod-charge*
+ * papers).
  *
  * Times are Pakistan wall-clock instants: papers print Pakistan time, so the
  * bytes are the same in any time zone.
@@ -325,6 +326,172 @@ function dealsOnly(): OrderSnapshot {
   return s;
 }
 
+/**
+ * THE DELIVERY BILL (v0.7.34, the owner, 2 Oct 2026: "Food / Sales tax /
+ * FOOD TOTAL (with tax) / Delivery charge / CUSTOMER PAYS"): a cash-on-
+ * delivery order out with the shop's rider, nothing paid, sent at 19:31. A
+ * Rs 3,600 value deal and Rs 300 of fries at 15%, and the area's Rs 200
+ * delivery charge: zero-rated (the owner's example: Food 3,900 / Sales tax
+ * 15% 585 / FOOD TOTAL 4,485 / charge 200 / CUSTOMER PAYS 4,685) or taxed at
+ * 15% as the live menu has it (Q1: Sales tax on delivery 15% 30 / 4,515 /
+ * 4,715). The "Delivery Charge (Rs 200)" line never prints as an item.
+ */
+function codCharge(chargeBps: 0 | 1500 = 1500): OrderSnapshot {
+  const s = codBill();
+  const base = s.items[1]!;
+  s.order.sentAt = iso(19, 31);
+  s.items = [
+    {
+      ...base,
+      id: id('i5'),
+      menuItemId: id('m5'),
+      unitPriceCents: cents(360_000),
+      lineTotalCents: cents(360_000),
+      menuItemName: 'Test Big Two',
+      categoryName: 'Value Deals',
+      prepStation: 'kitchen',
+      taxRateBps: 1500,
+      noDiscount: true,
+    },
+    {
+      ...base,
+      id: id('i6'),
+      menuItemId: id('m6'),
+      unitPriceCents: cents(30_000),
+      lineTotalCents: cents(30_000),
+      menuItemName: 'Test Fries',
+      categoryName: 'Sides',
+      prepStation: 'kitchen',
+      taxRateBps: 1500,
+    },
+    {
+      ...base,
+      id: id('i7'),
+      menuItemId: id('m7'),
+      unitPriceCents: cents(20_000),
+      lineTotalCents: cents(20_000),
+      menuItemName: 'Delivery Charge (Rs 200)',
+      categoryName: 'Delivery Charges',
+      prepStation: 'kitchen',
+      taxRateBps: chargeBps,
+    },
+  ];
+  const tax = 58_500 + Math.round((20_000 * chargeBps) / 10_000);
+  s.order.subtotalCents = cents(410_000);
+  s.order.discountCents = cents(0);
+  s.order.taxCents = cents(tax);
+  s.order.totalCents = cents(410_000 + tax);
+  s.discounts = [];
+  return s;
+}
+
+/** The owner's example, the delivery charge zero-rated: CUSTOMER PAYS Rs 4,685. */
+const codChargeZeroRated = () => codCharge(0);
+
+/** Paid in cash when it was delivered (20:10): a receipt, PAID ON DELIVERY. */
+function paidOnDelivery(s: OrderSnapshot): OrderSnapshot {
+  s.order.status = 'paid';
+  s.order.paidAt = iso(20, 10);
+  s.order.deliveredAt = iso(20, 10);
+  s.payments = [
+    {
+      id: id('p2'),
+      orderId: id('o1'),
+      method: 'cash',
+      amountCents: s.order.totalCents,
+      tenderedCents: cents(Math.ceil(s.order.totalCents / 100_000) * 100_000),
+      referenceNo: null,
+      receivedByUserId: id('u1'),
+      paidAt: iso(20, 10),
+    },
+  ];
+  return s;
+}
+
+/** The taxed bill, paid on delivery: CUSTOMER PAYS Rs 4,715, then PAID - CASH. */
+const codChargePaid = () => paidOnDelivery(codCharge());
+
+/** Paid by EasyPaisa at 19:40, before the rider left at 19:50: PREPAID - RIDER COLLECTS NOTHING. */
+function codChargePrepaid(): OrderSnapshot {
+  const s = codCharge();
+  s.order.paidAt = iso(19, 40);
+  s.payments = [
+    {
+      id: id('p3'),
+      orderId: id('o1'),
+      method: 'easypaisa',
+      amountCents: s.order.totalCents,
+      tenderedCents: null,
+      referenceNo: null,
+      receivedByUserId: id('u1'),
+      paidAt: iso(19, 40),
+    },
+  ];
+  return s;
+}
+
+/**
+ * The value deal, a Rs 2,200 pizza and the taxed charge, with a staff 10%
+ * that left both the deal and the charge alone: Rs 220 off the pizza; Sales
+ * tax 15% Rs 837 (540 + 297), on delivery Rs 30; FOOD TOTAL Rs 6,447,
+ * CUSTOMER PAYS Rs 6,647; paid on delivery.
+ */
+function codChargeDealStaff(): OrderSnapshot {
+  const s = codCharge();
+  s.items[1] = { ...s.items[1]!, unitPriceCents: cents(220_000), lineTotalCents: cents(220_000), menuItemName: 'Test Fajita Pizza - Large', categoryName: 'Pizza' };
+  s.order.subtotalCents = cents(600_000);
+  s.order.discountCents = cents(22_000);
+  s.order.taxCents = cents(86_700);
+  s.order.totalCents = cents(664_700);
+  s.discounts = [
+    {
+      id: id('d4'),
+      orderId: id('o1'),
+      discountType: 'percent',
+      value: 10,
+      reason: 'Test staff',
+      amountCents: cents(22_000),
+      appliedByUserId: id('u1'),
+      approvedByUserId: null,
+      source: null,
+      alsoOffDeliveryCharge: false,
+      skipsNoDiscountLines: true,
+    },
+  ];
+  return paidOnDelivery(s);
+}
+
+/**
+ * A discount over every line, the charge included (the owner's switch on, or
+ * a row from before 0.7.26 with no rule, as here): a Rs 2,200 pizza and the
+ * taxed charge, 10% = Rs 240 off; tax 15% of Rs 2,160 = Rs 324 on ONE "Sales
+ * tax 15%" line; FOOD TOTAL Rs 2,284, CUSTOMER PAYS Rs 2,484; paid on delivery.
+ */
+function codChargeAlsoOff(): OrderSnapshot {
+  const s = codCharge();
+  s.items = [
+    { ...s.items[1]!, unitPriceCents: cents(220_000), lineTotalCents: cents(220_000), menuItemName: 'Test Fajita Pizza - Large', categoryName: 'Pizza' },
+    s.items[2]!,
+  ];
+  s.order.subtotalCents = cents(240_000);
+  s.order.discountCents = cents(24_000);
+  s.order.taxCents = cents(32_400);
+  s.order.totalCents = cents(248_400);
+  s.discounts = [
+    {
+      id: id('d5'),
+      orderId: id('o1'),
+      discountType: 'percent',
+      value: 10,
+      reason: 'Test regular',
+      amountCents: cents(24_000),
+      appliedByUserId: id('u1'),
+      approvedByUserId: null,
+    },
+  ];
+  return paidOnDelivery(s);
+}
+
 const refundInfo = (): RefundSlipInfo => ({
   refundedAt: at(19, 50),
   rows: [{ method: 'cash', amountCents: 30_000 }],
@@ -389,6 +556,15 @@ function receiptCases(): GoldenCase[] {
     ['receipt-deals-web-pickup', dealsWebPickup, {}],
     ['receipt-deals-offer', dealsOffer, {}],
     ['receipt-deals-only', dealsOnly, {}],
+    // THE DELIVERY BILL (v0.7.34): papers that did not exist before, added (never regenerated).
+    ['bill-cod-charge-zero-rated', codChargeZeroRated, {}],
+    ['bill-cod-charge', codCharge, {}],
+    ['bill-cod-charge-duplicate', codCharge, { stamp: { ...reprint, kind: 'copy', number: 2 } }],
+    ['bill-cod-charge-shop-copy', codCharge, { copy: 'shop' }],
+    ['receipt-cod-charge-fbr', codChargePaid, { fbr }],
+    ['receipt-cod-charge-prepaid', codChargePrepaid, {}],
+    ['receipt-cod-charge-deal-staff', codChargeDealStaff, {}],
+    ['receipt-cod-charge-also-off', codChargeAlsoOff, {}],
   ];
   for (const [paper, snap, opts] of papers) {
     for (const [brandName, branding] of [
