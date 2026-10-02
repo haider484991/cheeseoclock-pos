@@ -36,30 +36,34 @@ import { ALERT_WATCH_KEY } from '../notifications/useAlertWatch';
 import {
   ageLabel,
   ageMinutes,
+  ageTitle,
   ageTone,
   cardFlags,
+  compareOrderClock,
   cardLineDetails,
   cardItemCount,
   cardLines,
   matchesBoardSearch,
   nextBoardAction,
   offersKitchenReprint,
+  orderClockFrom,
   boardColoursText,
   lateCountText,
   type AgeTone,
   type BoardTiming,
 } from './boardLogic';
 import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
-import { orderTimeLabel } from './historyFilters';
 
 /**
  * Live Orders Board.
  *
  * Every placed order that is not finished, in four columns that follow the
  * order's life: New → Preparing → Ready → Out for delivery. Each card has one
- * big button for its next step. Oldest first in every column; a card turns
- * amber, then red, after the owner's minutes (Settings → Staff & kitchen
- * timing; by default 15 and 30). Polls every 5 seconds.
+ * big button for its next step. The one sent longest ago first in every
+ * column; a card turns amber, then red, after the owner's minutes from when it
+ * was sent to the kitchen (the owner, 2 Oct 2026; from when it was started,
+ * for an order from before 0.7.34), by default 15 and 30 (Settings → Staff &
+ * kitchen timing). Polls every 5 seconds.
  */
 
 type ColumnKey = 'new' | 'preparing' | 'ready' | 'out';
@@ -166,10 +170,12 @@ export function OrdersBoardPage() {
       const col = COLUMNS.find((c) => c.statuses.includes(snap.order.status));
       if (col) out[col.key].push(snap);
     }
+    // The one sent longest ago first (orders:listActive's own order, kept here too).
+    for (const key of Object.keys(out) as ColumnKey[]) out[key].sort((a, b) => compareOrderClock(a.order, b.order));
     return out;
   }, [visible]);
 
-  const lateCount = all.filter((s) => ageTone(ageMinutes(s.order.createdAt, now), timing) === 'late').length;
+  const lateCount = all.filter((s) => ageTone(ageMinutes(orderClockFrom(s.order), now), timing) === 'late').length;
   const pendingId = step.isPending ? step.variables?.orderId : undefined;
 
   return (
@@ -414,7 +420,8 @@ function OrderCard({
   const itemCount = cardItemCount(snap.items);
   const flags = cardFlags(snap);
   const orderNotes = orderNotesOf(snap);
-  const minutes = ageMinutes(order.createdAt, now);
+  // From when it was sent to the kitchen (started, for an order from before 0.7.34).
+  const minutes = ageMinutes(orderClockFrom(order), now);
   const tone = ageTone(minutes, timing);
   const outMinutes = order.status === 'out_for_delivery' && order.dispatchedAt ? ageMinutes(order.dispatchedAt, now) : null;
   const PrimaryIcon = PRIMARY_ICON[primaryKind];
@@ -457,7 +464,7 @@ function OrderCard({
                 ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200'
                 : 'text-stone-500',
           )}
-          title={`Taken ${orderTimeLabel(order.createdAt)}`}
+          title={ageTitle(order, new Date(now))}
         >
           {tone === 'late' ? <Hourglass className="h-3.5 w-3.5" /> : <Clock className="h-3.5 w-3.5" />}
           {ageLabel(minutes)}

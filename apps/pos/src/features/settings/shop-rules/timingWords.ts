@@ -50,7 +50,7 @@ export function kitchenTimingSummary(t: KitchenTiming): string {
 
 /** The kitchen card's worked example, from the values. */
 export function kitchenTimingExample(t: KitchenTiming): string {
-  return `An order that came in at 7:00 turns amber on Live Orders at ${clock(19 * 60 + t.amberMin)} and red at ${clock(19 * 60 + t.redMin)}. A website order still in New at ${clock(19 * 60 + t.notStartedMin)} gets a soft beep and a note; if it is still not done at ${clock(19 * 60 + t.notDoneMin)}, another (Settings → Sounds turns the beep on or off).`;
+  return `An order sent to the kitchen at 7:00 turns amber on Live Orders at ${clock(19 * 60 + t.amberMin)} and red at ${clock(19 * 60 + t.redMin)}. A website order still in New at ${clock(19 * 60 + t.notStartedMin)} gets a soft beep and a note; if it is still not done at ${clock(19 * 60 + t.notDoneMin)}, another (Settings → Sounds turns the beep on or off).`;
 }
 
 /** Minutes after midnight as "7:15" (the example's evening, no AM / PM). */

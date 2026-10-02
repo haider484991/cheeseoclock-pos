@@ -119,7 +119,7 @@ describe('waiting too long', () => {
     id,
     orderNumber: `CO-20260926-${id.padStart(4, '0')}`,
     status,
-    createdAt: new Date(NOW - (NOT_STARTED_MIN + 1) * 60_000).toISOString(),
+    since: new Date(NOW - (NOT_STARTED_MIN + 1) * 60_000).toISOString(),
     source: 'web',
   });
   const plan = (list: WaitingOrder[], extra: Partial<ToneContext> = {}, reminded = new Set<string>()) =>
@@ -164,8 +164,33 @@ describe('waiting too long', () => {
     const snap = {
       order: { id: 'o9', orderNumber: 'CO-20260926-0009', status: 'preparing', createdAt: '2026-09-26T13:00:00.000Z', source: 'web' },
     } as unknown as OrderSnapshot;
+    // An order with no send time (before 0.7.34): counted from when it was started.
     expect(toWaitingOrders([snap])).toEqual([
-      { id: 'o9', orderNumber: 'CO-20260926-0009', status: 'preparing', createdAt: '2026-09-26T13:00:00.000Z', source: 'web' },
+      { id: 'o9', orderNumber: 'CO-20260926-0009', status: 'preparing', since: '2026-09-26T13:00:00.000Z', source: 'web' },
     ]);
+  });
+
+  it('counts each order from when it was sent (the owner, 2 Oct 2026), like the board', () => {
+    const snap = (id: string, startedMin: number, sentMin: number | null) =>
+      ({
+        order: {
+          id,
+          orderNumber: `CO-20260926-${id.padStart(4, '0')}`,
+          status: 'preparing',
+          source: 'pos',
+          createdAt: new Date(NOW - startedMin * 60_000).toISOString(),
+          ...(sentMin === null ? {} : { sentAt: new Date(NOW - sentMin * 60_000).toISOString() }),
+        },
+      }) as unknown as OrderSnapshot;
+    expect(toWaitingOrders([snap('1', 35, 2)])[0]!.since).toBe(new Date(NOW - 2 * 60_000).toISOString());
+    const counterToo = { ...S, waitingIncludesCounter: true };
+    // A counter cart started 35 minutes ago and sent 2 minutes ago: not "waiting 30 min".
+    expect(plan(toWaitingOrders([snap('1', 35, 2)]), { settings: counterToo }).due).toEqual([]);
+    // Sent 31 minutes ago: it is.
+    expect(plan(toWaitingOrders([snap('2', 35, 31)]), { settings: counterToo }).due.map((d) => [d.key, d.kind])).toEqual([
+      ['2:30', 'notDone'],
+    ]);
+    // No send time (before 0.7.34): from when it was started, as before.
+    expect(plan(toWaitingOrders([snap('3', 31, null)]), { settings: counterToo }).due.map((d) => d.key)).toEqual(['3:30']);
   });
 });

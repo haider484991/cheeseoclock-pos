@@ -441,6 +441,37 @@ describe('renderReceipt — copies and balance', () => {
     expect(r.some((x) => /^TOTAL\s+Rs 3,303\.68$/.test(x))).toBe(true);
   });
 
+  it('an unpaid bill says when the order was sent, not when its cart was started (v0.7.34)', () => {
+    const s = snapshot();
+    s.order.status = 'sent_to_kitchen';
+    s.order.paidAt = null;
+    s.payments = [];
+    s.order.createdAt = pkt(19, 0).toISOString();
+    s.order.sentAt = pkt(19, 30).toISOString();
+    // The counter's bill (a website order's says "Cashier: Website" on the same line).
+    s.order.source = 'pos';
+    const r = rows(renderReceipt(s, { branding }));
+    expect(r.some((x) => /^Cashier: Ali Akbar\s+14\/09\/2026 19:30$/.test(x))).toBe(true);
+    expect(r.some((x) => x.includes('19:00'))).toBe(false);
+    // An order from before 0.7.34 (no send time): when it was started, as before.
+    delete s.order.sentAt;
+    expect(rows(renderReceipt(s, { branding })).some((x) => /^Cashier: Ali Akbar\s+14\/09\/2026 19:00$/.test(x))).toBe(true);
+    // A website order's bill: when the till took it in (its send time).
+    const web = snapshot();
+    web.order.paidAt = null;
+    web.payments = [];
+    web.order.createdAt = pkt(19, 0).toISOString();
+    web.order.sentAt = pkt(19, 0).toISOString();
+    expect(rows(renderReceipt(web, { branding })).some((x) => /^Cashier: Website\s+14\/09\/2026 19:00$/.test(x))).toBe(true);
+    // Paid: when it was paid, whatever the send time.
+    const paid = snapshot();
+    paid.order.source = 'pos';
+    paid.order.createdAt = pkt(19, 0).toISOString();
+    paid.order.sentAt = pkt(19, 30).toISOString();
+    paid.order.paidAt = pkt(19, 45).toISOString();
+    expect(rows(renderReceipt(paid, { branding })).some((x) => /^Cashier: Ali Akbar\s+14\/09\/2026 19:45$/.test(x))).toBe(true);
+  });
+
   for (const width of [48, 32] as const) {
     it(`shop copy and unpaid bill fit ${width} columns`, () => {
       const s = snapshot();

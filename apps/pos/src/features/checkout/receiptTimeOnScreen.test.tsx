@@ -117,3 +117,44 @@ describe('the receipt after Pay shows the paper’s time', () => {
     });
   }
 });
+
+/**
+ * An unpaid bill on screen: the paper's own time line (receipt-renderer
+ * appendSaleBody), paidAt ?? sentAt ?? createdAt. A cart started at 19:00
+ * and sent at 19:30 Pakistan time reads 19:30, not the PC's clock now.
+ */
+function unpaidSent(sentAt: string | null): OrderSnapshot {
+  const s = paidTakeaway();
+  return {
+    ...s,
+    order: {
+      ...s.order,
+      status: 'sent_to_kitchen',
+      createdAt: '2026-09-14T14:00:00.000Z',
+      paidAt: null,
+      ...(sentAt === null ? {} : { sentAt }),
+    },
+    payments: [],
+  } as OrderSnapshot;
+}
+
+describe('an unpaid bill on screen shows the same time as its paper (v0.7.34)', () => {
+  it('started 19:00, sent 19:30 (Pakistan): 14/09/2026 19:30 with the PC set to UTC', () => {
+    process.env.TZ = 'UTC';
+    const words = render(unpaidSent('2026-09-14T14:30:00.000Z'));
+    expect(words).toContain('14/09/2026 19:30 Cashier: Test Cashier · Takeaway');
+    expect(words).not.toContain('14/09/2026 19:00');
+  });
+
+  it('no send time (an order from before 0.7.34): when it was started', () => {
+    process.env.TZ = 'UTC';
+    expect(render(unpaidSent(null))).toContain('14/09/2026 19:00 Cashier: Test Cashier · Takeaway');
+  });
+
+  it('a paid one still shows when it was paid', () => {
+    process.env.TZ = 'UTC';
+    const paid = paidTakeaway();
+    const words = render({ ...paid, order: { ...paid.order, sentAt: '2026-09-14T14:30:00.000Z' } } as OrderSnapshot);
+    expect(words).toContain('14/09/2026 19:35 Cashier: Test Cashier · Takeaway');
+  });
+});

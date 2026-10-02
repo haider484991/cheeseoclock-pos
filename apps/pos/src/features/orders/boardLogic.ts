@@ -3,9 +3,10 @@
  * action it offers, which leave-out / allergy flags it must show, and the
  * quick search. Tested in boardLogic.test.ts.
  */
-import type { KitchenTiming, OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
+import type { KitchenTiming, Order, OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
 import { DEFAULT_KITCHEN_TIMING, isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { KITCHEN_TICKET_STATUSES } from '@cheeseoclock/pos-domain';
+import { orderTimeLabel } from './historyFilters';
 
 /**
  * Minutes after which a card turns amber, then red, by default (15, 30). The
@@ -25,6 +26,61 @@ export function ageMinutes(fromIso: string, now: number): number {
   return Math.max(0, Math.floor((now - t) / 60_000));
 }
 
+/** The order's times the board's clock reads. */
+export type OrderClockTimes = Pick<Order, 'sentAt' | 'createdAt'>;
+
+/**
+ * Where a card's minutes start (the owner, 2 Oct 2026: count from when the
+ * order is sent): when the order was sent to the kitchen (orders.sent_at,
+ * migration 0048). An order sent before 0.7.34 has no sentAt and counts from
+ * when it was started, as before. The main process sorts and watches by the
+ * same moment (order-repo ORDER_CLOCK_SQL).
+ */
+export function orderClockFrom(o: OrderClockTimes): string {
+  return o.sentAt ?? o.createdAt;
+}
+
+/** Sent this long or more after it was started: the send is shown as its own time. */
+const SENT_SHOWN_AFTER_MS = 60_000;
+
+/**
+ * When the order was sent, when that is worth showing beside when it was
+ * started: a minute or more after it (a quick Pay or Send would show the
+ * same time twice). Null for an order sent within the minute, or one with
+ * no sentAt (never sent, or from before 0.7.34). Order History's "Sent" step.
+ */
+export function sentStepAt(o: OrderClockTimes): string | null {
+  if (!o.sentAt) return null;
+  return Date.parse(o.sentAt) - Date.parse(o.createdAt) >= SENT_SHOWN_AFTER_MS ? o.sentAt : null;
+}
+
+/**
+ * The age chip's tooltip: "Sent 7:42 pm · started 7:10 pm" (the cart was
+ * started a minute or more before it was sent), "Sent 7:42 pm" (sent within a
+ * minute of starting), or "Taken 7:10 pm" for an order sent before 0.7.34.
+ * Times as the board's other clocks write them (orderTimeLabel: Pakistan
+ * time, the day too when it is not today's trading day).
+ */
+export function ageTitle(o: OrderClockTimes, now: Date = new Date()): string {
+  if (!o.sentAt) return `Taken ${orderTimeLabel(o.createdAt, now)}`;
+  const sent = `Sent ${orderTimeLabel(o.sentAt, now)}`;
+  return sentStepAt(o) ? `${sent} · started ${orderTimeLabel(o.createdAt, now)}` : sent;
+}
+
+/**
+ * The board's order within a column: the one sent longest ago first (started,
+ * for an order from before 0.7.34), then the one started first, as
+ * orders:listActive sorts them. A time that does not read goes last.
+ */
+export function compareOrderClock(a: OrderClockTimes, b: OrderClockTimes): number {
+  const at = (iso: string) => {
+    const t = Date.parse(iso);
+    return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+  };
+  const cmp = (x: number, y: number) => (x === y ? 0 : x < y ? -1 : 1);
+  return cmp(at(orderClockFrom(a)), at(orderClockFrom(b))) || cmp(at(a.createdAt), at(b.createdAt));
+}
+
 export type AgeTone = 'ok' | 'warn' | 'late';
 
 export function ageTone(minutes: number, timing: BoardTiming = DEFAULT_BOARD_TIMING): AgeTone {
@@ -38,9 +94,9 @@ export function lateCountText(count: number, timing: BoardTiming): string {
   return `${count} waiting over ${timing.redMin} min`;
 }
 
-/** The board's colours in words (its help line): "A card turns amber after 15 minutes and red after 30." */
+/** The board's colours in words (its help line): "A card turns amber 15 minutes after the order was sent and red after 30." */
 export function boardColoursText(timing: BoardTiming): string {
-  return `A card turns amber after ${timing.amberMin} minutes and red after ${timing.redMin}.`;
+  return `A card turns amber ${timing.amberMin} minutes after the order was sent and red after ${timing.redMin}.`;
 }
 
 /** "just now", "12m", "1h 05m". */

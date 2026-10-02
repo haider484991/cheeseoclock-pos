@@ -142,8 +142,9 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
             <div className="text-center">
               {shop.name && <div className="break-words text-xl font-bold">{shop.name}</div>}
               {shop.tagline && <div className="break-words text-xs text-stone-500">{shop.tagline}</div>}
-              {/* The paper's own words: Pakistan time, day first ("14/09/2026 19:35"), whatever the PC's zone. */}
-              <div className="mt-3 text-xs text-stone-500">{paperDateTime(order.paidAt ?? Date.now())}</div>
+              {/* The paper's own words and time: Pakistan time, day first ("14/09/2026 19:35"), whatever
+                  the PC's zone; paid, else sent, else started (receipt-renderer appendSaleBody). */}
+              <div className="mt-3 text-xs text-stone-500">{paperDateTime(order.paidAt ?? order.sentAt ?? order.createdAt)}</div>
               <div className="text-xs">
                 Cashier: {paperCashierName(snapshot)} · {MODE_LABEL[order.mode]}
                 {tableLabel ? ` · ${tableLabel}` : ''}

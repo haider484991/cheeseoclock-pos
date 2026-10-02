@@ -526,7 +526,10 @@ function appendSaleBody(
 ): void {
   const { order, payments, discounts } = snapshot;
   appendOrderMeta(b, snapshot);
-  const dt = new Date(order.paidAt ?? order.createdAt);
+  // Paid: when it was paid. A bill: when the order was sent (0048), not when
+  // its cart was started; an order from before 0.7.34 has no sentAt and keeps
+  // its start time. ReceiptDialog shows the same expression on screen.
+  const dt = new Date(order.paidAt ?? order.sentAt ?? order.createdAt);
   // "Cashier: Website" on a website order (never the login the till files it under).
   b.line(`Cashier: ${paperCashierName(snapshot)}`, formatDateTime(dt));
 

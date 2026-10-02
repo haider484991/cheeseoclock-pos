@@ -3,18 +3,20 @@
  * markup (react-dom/server, no browser; nothing calls the till): the red
  * strip and its Reprint button show only on a card orders:listActive marked
  * (kitchenTicketNotPrinted), and only while the kitchen still has the order
- * — the same rule as the chef-hat button, which stays. Every name and amount
- * is made up.
+ * — the same rule as the chef-hat button, which stays. Then the card's clock
+ * (v0.7.34): it counts from when the order was sent, and Order History's
+ * drawer shows the send as its own step. Every name and amount is made up.
  */
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser, OrderSnapshot, OrderStatus, UUID } from '@cheeseoclock/shared-types';
 import { ToastProvider } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { OrdersBoardPage } from './OrdersBoardPage';
+import { OrderDetailDrawer } from './OrderDetailDrawer';
 import { TICKET_NOT_PRINTED_TEXT, TICKET_REPRINT_LABEL, TicketNotPrinted } from './OrderBadges';
 
 // A server render reads a zustand store's INITIAL state; the till's window reads each as it is now.
@@ -121,5 +123,105 @@ describe('"Ticket not printed" on the Live Orders card', () => {
     expect(html).toContain('type="button"');
     expect(html).toContain('aria-label="Reprint kitchen ticket"');
     expect(html).toContain('bg-red-50');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The card's clock counts from when the order was sent (the owner, 2 Oct
+// 2026: "i placed order at some time and it showed some 30 mint").
+
+/** 8:00 pm in Pakistan (UTC+5) on 1 Oct 2026, the board's "now". */
+const NOW = Date.UTC(2026, 9, 1, 15, 0);
+const minsAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
+
+/** A takeaway in New, started `startedMin` ago and sent `sentMin` ago (null: no send time, an order from before 0.7.34). */
+function timed(n: number, startedMin: number, sentMin: number | null): OrderSnapshot {
+  const snap = order(n, 'sent_to_kitchen');
+  return {
+    ...snap,
+    order: { ...snap.order, createdAt: minsAgo(startedMin), ...(sentMin === null ? {} : { sentAt: minsAgo(sentMin) }) },
+  } as OrderSnapshot;
+}
+
+function boardHtml(orders: OrderSnapshot[]): string {
+  signIn('cashier');
+  return render(<OrdersBoardPage />, [[['orders', 'active', 'all'], orders]]);
+}
+
+/** A card's own ring (CARD_RING): the article's class, not its buttons' focus rings. */
+const ring = (card: string) => (/^\s*class="([^"]*)"/.exec(card)?.[1] ?? '').split(' ').filter((c) => c.startsWith('ring-'));
+
+/** The age chip of a card: its title and its words. */
+function chip(card: string): { title: string; label: string } {
+  const m = /<span[^>]*title="([^"]*)"[^>]*>(?:<svg[\s\S]*?<\/svg>)?([^<]*)<\/span>/.exec(card);
+  return { title: m?.[1] ?? '', label: m?.[2] ?? '' };
+}
+
+describe('the Live Orders clock counts from when the order was sent', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a cart started 31 minutes ago and sent 2 minutes ago: "2m", no late ring, not in the late count', () => {
+    const html = boardHtml([timed(61, 31, 2)]);
+    const card = cards([timed(61, 31, 2)]).get('#0061')!;
+    expect(chip(card).label).toBe('2m');
+    expect(chip(card).title).toMatch(/^Sent 7:58\spm · started 7:29\spm$/);
+    expect(ring(card)).toContain('ring-stone-200');
+    expect(ring(card)).not.toContain('ring-2');
+    expect(html).toContain('1 active order');
+    expect(html).not.toContain('waiting over');
+  });
+
+  it('an order with no send time (before 0.7.34) still counts from when it was started: "31m", red, in the late count', () => {
+    const html = boardHtml([timed(61, 31, 2), timed(62, 31, null)]);
+    const old = cards([timed(61, 31, 2), timed(62, 31, null)]).get('#0062')!;
+    expect(chip(old).label).toBe('31m');
+    expect(chip(old).title).toMatch(/^Taken 7:29\spm$/);
+    expect(ring(old)).toContain('ring-red-500');
+    // Only the old one is late.
+    expect(html).toContain('1 waiting over 30 min');
+  });
+
+  it('sent within a minute of starting: one time on the chip', () => {
+    const quick = timed(63, 5, 5);
+    expect(chip(cards([quick]).get('#0063')!).title).toMatch(/^Sent 7:55\spm$/);
+  });
+
+  it('cards in a column go in sent order, the one sent longest ago first', () => {
+    // Started first but sent last; started last but sent first; an old one in between.
+    const board = cards([timed(71, 40, 3), timed(72, 12, 10), timed(73, 6, null)]);
+    expect([...board.keys()]).toEqual(['#0072', '#0073', '#0071']);
+  });
+});
+
+describe('Order History: "Sent" in What happened', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const whatHappened = (snap: OrderSnapshot) => {
+    signIn('admin');
+    const html = render(<OrderDetailDrawer orderId={snap.order.id} onClose={() => {}} />, [[['orders', 'detail', snap.order.id], snap]]);
+    const part = html.split('What happened')[1]?.split('</ol>')[0] ?? '';
+    return part.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  };
+
+  it('a step at the send time when it came a minute or more after the start', () => {
+    const words = whatHappened(timed(81, 31, 2));
+    expect(words).toMatch(/^Taken 7:29\spm · by Test Cashier Sent 7:58\spm$/);
+  });
+
+  it('none when it was sent within a minute, or has no send time', () => {
+    expect(whatHappened(timed(82, 5, 5))).toMatch(/^Taken 7:55\spm · by Test Cashier$/);
+    expect(whatHappened(timed(83, 31, null))).toMatch(/^Taken 7:29\spm · by Test Cashier$/);
   });
 });

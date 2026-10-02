@@ -30,7 +30,7 @@ const o = (id: string, status: OrderStatus, ageMin: number, source: OrderSource 
   id,
   orderNumber: `CO-20260928-${id.padStart(4, '0')}`,
   status,
-  createdAt: minsAgo(ageMin),
+  since: minsAgo(ageMin),
   source,
 });
 const due = (orders: WaitingOrder[], timing?: { notStartedMin: number; notDoneMin: number }) =>
@@ -66,7 +66,8 @@ describe('the owner’s kitchen minutes', () => {
     // …where today's would still say ok / warn.
     expect([ageTone(8), ageTone(20)]).toEqual(['ok', 'warn']);
     expect(lateCountText(2, timing)).toBe('2 waiting over 20 min');
-    expect(boardColoursText(timing)).toBe('A card turns amber after 8 minutes and red after 20.');
+    // Counted from when the order was sent (the owner, 2 Oct 2026).
+    expect(boardColoursText(timing)).toBe('A card turns amber 8 minutes after the order was sent and red after 20.');
   });
 
   it('time the reminders, once per order, each in its own window', () => {
@@ -93,7 +94,7 @@ describe('the owner’s kitchen minutes', () => {
     expect(boardUnusedMin(timing)).toBe(16);
     const stuck = Array.from({ length: BOARD_UNUSED_COUNT }, (_, i) => o(String(i + 10), 'sent_to_kitchen', 16));
     expect(due(stuck, timing).boardUnused).toBe(true);
-    expect(due(stuck.map((s) => ({ ...s, createdAt: minsAgo(15) })), timing).boardUnused).toBe(false);
+    expect(due(stuck.map((s) => ({ ...s, since: minsAgo(15) })), timing).boardUnused).toBe(false);
   });
 
   it('the notes and the Sounds rule say the owner’s minutes', () => {

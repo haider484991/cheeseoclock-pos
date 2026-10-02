@@ -5,6 +5,7 @@
  * eventTones.test.ts; OrderAlerts.tsx only plays what these say.
  */
 import type { AlertSoundSettings, OrderSnapshot } from '@cheeseoclock/shared-types';
+import { orderClockFrom } from '../orders/boardLogic';
 import { ringsFor } from './alertState';
 import {
   PIN_REMIND_EVERY_MS,
@@ -93,12 +94,13 @@ export function lowStockTone(ctx: ToneContext): boolean {
   return ctx.loggedIn && ringsFor('lowStock', ctx.settings) && ctx.now - ctx.lastToneAt >= LOW_STOCK_TONE_GAP_MS;
 }
 
+/** The reminders' view of the board's orders, each counted from when it was sent (orderClockFrom). */
 export function toWaitingOrders(snaps: readonly OrderSnapshot[]): WaitingOrder[] {
   return snaps.map((snap) => ({
     id: snap.order.id,
     orderNumber: snap.order.orderNumber,
     status: snap.order.status,
-    createdAt: snap.order.createdAt,
+    since: orderClockFrom(snap.order),
     source: snap.order.source,
   }));
 }

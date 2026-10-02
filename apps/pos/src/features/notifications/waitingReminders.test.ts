@@ -18,7 +18,7 @@ const NOW = Date.parse('2026-09-26T14:00:00.000Z');
 const minsAgo = (m: number) => new Date(NOW - m * 60_000 - 1_000).toISOString();
 
 function o(id: string, status: OrderStatus, ageMin: number, source: OrderSource = 'web'): WaitingOrder {
-  return { id, orderNumber: `CO-20260926-${id.padStart(4, '0')}`, status, createdAt: minsAgo(ageMin), source };
+  return { id, orderNumber: `CO-20260926-${id.padStart(4, '0')}`, status, since: minsAgo(ageMin), source };
 }
 
 const none = new Set<string>();
@@ -70,7 +70,7 @@ describe('never for old, forgotten orders', () => {
   });
 
   it('a bad date is never late', () => {
-    expect(due([{ ...o('1', 'sent_to_kitchen', 12), createdAt: 'not a date' }]).due).toEqual([]);
+    expect(due([{ ...o('1', 'sent_to_kitchen', 12), since: 'not a date' }]).due).toEqual([]);
   });
 });
 

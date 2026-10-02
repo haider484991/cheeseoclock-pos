@@ -54,7 +54,7 @@ export const STAFF_FIELDS: ReadonlyArray<{ field: StaffField; label: string; uni
 ];
 
 export const KITCHEN_FIELDS: ReadonlyArray<{ field: KitchenField; label: string; unit: string; help: string }> = [
-  { field: 'amberMin', label: 'Card turns amber after', unit: 'minutes', help: 'On Live Orders, counted from when the order came in.' },
+  { field: 'amberMin', label: 'Card turns amber after', unit: 'minutes', help: 'On Live Orders, counted from when the order was sent to the kitchen.' },
   { field: 'redMin', label: 'Card turns red after', unit: 'minutes', help: 'More than amber. The header counts the red ones.' },
   {
     field: 'notStartedMin',

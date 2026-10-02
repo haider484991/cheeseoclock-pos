@@ -4,6 +4,8 @@
  *   - an order is still not done (New, Preparing or Ready) after 30 minutes
  *   (the owner's minutes: Settings → Staff & kitchen timing, 'kitchen.timing'
  *   from checkout:getRules; 10 and 30 by default).
+ * "Came in" is when the order was sent to the kitchen (WaitingOrder.since;
+ * when it was started, for an order from before 0.7.34), like the board.
  * Out for delivery is left alone: the rider has it and the counter can't act.
  *
  * Website orders only, unless Settings → Sounds says "counter orders too":
@@ -63,7 +65,12 @@ export interface WaitingOrder {
   id: string;
   orderNumber: string;
   status: OrderStatus;
-  createdAt: string;
+  /**
+   * When the order was sent to the kitchen (orders.sent_at, migration 0048),
+   * or when it was started for one sent before 0.7.34: boardLogic
+   * orderClockFrom, the same moment the board and the PIN screen's watch count from.
+   */
+  since: string;
   source: OrderSource;
 }
 
@@ -94,14 +101,14 @@ export function dueWaitingReminders(
   const eligible = orders.filter((o) => opts.includeCounter || o.source === 'web');
   const unusedAfter = boardUnusedMin({ notStartedMin, notDoneMin });
   const oldNew = eligible.filter(
-    (o) => o.status === 'sent_to_kitchen' && ageMinutes(o.createdAt, now) >= unusedAfter,
+    (o) => o.status === 'sent_to_kitchen' && ageMinutes(o.since, now) >= unusedAfter,
   ).length;
   if (oldNew >= BOARD_UNUSED_COUNT) return { due: [], boardUnused: true };
 
   const due: WaitingReminder[] = [];
   for (const o of eligible) {
     if (opts.ringing.has(o.id)) continue;
-    const minutes = ageMinutes(o.createdAt, now);
+    const minutes = ageMinutes(o.since, now);
     if (
       o.status === 'sent_to_kitchen' &&
       minutes >= notStartedMin &&

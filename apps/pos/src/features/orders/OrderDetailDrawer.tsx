@@ -32,7 +32,7 @@ import { CameByRow } from './CameByRow';
 import { ModeBadge, PaidChip, StatusBadge } from './OrderBadges';
 import { PAYMENT_LABELS, isOwed, orderTimeLabel, shortOrderNumber } from './historyFilters';
 import { historyStockStep } from './stockCopy';
-import { offersKitchenReprint } from './boardLogic';
+import { offersKitchenReprint, sentStepAt } from './boardLogic';
 
 interface DrawerProps {
   orderId: string;
@@ -142,6 +142,8 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
 
   const o = snap?.order;
   const owed = o ? isOwed(o) : false;
+  // "Sent" in What happened: when it went to the kitchen, if that was a minute or more after it was started.
+  const sentAt = o ? sentStepAt(o) : null;
   const canCollect =
     !!o &&
     owed &&
@@ -348,6 +350,9 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                 <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">What happened</h4>
                 <ol className="space-y-1 text-xs text-stone-600 dark:text-stone-300">
                   <Step label="Taken" at={o.createdAt} extra={`by ${snap.cashierName}`} />
+                  {/* When it went to the kitchen (0048): hidden when that came within a minute of
+                      starting, so a quick Pay does not show the same time twice. */}
+                  {sentAt && <Step label="Sent" at={sentAt} />}
                   {o.dispatchedAt && (
                     <Step label="Out with rider" at={o.dispatchedAt} extra={snap.rider ? snap.rider.name : undefined} />
                   )}

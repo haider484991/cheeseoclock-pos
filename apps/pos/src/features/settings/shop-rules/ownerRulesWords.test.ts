@@ -25,6 +25,7 @@ import {
 } from './discountRules';
 import { putBackQuestion } from './SettingCard';
 import {
+  KITCHEN_FIELDS,
   kitchenFromForm,
   kitchenToForm,
   staffFromForm,
@@ -221,7 +222,11 @@ describe('Staff & kitchen timing: the words', () => {
 
     expect(kitchenTimingSummary(DEFAULT_KITCHEN_TIMING)).toBe('Amber 15 min, red 30 · reminders: not started 10, not done 30');
     expect(kitchenTimingExample(DEFAULT_KITCHEN_TIMING)).toBe(
-      'An order that came in at 7:00 turns amber on Live Orders at 7:15 and red at 7:30. A website order still in New at 7:10 gets a soft beep and a note; if it is still not done at 7:30, another (Settings → Sounds turns the beep on or off).',
+      'An order sent to the kitchen at 7:00 turns amber on Live Orders at 7:15 and red at 7:30. A website order still in New at 7:10 gets a soft beep and a note; if it is still not done at 7:30, another (Settings → Sounds turns the beep on or off).',
+    );
+    // The amber minutes' help says where the card's clock starts (the owner, 2 Oct 2026: from when it is sent).
+    expect(KITCHEN_FIELDS.find((f) => f.field === 'amberMin')?.help).toBe(
+      'On Live Orders, counted from when the order was sent to the kitchen.',
     );
     expect(kitchenTimingExample({ v: 1, amberMin: 20, redMin: 75, notStartedMin: 5, notDoneMin: 120 })).toContain(
       'amber on Live Orders at 7:20 and red at 8:15. A website order still in New at 7:05',
