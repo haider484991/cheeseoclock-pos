@@ -9,17 +9,26 @@ import { useToast } from '../../components/toast/ToastProvider';
 import { SecretInput } from '../../components/secret/SecretInput';
 import { SecretHint } from '../../components/secret/SecretHint';
 import { approvalProblem } from '../../components/secret/secretRules';
-import type { OrderSnapshot, PaymentMethod } from '@cheeseoclock/shared-types';
+import { isOutsideRiderOrder, type OrderSnapshot, type PaymentMethod } from '@cheeseoclock/shared-types';
 import { parseRupeesToCents } from './boardLogic';
 import { FoodMadeQuestion, useFoodMadeAnswer } from './FoodMadeQuestion';
 import { reasonChips, refundToast } from './stockCopy';
 import { useOrderReasons } from '../settings/shop-rules/useShopSetting';
 import { shortOrderNumber } from './historyFilters';
 
+/** 'All of it' or 'Part of it'. */
+type RefundMode = 'full' | 'partial';
+
 interface Props {
   snap: OrderSnapshot;
   onClose: () => void;
   onDone: () => void;
+  /** Open with this choice made (otherwise neither, or 'Part of it' for an outside rider still out). */
+  startOn?: RefundMode;
+  /** Open with 'Give back as' on this method (otherwise Cash for an outside rider still out, or how most was paid). */
+  startMethod?: PaymentMethod;
+  /** A line at the top of the box saying why it opened. */
+  note?: string;
 }
 
 /**
@@ -28,8 +37,14 @@ interface Props {
  * the order to Refunded; a part refund leaves it as it is until nothing is left.
  * The refund that ends the order (all of it, or the last part) also asks
  * "Was the food made?" when the order took stock. Enter confirms.
+ *
+ * It opens with neither 'All of it' nor 'Part of it' chosen (owner, 2 Oct
+ * 2026), so Enter can never give the whole order back by accident: it only
+ * says "Choose All of it or Part of it". An order an outside rider (Send out)
+ * still has opens on 'Part of it' with Cash. What the drawer paid that rider
+ * is never taken back by a refund, and the box says so.
  */
-export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
+export function RefundOrderDialog({ snap, onClose, onDone, startOn, startMethod, note }: Props) {
   // What can still be given back: every payment added up (refunds are negative).
   const remainingCents = useMemo(
     () => snap.payments.reduce((s, p) => s + p.amountCents, 0),
@@ -39,10 +54,15 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
   const dominantMethod: PaymentMethod =
     positivePayments.slice().sort((a, b) => b.amountCents - a.amountCents)[0]?.method ?? 'cash';
   const isFoodpanda = snap.order.mode === 'foodpanda';
+  // Sent out with an outside rider and not back yet: the money goes through him.
+  const outsideOut = isOutsideRiderOrder(snap.order) && snap.order.status === 'out_for_delivery';
+  // What the drawer paid him for this order (a live payout); a refund never takes it back.
+  const riderKeptCents =
+    isOutsideRiderOrder(snap.order) && snap.deliveryChargeToRider ? snap.deliveryChargeToRider.amountCents : null;
 
-  const [mode, setMode] = useState<'full' | 'partial'>('full');
+  const [mode, setMode] = useState<RefundMode | null>(startOn ?? (outsideOut ? 'partial' : null));
   const [partialStr, setPartialStr] = useState('');
-  const [method, setMethod] = useState<PaymentMethod>(dominantMethod);
+  const [method, setMethod] = useState<PaymentMethod>(startMethod ?? (outsideOut ? 'cash' : dominantMethod));
   const [reason, setReason] = useState('');
   const [pin, setPin] = useState('');
   const { toast } = useToast();
@@ -54,8 +74,18 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
   const partialCents = mode === 'partial' ? parseRupeesToCents(partialStr) : 0;
   const refundAmountCents = mode === 'full' ? remainingCents : Number.isFinite(partialCents) ? partialCents : 0;
   // Only the refund that ends the order touches stock; a part refund is money only.
-  const endsOrder = mode === 'full' || (partialCents > 0 && partialCents === remainingCents);
+  // Nothing is chosen yet: no stock question.
+  const endsOrder = mode === 'full' || (mode === 'partial' && partialCents > 0 && partialCents === remainingCents);
   const asksStock = endsOrder && fm.question !== null;
+  const typedCents = partialCents > 0 ? partialCents : null;
+  const riderWords =
+    riderKeptCents === null || mode === null
+      ? null
+      : mode === 'full'
+        ? `The rider kept ${formatCents(riderKeptCents)} delivery charge when this was settled. A refund does not take it back: refunding the full ${formatCents(remainingCents)} comes out of the shop's money.`
+        : typedCents === null
+          ? `The rider keeps his ${formatCents(riderKeptCents)}.`
+          : `${formatCents(typedCents)} goes back. The rider keeps his ${formatCents(riderKeptCents)}.`;
 
   const refundMut = useMutation({
     mutationFn: () =>
@@ -90,6 +120,11 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
     if (refundMut.isPending || fm.loading) return;
     if (remainingCents <= 0) {
       toast({ title: 'Nothing left to refund on this order', variant: 'warning' });
+      return;
+    }
+    // Enter before a choice gives nothing back.
+    if (mode === null) {
+      toast({ title: 'Choose All of it or Part of it', variant: 'warning' });
       return;
     }
     if (mode === 'partial') {
@@ -168,6 +203,14 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-1">
+            {note && (
+              <div
+                role="note"
+                className="mb-3 rounded-lg bg-stone-100 px-3 py-2 text-xs text-stone-700 dark:bg-stone-800 dark:text-stone-200"
+              >
+                {note}
+              </div>
+            )}
             <div className="mb-3 flex gap-1 rounded-lg bg-stone-100 p-1 dark:bg-stone-800">
               {(['full', 'partial'] as const).map((m) => (
                 <button
@@ -193,14 +236,19 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
                   Give back
                 </span>
                 <span className="font-mono text-2xl font-bold text-orange-900 dark:text-orange-100">
-                  {formatCents(refundAmountCents)}
+                  {mode === null ? '—' : formatCents(refundAmountCents)}
                 </span>
               </div>
               <div className="mt-1 text-xs text-orange-800 dark:text-orange-200">
-                {mode === 'full'
-                  ? 'Everything still paid goes back, the way it was paid. The order becomes Refunded.'
-                  : `Up to ${formatCents(remainingCents)}. The order stays paid until all of it is given back.`}
+                {mode === null
+                  ? 'Choose All of it or Part of it.'
+                  : mode === 'full'
+                    ? 'Everything still paid goes back, the way it was paid. The order becomes Refunded.'
+                    : `Up to ${formatCents(remainingCents)}. The order stays paid until all of it is given back.`}
               </div>
+              {riderWords && (
+                <div className="mt-1.5 text-xs font-semibold text-orange-900 dark:text-orange-100">{riderWords}</div>
+              )}
             </div>
 
             <div className="space-y-3">
@@ -237,6 +285,13 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
                         </button>
                       ))}
                     </div>
+                    {outsideOut && method === 'cash' && (
+                      <div className="mt-1.5 text-xs font-medium text-amber-800 dark:text-amber-200">
+                        {typedCents === null
+                          ? 'Give this to the rider: he collects that much less.'
+                          : `Give this to the rider: he collects ${formatCents(typedCents)} less.`}
+                      </div>
+                    )}
                   </div>
                 </>
               )}
@@ -266,7 +321,7 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
                   id="refund-reason"
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
-                  autoFocus={mode === 'full'}
+                  autoFocus={mode !== 'partial'}
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
                   placeholder="Or type why…"
                 />
@@ -274,6 +329,7 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
               {endsOrder ? (
                 <FoodMadeQuestion fm={fm} shortNumber={short} />
               ) : (
+                mode === 'partial' &&
                 fm.question !== null && (
                   <div className="rounded-lg bg-stone-50 p-2.5 text-xs text-stone-600 dark:bg-stone-800/60 dark:text-stone-300">
                     A part refund doesn't change stock. If an item was never made, fix it in Inventory → Stock.
@@ -303,7 +359,13 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
                 Back
               </Button>
               <Button type="submit" variant="danger" size="md" className="flex-1" disabled={refundMut.isPending || fm.loading}>
-                {fm.loading ? 'Checking stock…' : refundMut.isPending ? 'Refunding…' : `Refund ${formatCents(refundAmountCents)}`}
+                {fm.loading
+                  ? 'Checking stock…'
+                  : refundMut.isPending
+                    ? 'Refunding…'
+                    : mode === null
+                      ? 'Refund…'
+                      : `Refund ${formatCents(refundAmountCents)}`}
               </Button>
             </div>
           </form>
