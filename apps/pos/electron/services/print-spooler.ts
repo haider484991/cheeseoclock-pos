@@ -637,6 +637,49 @@ class PrintSpooler {
     return result;
   }
 
+  /**
+   * A receipt printer is set up (Settings → Printers): anything but the
+   * "No printer" setup, whose papers only go to files. The shift report at
+   * a close asks this first (no printer: no paper, and it says so). Never
+   * throws; when the setup cannot be read it counts as a printer, so a paper
+   * is tried and a failure shows rather than "no printer" said in silence.
+   */
+  hasReceiptPrinter(): boolean {
+    return !this.noPrinterSetUp();
+  }
+
+  /**
+   * Tell every till window the shift report did not print (the paper at a
+   * close, or one printed again). It is not a print_queue job — the report
+   * goes straight through printDocumentNow — so the note carries no jobId:
+   * the queue's retry (printer:retryJob) never sees it, and the note's own
+   * Try again prints the report again from the saved figures. It names the
+   * shift, so a note about one shift never looks like another's. Never throws.
+   */
+  notifyShiftReportFailure(shiftId: string, error: { code: string; message: string } | null | undefined): void {
+    const err = { code: error?.code ?? 'unknown', message: error?.message ?? 'Unknown print error' };
+    log.error('Shift report did not print', { shiftId, error: err });
+    let windows: BrowserWindow[] = [];
+    try {
+      windows = BrowserWindow.getAllWindows();
+    } catch (e) {
+      log.warn('Shift report: the till windows could not be told', { shiftId, error: String(e) });
+    }
+    for (const w of windows) {
+      try {
+        w.webContents.send('printer:failed', {
+          jobKind: 'shift_report',
+          shiftId,
+          what: 'Shift report',
+          error: err,
+          retrying: false,
+        });
+      } catch (e) {
+        log.warn('Shift report: a till window could not be told', { shiftId, error: String(e) });
+      }
+    }
+  }
+
   /** No receipt printer is set up (Settings → Printers): a pulse "goes" nowhere. Never throws. */
   private noPrinterSetUp(): boolean {
     if (!this.db) return false;

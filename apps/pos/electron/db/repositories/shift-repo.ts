@@ -5,7 +5,7 @@ import { writeWithSync, nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { recordDrawerOpen } from './drawer-open-repo.js';
-import { SHIFT_REPORT_VERSION, shortOrderNumber } from '@cheeseoclock/shared-types';
+import { SHIFT_REPORT_SECTIONS, SHIFT_REPORT_VERSION, shortOrderNumber } from '@cheeseoclock/shared-types';
 import { cashCountInputSchema, parseCashCountJson } from '@cheeseoclock/shared-schemas';
 import { cashCountJson, cashCountTotalCents, formatCents, type ShiftReportDrawerFacts } from '@cheeseoclock/pos-domain';
 import type {
@@ -13,7 +13,10 @@ import type {
   CashMovement,
   CashMovementType,
   DrawerPayout,
+  PrinterWidth,
   Shift,
+  ShiftReportItemsShown,
+  ShiftReportSection,
   ShiftSummary,
   UnpaidOrderAtClose,
   UUID,
@@ -625,6 +628,142 @@ export function getShiftCloseReport(db: AppDatabase, shiftId: string): StoredShi
     .get(shiftId) as { close_report_json: string | null; device_id: string; closed_at: string | null } | undefined;
   if (!row || typeof row.close_report_json !== 'string' || row.close_report_json === '' || row.closed_at === null) return null;
   return { json: row.close_report_json, deviceId: row.device_id, closedAt: row.closed_at };
+}
+
+/** The audit action of one try at printing a shift report on this till. */
+export const SHIFT_REPORT_PRINTED_ACTION = 'shift_report_printed';
+
+/** Which paper: the ORIGINAL (at the close, and its Try again), or a DUPLICATE 'Reprint #N'. */
+export type ShiftReportCopy = 'original' | 'reprint';
+
+/**
+ * How a try at printing ended: 'ok' it printed; 'maybe' the printer failed
+ * after the bytes may have gone out (a paper may be in the tray); 'failed'
+ * nothing came out for sure.
+ */
+export type ShiftReportPrintOutcome = 'ok' | 'maybe' | 'failed';
+
+/** One try at printing a shift's saved report on this till. */
+export interface ShiftReportPrintInput {
+  shiftId: string;
+  copy: ShiftReportCopy;
+  /**
+   * 0 for the original; N (1 or more) for 'Reprint #N'. A reprint may be 0
+   * when its number could not be worked out (the paper then says 'Reprint'
+   * alone, still DUPLICATE); it never counts as a number used.
+   */
+  reprintNo: number;
+  /** The sections on the paper (this till's switches when it printed). Stored in the paper's order. */
+  sections: readonly ShiftReportSection[];
+  /** ITEMS SOLD as every item or the category totals. */
+  items: ShiftReportItemsShown;
+  /** The paper's width in characters: 32 (58 mm) or 48 (80 mm). */
+  width: PrinterWidth;
+  outcome: ShiftReportPrintOutcome;
+  /** The printer's error code when it did not print for sure; null when it printed. */
+  errorCode: string | null;
+  /** Who it was for: who closed the shift, or who pressed Print again. */
+  byUserId: string | null;
+  /** The manager whose PIN or password allowed it on a cashier's login; null otherwise. */
+  approvedByUserId: string | null;
+}
+
+const PRINT_OUTCOMES: readonly ShiftReportPrintOutcome[] = ['ok', 'maybe', 'failed'];
+
+/**
+ * Puts one try at printing a shift report on record: one audit row (entity
+ * shifts, action 'shift_report_printed'), chained like every other — a row
+ * for every try, the ones that failed too. Audit only, like
+ * 'carried_over_unpaid': nothing about the shift changes, so there is no
+ * business row and nothing to sync; audit_log stays on this till, so the
+ * papers are counted per till (shiftReportPrintHistory). Throws on a try
+ * that cannot be (an original with a reprint number, a section the paper
+ * does not have): the printing code's mistake, never the printer's.
+ */
+export function recordShiftReportPrint(db: AppDatabase, input: ShiftReportPrintInput): void {
+  const { copy, reprintNo } = input;
+  if (copy !== 'original' && copy !== 'reprint') throw new Error(`Shift report print: unknown copy ${String(copy)}`);
+  if (copy === 'original' ? reprintNo !== 0 : !Number.isInteger(reprintNo) || reprintNo < 0) {
+    throw new Error(`Shift report print: the ${copy} cannot be number ${String(reprintNo)}`);
+  }
+  if (!PRINT_OUTCOMES.includes(input.outcome)) throw new Error(`Shift report print: unknown outcome ${String(input.outcome)}`);
+  if (input.items !== 'items' && input.items !== 'categories') throw new Error(`Shift report print: unknown items ${String(input.items)}`);
+  if (input.width !== 32 && input.width !== 48) throw new Error(`Shift report print: unknown width ${String(input.width)}`);
+  const known = new Set<string>(SHIFT_REPORT_SECTIONS.map((s) => s.key));
+  const unknown = input.sections.filter((s) => !known.has(s));
+  if (unknown.length > 0) throw new Error(`Shift report print: unknown section ${unknown.join(', ')}`);
+  const printed = new Set<string>(input.sections);
+  const after = {
+    shiftId: input.shiftId,
+    copy,
+    reprintNo,
+    sections: SHIFT_REPORT_SECTIONS.map((s) => s.key).filter((k) => printed.has(k)),
+    items: input.items,
+    width: input.width,
+    outcome: input.outcome,
+    errorCode: input.outcome === 'ok' ? null : (input.errorCode ?? null),
+    byUserId: input.byUserId,
+    approvedByUserId: input.approvedByUserId,
+  };
+  db.transaction(() => {
+    writeAudit(db, {
+      entityType: 'shifts',
+      entityId: input.shiftId,
+      action: SHIFT_REPORT_PRINTED_ACTION,
+      actorUserId: input.byUserId,
+      before: null,
+      after,
+    });
+  })();
+}
+
+/** What this till has printed of a shift's report (its 'shift_report_printed' rows). */
+export interface ShiftReportPrintHistory {
+  /** Tries at the original on this till: at the close, and Try again. */
+  originalTries: number;
+  /** An original came out, or may have ('ok' or 'maybe'). */
+  originalPrinted: boolean;
+  /**
+   * The highest 'Reprint #N' that came out or may have; 0 for none. The next
+   * reprint is number reprints + 1: a reprint that surely did not print
+   * leaves its number to the next.
+   */
+  reprints: number;
+}
+
+/**
+ * This till's prints of a shift's report, read from its audit rows (by the
+ * audit trail's entity index). audit_log is never synced, so the other
+ * till's papers are not counted: reprint numbers count per till. A row that
+ * cannot be read is passed over.
+ */
+export function shiftReportPrintHistory(db: AppDatabase, shiftId: string): ShiftReportPrintHistory {
+  const rows = db
+    .prepare(
+      `SELECT after_json FROM audit_log
+        WHERE entity_type = 'shifts' AND entity_id = ? AND action = '${SHIFT_REPORT_PRINTED_ACTION}'
+        ORDER BY rowid`,
+    )
+    .all(shiftId) as Array<{ after_json: string | null }>;
+  const history: ShiftReportPrintHistory = { originalTries: 0, originalPrinted: false, reprints: 0 };
+  for (const r of rows) {
+    let p: Record<string, unknown>;
+    try {
+      p = JSON.parse(r.after_json ?? 'null') as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (!p || typeof p !== 'object') continue;
+    const cameOut = p['outcome'] === 'ok' || p['outcome'] === 'maybe';
+    if (p['copy'] === 'original') {
+      history.originalTries += 1;
+      if (cameOut) history.originalPrinted = true;
+    } else if (p['copy'] === 'reprint' && cameOut) {
+      const n = p['reprintNo'];
+      if (typeof n === 'number' && Number.isInteger(n) && n > history.reprints) history.reprints = n;
+    }
+  }
+  return history;
 }
 
 /**

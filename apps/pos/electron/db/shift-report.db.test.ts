@@ -43,6 +43,12 @@
  *   (11) the close reads no food cost;
  *   (12) and reads by index.
  *
+ * Every try at printing it (step 19f-1): one chained 'shift_report_printed'
+ * audit row per try, failed ones too, nothing synced and the shift
+ * untouched; shiftReportPrintHistory counts this till's original tries, if
+ * one came out, and the highest reprint number used; till B never counts
+ * till A's; a try that cannot be is refused; the history reads by index.
+ *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for
  * Electron); skipped where it is missing. Every name, number and amount is
  * made up (the repository is public).
@@ -57,7 +63,7 @@ import type { AppDatabase } from './connection.js';
 import { DatabaseSync, openMigrated } from './costing-shop.fixture.js';
 import { TEST_USERS, iAm, openTill, push } from './two-tills.fixture.js';
 import { verifyAuditChain, type AuditChainRow } from './audit-chain.js';
-import type { CloseApproval, CloseShiftInput, ShiftCloseContext, ShiftCloseReport } from './repositories/shift-repo.js';
+import type { CloseApproval, CloseShiftInput, ShiftCloseContext, ShiftCloseReport, ShiftReportPrintInput } from './repositories/shift-repo.js';
 import type { TenderInputItem } from './repositories/order-repo.js';
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
@@ -1473,5 +1479,205 @@ live('the shift report made at the close (shift-report-service, step 19d-3)', ()
     expect(tillNameForPaper('Front till')).toBe('Front till');
     expect(tillNameForPaper('Till (2)')).toBe('Till (2)');
     expect(tillNameForPaper(' (win32)')).toBe('');
+  });
+});
+
+// -------------------------------- every print of it on record (step 19f-1)
+
+/** Every section of the paper, in its order. */
+const EVERY_SECTION = ['sales', 'moneyTaken', 'channels', 'cancelsRefunds', 'drawer', 'counted', 'unpaid', 'items', 'orders'] as const;
+
+/** One try at printing `shiftId`'s report, as the printing code puts it on record: the manager's, at 80 mm, every section, unless said. */
+const tryPrint = (
+  shiftId: string,
+  more: Partial<ShiftReportPrintInput> = {},
+): ShiftReportPrintInput => ({
+  shiftId,
+  copy: 'original',
+  reprintNo: 0,
+  sections: EVERY_SECTION,
+  items: 'items',
+  width: 48,
+  outcome: 'ok',
+  errorCode: null,
+  byUserId: A.manager.userId,
+  approvedByUserId: null,
+  ...more,
+});
+
+/** The 'shift_report_printed' audit rows of a shift, oldest first, their after-images read. */
+function printAudits(db: AppDatabase, shiftId: string): Row[] {
+  return (
+    db
+      .prepare(
+        `SELECT entity_type, actor_user_id, before_json, after_json FROM audit_log
+          WHERE entity_id = ? AND action = 'shift_report_printed' ORDER BY rowid`,
+      )
+      .all(shiftId) as Row[]
+  ).map((r) => ({ ...r, after_json: JSON.parse(String(r['after_json'])) as Row }));
+}
+
+live('every try at printing the shift report goes on record (audit only, this till)', () => {
+  it('one chained audit row per try — a failed one too — and nothing else: the shift untouched, nothing synced; the chain is whole', async () => {
+    const { db, menu, shiftId } = await till();
+    const repo = await shiftRepo();
+    await paidTakeaway(db, menu, 'cash');
+    await closeEvenReported(db, shiftId);
+    const shiftBefore = storedShift(db, shiftId);
+    const before = { sync: count(db, 'sync_queue'), audit: count(db, 'audit_log') };
+
+    repo.recordShiftReportPrint(db, tryPrint(shiftId, { outcome: 'failed', errorCode: 'printer_offline' }));
+    repo.recordShiftReportPrint(db, tryPrint(shiftId));
+    repo.recordShiftReportPrint(
+      db,
+      tryPrint(shiftId, {
+        copy: 'reprint',
+        reprintNo: 1,
+        sections: ['orders', 'sales', 'drawer', 'sales'],
+        items: 'categories',
+        width: 32,
+        outcome: 'maybe',
+        errorCode: 'timeout',
+        byUserId: A.cashier.userId,
+        approvedByUserId: A.manager.userId,
+      }),
+    );
+
+    expect({ sync: count(db, 'sync_queue'), audit: count(db, 'audit_log') }).toEqual({ sync: before.sync, audit: before.audit + 3 });
+    expect(storedShift(db, shiftId)).toEqual(shiftBefore);
+    const at = { shiftId, items: 'items', width: 48, byUserId: A.manager.userId, approvedByUserId: null };
+    expect(printAudits(db, shiftId)).toEqual([
+      {
+        entity_type: 'shifts',
+        actor_user_id: A.manager.userId,
+        before_json: null,
+        after_json: { ...at, copy: 'original', reprintNo: 0, sections: [...EVERY_SECTION], outcome: 'failed', errorCode: 'printer_offline' },
+      },
+      {
+        entity_type: 'shifts',
+        actor_user_id: A.manager.userId,
+        before_json: null,
+        after_json: { ...at, copy: 'original', reprintNo: 0, sections: [...EVERY_SECTION], outcome: 'ok', errorCode: null },
+      },
+      {
+        entity_type: 'shifts',
+        actor_user_id: A.cashier.userId,
+        before_json: null,
+        // The sections in the paper's order, each once.
+        after_json: {
+          ...at,
+          copy: 'reprint',
+          reprintNo: 1,
+          sections: ['sales', 'drawer', 'orders'],
+          items: 'categories',
+          width: 32,
+          outcome: 'maybe',
+          errorCode: 'timeout',
+          byUserId: A.cashier.userId,
+          approvedByUserId: A.manager.userId,
+        },
+      },
+    ]);
+    expect(verifyAuditChain(auditRows(db))).toMatchObject({ ok: true, brokenAt: null });
+  });
+
+  it('an ok try keeps no error code', async () => {
+    const { db, shiftId } = await till();
+    const repo = await shiftRepo();
+    await closeEvenReported(db, shiftId);
+    repo.recordShiftReportPrint(db, tryPrint(shiftId, { errorCode: 'left over' }));
+    expect(printAudits(db, shiftId).map((r) => (r['after_json'] as Row)['errorCode'])).toEqual([null]);
+  });
+
+  it('shiftReportPrintHistory: the original tried and whether it came out; the highest reprint that came out or may have', async () => {
+    const { db, shiftId } = await till();
+    const repo = await shiftRepo();
+    await closeEvenReported(db, shiftId);
+    const history = () => repo.shiftReportPrintHistory(db, shiftId);
+    expect(history()).toEqual({ originalTries: 0, originalPrinted: false, reprints: 0 });
+
+    repo.recordShiftReportPrint(db, tryPrint(shiftId, { outcome: 'failed', errorCode: 'printer_offline' }));
+    expect(history()).toEqual({ originalTries: 1, originalPrinted: false, reprints: 0 });
+    repo.recordShiftReportPrint(db, tryPrint(shiftId, { outcome: 'maybe', errorCode: 'timeout' }));
+    expect(history()).toEqual({ originalTries: 2, originalPrinted: true, reprints: 0 });
+    repo.recordShiftReportPrint(db, tryPrint(shiftId));
+    expect(history()).toEqual({ originalTries: 3, originalPrinted: true, reprints: 0 });
+
+    // A reprint that surely did not print leaves its number to the next.
+    repo.recordShiftReportPrint(db, tryPrint(shiftId, { copy: 'reprint', reprintNo: 1, outcome: 'failed', errorCode: 'printer_offline' }));
+    expect(history().reprints).toBe(0);
+    repo.recordShiftReportPrint(db, tryPrint(shiftId, { copy: 'reprint', reprintNo: 1 }));
+    expect(history().reprints).toBe(1);
+    repo.recordShiftReportPrint(db, tryPrint(shiftId, { copy: 'reprint', reprintNo: 2, outcome: 'maybe', errorCode: 'timeout' }));
+    expect(history()).toEqual({ originalTries: 3, originalPrinted: true, reprints: 2 });
+    // A DUPLICATE whose number could not be worked out (0) is on record, and uses no number.
+    repo.recordShiftReportPrint(db, tryPrint(shiftId, { copy: 'reprint', reprintNo: 0 }));
+    expect(history()).toEqual({ originalTries: 3, originalPrinted: true, reprints: 2 });
+    expect(printAudits(db, shiftId).at(-1)?.['after_json']).toMatchObject({ copy: 'reprint', reprintNo: 0, outcome: 'ok' });
+
+    // Another shift's prints, the close's own audit row and a row that is not a print's are not counted.
+    const other = repo.openShift(db, { openingCashCents: FLOAT }, A.cashier).id;
+    repo.recordShiftReportPrint(db, tryPrint(other, { copy: 'reprint', reprintNo: 7 }));
+    const { writeAudit } = await import('./repositories/audit-repo.js');
+    writeAudit(db, {
+      entityType: 'shifts',
+      entityId: shiftId,
+      action: 'shift_report_printed',
+      actorUserId: null,
+      before: null,
+      after: { copy: 'reprint', reprintNo: 'nine', outcome: 'ok' },
+    });
+    writeAudit(db, { entityType: 'shifts', entityId: shiftId, action: 'shift_report_printed', actorUserId: null, before: null, after: null });
+    expect(history()).toEqual({ originalTries: 3, originalPrinted: true, reprints: 2 });
+    expect(repo.shiftReportPrintHistory(db, other)).toEqual({ originalTries: 0, originalPrinted: false, reprints: 7 });
+    expect(repo.shiftReportPrintHistory(db, 'no-such-shift')).toEqual({ originalTries: 0, originalPrinted: false, reprints: 0 });
+    expect(verifyAuditChain(auditRows(db))).toMatchObject({ ok: true, brokenAt: null });
+  });
+
+  it('per till: till B never counts till A’s prints of the same shift (the audit trail is not synced)', async () => {
+    const repo = await shiftRepo();
+    const { a, shiftId } = await closedOnA();
+    repo.recordShiftReportPrint(a, tryPrint(shiftId));
+    repo.recordShiftReportPrint(a, tryPrint(shiftId, { copy: 'reprint', reprintNo: 1 }));
+    const b = openTill(TILL_B, { usersFrom: TILL_A });
+    await applyAll(b, await queued(a, TILL_A));
+    expect(repo.findShift(b, shiftId)?.closedAt).not.toBeNull();
+    expect(repo.shiftReportPrintHistory(b, shiftId)).toEqual({ originalTries: 0, originalPrinted: false, reprints: 0 });
+    expect(repo.shiftReportPrintHistory(a, shiftId)).toEqual({ originalTries: 1, originalPrinted: true, reprints: 1 });
+  });
+
+  it('a try that cannot be is refused and writes nothing', async () => {
+    const { db, shiftId } = await till();
+    const repo = await shiftRepo();
+    await closeEvenReported(db, shiftId);
+    const audit = count(db, 'audit_log');
+    for (const more of [
+      { copy: 'original', reprintNo: 1 },
+      { copy: 'reprint', reprintNo: -1 },
+      { copy: 'reprint', reprintNo: 1.5 },
+      { copy: 'copy' },
+      { outcome: 'printed' },
+      { sections: ['sales', 'tips'] },
+      { items: 'none' },
+      { width: 40 },
+    ] as Array<Partial<ShiftReportPrintInput>>) {
+      expect(() => repo.recordShiftReportPrint(db, tryPrint(shiftId, more))).toThrow(/^Shift report print: /);
+    }
+    expect(count(db, 'audit_log')).toBe(audit);
+  });
+
+  it('the history reads by the audit trail’s entity index, never a scan', async () => {
+    const { db, shiftId } = await till();
+    const repo = await shiftRepo();
+    await closeEvenReported(db, shiftId);
+    const read: string[] = [];
+    const watched = new Proxy(db, {
+      get: (t, k) => (k === 'prepare' ? (sql: string) => (read.push(sql), t.prepare(sql)) : Reflect.get(t, k)),
+    });
+    repo.shiftReportPrintHistory(watched, shiftId);
+    expect(read).toHaveLength(1);
+    const plan = (db.prepare(`EXPLAIN QUERY PLAN ${read[0]!}`).all(shiftId) as Row[]).map((p) => String(p['detail']));
+    expect(plan.some((p) => /USING INDEX idx_audit_entity/.test(p))).toBe(true);
+    expect(plan.filter((p) => /\bSCAN\b/.test(p))).toEqual([]);
   });
 });

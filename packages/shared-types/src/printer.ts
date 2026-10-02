@@ -1,5 +1,7 @@
 /** Printer transport + connection config shared between POS and printer-core. */
 
+import { SHIFT_REPORT_SECTIONS, type ShiftReportSection } from './shift-report.js';
+
 export type PrinterTransport = 'usb' | 'network' | 'bluetooth' | 'serial';
 export type PrinterStation = 'receipt' | 'kitchen' | 'bar' | 'cold';
 export type PrinterWidth = 32 | 48; // 58mm or 80mm
@@ -195,6 +197,50 @@ export interface PrintPolicy {
   kitchenPhone?: boolean;
   /** Drinks on the kitchen ticket; off, they are left off (an order of only drinks prints no ticket). */
   kitchenDrinks?: boolean;
+  // The shift report's rules (Settings → Printers → Shift report; owner,
+  // 2 Oct 2026): this till only, the owner's alone to change. Not there = on,
+  // every section, every item: read with shiftReportRules(). A policy saved
+  // before they existed reads unchanged. They change only what PRINTS: the
+  // report saved at the close always holds every section.
+  /** Print the shift report on the receipt printer when a shift closes. */
+  shiftReportOnClose?: boolean;
+  /** The sections on the paper: a section set to false is left off; one not there prints. */
+  shiftReportSections?: Partial<Record<ShiftReportSection, boolean>>;
+  /** ITEMS SOLD as every item under its category ('items'), or the category totals only. */
+  shiftReportItems?: ShiftReportItemsShown;
+}
+
+/** How ITEMS SOLD prints: every item under its category, or the category totals only. */
+export type ShiftReportItemsShown = 'items' | 'categories';
+
+/** What the shift report paper carries on this till (PrintPolicy's shift report fields, read with their defaults). */
+export interface ShiftReportRules {
+  /** It prints when a shift closes. */
+  onClose: boolean;
+  /** Every one of the nine sections, true where it prints. */
+  sections: Record<ShiftReportSection, boolean>;
+  items: ShiftReportItemsShown;
+}
+
+/**
+ * The shift report's rules on this till: what is saved, and for anything
+ * not saved (or not readable) what the owner chose for every till at first —
+ * printed at every close, every section on, every item listed.
+ */
+export function shiftReportRules(
+  p: Pick<PrintPolicy, 'shiftReportOnClose' | 'shiftReportSections' | 'shiftReportItems'> | null | undefined,
+): ShiftReportRules {
+  const saved = p?.shiftReportSections;
+  const sections = {} as Record<ShiftReportSection, boolean>;
+  for (const { key } of SHIFT_REPORT_SECTIONS) {
+    const on = saved && typeof saved === 'object' ? saved[key] : undefined;
+    sections[key] = typeof on === 'boolean' ? on : true;
+  }
+  return {
+    onClose: typeof p?.shiftReportOnClose === 'boolean' ? p.shiftReportOnClose : true,
+    sections,
+    items: p?.shiftReportItems === 'categories' ? 'categories' : 'items',
+  };
 }
 
 /** What a kitchen ticket carries, and how many print (PrintPolicy's kitchen fields, read with their defaults). */

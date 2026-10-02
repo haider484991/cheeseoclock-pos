@@ -2,6 +2,11 @@
  * The main-process wiring that decides whether the shop logo goes on paper,
  * run against a real database built from every migration:
  *  - a print policy saved before the logo setting existed reads as logo ON;
+ *  - the shift report's rules (this till, the owner's): a policy saved
+ *    before them reads unchanged and as on / every section / every item; a
+ *    section switched off reads off and the rest on; a bad value is refused
+ *    on save with the saved policy untouched; a section the paper does not
+ *    have is dropped; a save is audited and never synced;
  *  - a receipt prints the stored picture only for the logo that is set now,
  *    and only while "Logo on receipts" is on;
  *  - a test print through the real spooler and the no-printer (file) adapter
@@ -20,6 +25,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOGO_RASTER_ALGO, logoFingerprint, logoMarker } from '@cheeseoclock/printer-core';
+import { shiftReportRules } from '@cheeseoclock/shared-types';
 import type { ReceiptLogoRasterJson, ReceiptLogoRasterSet } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
 
@@ -179,6 +185,95 @@ describe.skipIf(!DatabaseSync)('print policy', () => {
     const { getPrintPolicy, setPrintPolicy } = await cfg();
     setPrintPolicy(db, { ...getPrintPolicy(db), logoOnReceipt: false });
     expect(getPrintPolicy(db).logoOnReceipt).toBe(false);
+  });
+});
+
+describe.skipIf(!DatabaseSync)('the shift report’s print rules (Settings → Printers → Shift report: this till, the owner’s)', () => {
+  /** Exactly what a v0.7.34 till stored: its kitchen ticket rules saved, nothing about a shift report. */
+  const V0734 = {
+    kitchenTicket: true,
+    deliveryBillOnDispatch: true,
+    shopCopy: 'delivery',
+    logoOnReceipt: false,
+    kitchenCopies: 2,
+    kitchenPhone: false,
+    kitchenDrinks: true,
+  } as const;
+  const ALL_ON = { sales: true, moneyTaken: true, channels: true, cancelsRefunds: true, drawer: true, counted: true, unpaid: true, items: true, orders: true };
+  const rowCount = (table: 'sync_queue' | 'audit_log') => Number((db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n);
+  const stored = () => (db.prepare(`SELECT value_json FROM settings WHERE key = 'printer.policy'`).get() as { value_json: string } | undefined)?.value_json;
+  const saveV0734 = async () => {
+    const { PRINT_POLICY_KEY } = await cfg();
+    const { setSetting } = await import('../db/repositories/settings-repo.js');
+    setSetting(db, PRINT_POLICY_KEY, V0734);
+  };
+
+  it('a policy saved before them reads unchanged, and as: print at every close, every section, every item', async () => {
+    const { getPrintPolicy } = await cfg();
+    expect(shiftReportRules(getPrintPolicy(db))).toEqual({ onClose: true, sections: ALL_ON, items: 'items' });
+    await saveV0734();
+    expect(getPrintPolicy(db)).toEqual(V0734);
+    expect(shiftReportRules(getPrintPolicy(db))).toEqual({ onClose: true, sections: ALL_ON, items: 'items' });
+  });
+
+  it('“All orders” switched off reads off, and every other section on; the kitchen rules saved before are kept', async () => {
+    const { getPrintPolicy, setPrintPolicy } = await cfg();
+    await saveV0734();
+    setPrintPolicy(db, { ...getPrintPolicy(db), shiftReportSections: { orders: false } });
+    expect(shiftReportRules(getPrintPolicy(db))).toEqual({ onClose: true, sections: { ...ALL_ON, orders: false }, items: 'items' });
+    expect(getPrintPolicy(db)).toMatchObject({ kitchenCopies: 2, kitchenPhone: false, logoOnReceipt: false });
+
+    setPrintPolicy(db, { ...getPrintPolicy(db), shiftReportOnClose: false, shiftReportItems: 'categories' });
+    expect(shiftReportRules(getPrintPolicy(db))).toEqual({ onClose: false, sections: { ...ALL_ON, orders: false }, items: 'categories' });
+    setPrintPolicy(db, { ...getPrintPolicy(db), shiftReportOnClose: true, shiftReportSections: { ...ALL_ON }, shiftReportItems: 'items' });
+    expect(shiftReportRules(getPrintPolicy(db))).toEqual({ onClose: true, sections: ALL_ON, items: 'items' });
+  });
+
+  it('a bad value is refused on save, in words; the saved policy (the kitchen rules too) and the audit trail are untouched', async () => {
+    const { getPrintPolicy, setPrintPolicy, PrintPolicySchema } = await cfg();
+    await saveV0734();
+    const before = { policy: getPrintPolicy(db), text: stored(), audit: rowCount('audit_log') };
+    const items = PrintPolicySchema.safeParse({ ...V0734, shiftReportItems: 'none' });
+    expect(items.success).toBe(false);
+    expect(items.error?.issues.map((i) => i.message)).toEqual(['Items sold prints every item or the category totals']);
+    for (const bad of [
+      { shiftReportItems: 'none' },
+      { shiftReportOnClose: 'yes' },
+      { shiftReportSections: { orders: 'off' } },
+      { shiftReportSections: 'orders' },
+    ]) {
+      expect({ bad, ok: PrintPolicySchema.safeParse({ ...V0734, ...bad }).success }).toEqual({ bad, ok: false });
+      expect(() => setPrintPolicy(db, { ...V0734, ...bad } as never)).toThrow();
+    }
+    expect({ policy: getPrintPolicy(db), text: stored(), audit: rowCount('audit_log') }).toEqual(before);
+  });
+
+  it('why the save refuses: a bad value stored anyway would make the whole policy read as the first one', async () => {
+    const { getPrintPolicy, PRINT_POLICY_KEY, PrintPolicySchema } = await cfg();
+    const { setSetting } = await import('../db/repositories/settings-repo.js');
+    setSetting(db, PRINT_POLICY_KEY, { ...V0734, shiftReportItems: 'none' });
+    expect(getPrintPolicy(db)).toEqual(PrintPolicySchema.parse({}));
+    expect(getPrintPolicy(db).kitchenCopies).toBeUndefined();
+  });
+
+  it('a section the paper does not have is dropped on save; the others are kept', async () => {
+    const { getPrintPolicy, setPrintPolicy, ShiftReportSectionsSchema } = await cfg();
+    setPrintPolicy(db, { ...getPrintPolicy(db), shiftReportSections: { orders: false, tips: false } as never });
+    expect(JSON.parse(String(stored()))['shiftReportSections']).toEqual({ orders: false });
+    expect(getPrintPolicy(db).shiftReportSections).toEqual({ orders: false });
+    // The switches are the paper's nine sections, in its order.
+    expect(Object.keys(ShiftReportSectionsSchema.shape)).toEqual(Object.keys(ALL_ON));
+  });
+
+  it('this till only: a save writes the settings row and one audit row, never a sync_queue row', async () => {
+    const { getPrintPolicy, setPrintPolicy } = await cfg();
+    const before = { sync: rowCount('sync_queue'), audit: rowCount('audit_log') };
+    setPrintPolicy(db, { ...getPrintPolicy(db), shiftReportSections: { items: false }, shiftReportItems: 'categories' }, 'u_owner');
+    expect({ sync: rowCount('sync_queue'), audit: rowCount('audit_log') }).toEqual({ sync: before.sync, audit: before.audit + 1 });
+    const row = db.prepare(`SELECT entity_type, entity_id, action, actor_user_id, after_json FROM audit_log ORDER BY rowid DESC LIMIT 1`).get() as Record<string, string>;
+    expect(row).toMatchObject({ entity_type: 'settings', entity_id: 'printer.policy', action: 'settings_change', actor_user_id: 'u_owner' });
+    expect(JSON.parse(row['after_json']!)).toMatchObject({ shiftReportSections: { items: false }, shiftReportItems: 'categories' });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM sync_queue WHERE payload_json LIKE '%shiftReport%'`).get()).toEqual({ n: 0 });
   });
 });
 

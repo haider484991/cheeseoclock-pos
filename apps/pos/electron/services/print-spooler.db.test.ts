@@ -11,7 +11,9 @@
  *    still waiting for cash taken before it are not sent: never open twice;
  *  - the drawer pin and pulse length come from the receipt printer's setting,
  *    and changing only those keeps the printer (a USB print worker);
- *  - a watched press waits for a printer that is still starting up.
+ *  - a watched press waits for a printer that is still starting up;
+ *  - the shift report's helpers (v0.7.35): whether a receipt printer is set
+ *    up, and the note to the till when the report did not print (no job).
  *
  * better-sqlite3 here is built for Electron's ABI, so this uses node's own
  * `node:sqlite` behind a small better-sqlite3-shaped shim (see
@@ -1156,5 +1158,73 @@ describe.skipIf(!DatabaseSync)('a paper that is not an order (the prep list)', (
     expect(broken).toMatchObject({ ok: false, error: { code: 'spooler_exception', message: 'no paper model' } });
     await s.whenIdle();
     expect(h.sends).toHaveLength(1);
+  });
+});
+
+describe.skipIf(!DatabaseSync)('the shift report’s helpers (v0.7.35)', () => {
+  it('hasReceiptPrinter: no on the "No printer" setup (nothing saved, or chosen); yes for a real printer, one with a damaged drawer value too; asking prints nothing', async () => {
+    const s = await spooler();
+    const { setReceiptPrinterConfig, DEFAULT_RECEIPT_CONFIG, PRINTER_RECEIPT_KEY } = await import('./printer-config.js');
+    const { setSetting } = await import('../db/repositories/settings-repo.js');
+    expect(s.hasReceiptPrinter()).toBe(false);
+    setReceiptPrinterConfig(db, DEFAULT_RECEIPT_CONFIG);
+    expect(s.hasReceiptPrinter()).toBe(false);
+    setReceiptPrinterConfig(db, { transport: 'network', network: { host: '192.0.2.11', port: 9100 }, width: 32 });
+    expect(s.hasReceiptPrinter()).toBe(true);
+    setReceiptPrinterConfig(db, { transport: 'usb', usb: { printerName: 'Test Receipt Printer' }, width: 48 });
+    expect(s.hasReceiptPrinter()).toBe(true);
+    setSetting(db, PRINTER_RECEIPT_KEY, { transport: 'network', network: { host: '192.0.2.11', port: 9100 }, drawer: { pin: 3, pulseMs: 50 } });
+    expect(s.hasReceiptPrinter()).toBe(true);
+    await s.whenIdle();
+    expect(h.sends).toHaveLength(0);
+    expect(h.events).toEqual([]);
+  });
+
+  it('notifyShiftReportFailure: one note to every till window naming the shift, with no job (the queue’s retry never sees it); nothing printed or queued', async () => {
+    const s = await spooler();
+    const error: PrintResult['error'] = { code: 'printer_offline', message: 'fake printer_offline', recoverable: true, maybeSent: false };
+    s.notifyShiftReportFailure('shift-0001', error);
+    expect(h.events).toEqual([
+      {
+        channel: 'printer:failed',
+        payload: {
+          jobKind: 'shift_report',
+          shiftId: 'shift-0001',
+          what: 'Shift report',
+          error: { code: 'printer_offline', message: 'fake printer_offline' },
+          retrying: false,
+        },
+      },
+    ]);
+    expect(h.events[0]!.payload).not.toHaveProperty('jobId');
+    expect(h.events[0]!.payload).not.toHaveProperty('orderId');
+    // An error that is not known still says something.
+    s.notifyShiftReportFailure('shift-0002', undefined);
+    expect(h.events[1]!.payload).toMatchObject({ shiftId: 'shift-0002', error: { code: 'unknown', message: 'Unknown print error' } });
+    expect(s.retryFailedJob('shift-0001')).toBeNull();
+    await s.whenIdle();
+    expect(h.sends).toHaveLength(0);
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM print_queue`).get() as { n: number }).n).toBe(0);
+  });
+
+  it('a window that cannot be told never stops the others, and never throws', async () => {
+    const s = await spooler();
+    const { BrowserWindow } = await import('electron');
+    const told: string[] = [];
+    const win = (name: string, fails: boolean) => ({
+      webContents: {
+        send: () => {
+          if (fails) throw new Error('fake: window closed');
+          told.push(name);
+        },
+      },
+    });
+    vi.spyOn(BrowserWindow, 'getAllWindows').mockReturnValue([win('first', true), win('second', false)] as never);
+    expect(() => s.notifyShiftReportFailure('shift-0003', { code: 'printer_offline', message: 'fake printer_offline' })).not.toThrow();
+    expect(told).toEqual(['second']);
+    vi.spyOn(BrowserWindow, 'getAllWindows').mockImplementation(() => {
+      throw new Error('fake: no windows yet');
+    });
+    expect(() => s.notifyShiftReportFailure('shift-0004', null)).not.toThrow();
   });
 });

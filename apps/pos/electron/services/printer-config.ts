@@ -11,6 +11,7 @@ import type {
   PrinterWidth,
   ReceiptLogoRasterSet,
   ReceiptLogoStatus,
+  ShiftReportSection,
 } from '@cheeseoclock/shared-types';
 import {
   LOGO_CHECKED_KEY,
@@ -241,12 +242,36 @@ export function setKitchenPrinterConfig(
 }
 
 /**
+ * The shift report's section switches: the nine sections, each optional
+ * (not there = it prints). A key that is not one of them is dropped (zod's
+ * default for an object); a value that is not true or false is refused.
+ * `satisfies` keeps the switches exactly the paper's sections: one added to
+ * ShiftReportSection and not here (or the other way round) fails to compile.
+ */
+export const ShiftReportSectionsSchema = z.object({
+  sales: z.boolean().optional(),
+  moneyTaken: z.boolean().optional(),
+  channels: z.boolean().optional(),
+  cancelsRefunds: z.boolean().optional(),
+  drawer: z.boolean().optional(),
+  counted: z.boolean().optional(),
+  unpaid: z.boolean().optional(),
+  items: z.boolean().optional(),
+  orders: z.boolean().optional(),
+} satisfies Record<ShiftReportSection, z.ZodOptional<z.ZodBoolean>>);
+
+/**
  * What prints automatically, and when — see PrintPolicy in shared-types.
  * Per till (the local `settings` table, never synced): each till drives its
  * own printers. The kitchen ticket's copies, phone and drinks have NO
  * default here, so a policy saved before they existed reads exactly as it
  * was; kitchenTicketRules() fills in the released ones (1 copy, phone and
- * drinks on). Their bounds are checked here, in the main process.
+ * drinks on). Their bounds are checked here, in the main process. The shift
+ * report's three fields likewise have no default (shiftReportRules() fills
+ * them in). Only printer.manage — the owner — saves the policy
+ * ('printer:setPolicy'), which checks it with this schema: a bad value is
+ * refused there, because a bad value stored would make getPrintPolicy fall
+ * back to every default.
  */
 export const PrintPolicySchema = z.object({
   kitchenTicket: z.boolean().default(true),
@@ -263,6 +288,14 @@ export const PrintPolicySchema = z.object({
     .optional(),
   kitchenPhone: z.boolean().optional(),
   kitchenDrinks: z.boolean().optional(),
+  // The shift report's (Settings → Printers → Shift report, the owner's):
+  // no default either, so a policy saved before them reads unchanged and
+  // shiftReportRules() reads "not there" as on / every section / every item.
+  shiftReportOnClose: z.boolean().optional(),
+  shiftReportSections: ShiftReportSectionsSchema.optional(),
+  shiftReportItems: z
+    .enum(['items', 'categories'], { errorMap: () => ({ message: 'Items sold prints every item or the category totals' }) })
+    .optional(),
 });
 
 export function getPrintPolicy(db: AppDatabase): PrintPolicy {

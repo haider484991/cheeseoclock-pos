@@ -20,7 +20,8 @@
  *     managers' too;
  *   - Reports (every tab's channel with the Profit tab, low stock, the menu
  *     map, the owner's week, day notes, the stock-take variance, the shift
- *     history list) and this till's printer settings are the owner's alone
+ *     history list) and this till's printer settings (the shift report's
+ *     section switches included, v0.7.35) are the owner's alone
  *     since 2026-09-27 ("managers can't see the reports and settings"):
  *     refused to the counter AND to managers, in the handlers' plain words,
  *     and nothing is written; a manager keeps everything else it had
@@ -53,7 +54,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { COST_CAPABILITY, DEFAULT_DELIVERY_ZONES, PROFIT_CAPABILITY, SHOP_SETTING_KEYS, hasCapability } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, DEFAULT_DELIVERY_ZONES, PROFIT_CAPABILITY, SHOP_SETTING_KEYS, hasCapability, shiftReportRules } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser, OrderStatus, UUID } from '@cheeseoclock/shared-types';
 import { BOARD_STATUSES, KITCHEN_TICKET_STATUSES, RECENT_AT_COUNTER_LIMIT } from '@cheeseoclock/pos-domain';
 
@@ -917,6 +918,52 @@ describe.skipIf(!Sqlite)("the owner's alone", () => {
       if (why) lockedOut.push(`${channel} — ${why}`);
     }
     expect(lockedOut).toEqual([]);
+  });
+
+  it("the shift report's switches (Settings → Printers → Shift report, v0.7.35) are the owner's alone: a cashier's or a manager's save is refused and nothing is saved; the owner's stays on this till, never synced; a bad value is refused", async () => {
+    const { getPrintPolicy } = await import('../../services/printer-config.js');
+    const rules = () => shiftReportRules(getPrintPolicy(db as never));
+    const firstRules = rules();
+    expect(firstRules).toMatchObject({ onClose: true, items: 'items' });
+    expect(Object.values(firstRules.sections).every((on) => on)).toBe(true);
+    const switched = {
+      ...getPrintPolicy(db as never),
+      shiftReportOnClose: false,
+      shiftReportSections: { orders: false, items: false },
+      shiftReportItems: 'categories',
+    };
+    const before = writtenRows();
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      expect({ who: who.role, o: await call('printer:setPolicy', switched) }).toEqual({
+        who: who.role,
+        o: { ok: false, code: 'forbidden', message: PRINTER_REFUSAL },
+      });
+    }
+    expect(writtenRows()).toEqual(before);
+    expect(rules()).toEqual(firstRules);
+
+    h.session = OWNER;
+    expect(await call('printer:setPolicy', { ...switched, shiftReportItems: 'none' })).toEqual({
+      ok: false,
+      code: 'validation_failed',
+      message: 'Items sold prints every item or the category totals',
+    });
+    expect(writtenRows()).toEqual(before);
+    expect(rules()).toEqual(firstRules);
+
+    expect(await call('printer:setPolicy', switched)).toEqual({ ok: true, data: { ok: true } });
+    expect(rules()).toEqual({
+      onClose: false,
+      sections: { ...firstRules.sections, orders: false, items: false },
+      items: 'categories',
+    });
+    const after = writtenRows();
+    expect({ audit: after['audit_log'], sync: after['sync_queue'], shop: after['business_settings'] }).toEqual({
+      audit: Number(before['audit_log']) + 1,
+      sync: before['sync_queue'],
+      shop: before['business_settings'],
+    });
   });
 
   it('profit too (costing spec Phase 9, owner 2026-09-27): the counter is refused as costs, a manager as profit, nothing is written; the owner may', async () => {
