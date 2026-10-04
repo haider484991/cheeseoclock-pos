@@ -6,7 +6,6 @@ import { initDatabase, closeDatabase } from './db/connection.js';
 import { runMigrations, MigrationFailedError } from './db/migrator.js';
 import { ensureDeviceInfo } from './db/repositories/device-repo.js';
 import { licenceService } from './services/licence/licence-service.js';
-import { backfillReceiptWebsiteLineAtStart } from './services/receipt-website-backfill.js';
 import { ensureSeedUsers } from './db/repositories/user-repo.js';
 import { ensureSeedMenu } from './db/seed.js';
 import { seedPriceHistoryOnce } from './services/costing-seed.js';
@@ -191,8 +190,6 @@ async function bootstrap() {
   // a restore leaves a permanent, hash-chained record inside the restored data.
   sealAllStoredSecrets(db);
   if (restore) recordAppliedRestore(db, restore);
-  // Tills from before v0.8 never stored a receipt website line: write theirs once.
-  backfillReceiptWebsiteLineAtStart(db);
 
   // COC_NO_SEED=1 keeps a dev database empty so the onboarding wizard (and its
   // restore path) can be exercised; production builds never seed.

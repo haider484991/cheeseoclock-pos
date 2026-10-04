@@ -87,11 +87,13 @@ export const PrinterConnectionConfigSchema = z
 
 /**
  * The first shop's own site. Tills set up before v0.8 never stored a website
- * line and printed this one by default; receipt-website-backfill.ts writes it
- * into their settings once at start, so they keep printing it. New tills get
- * '' (no website line) until the owner enters one.
+ * line and printed this one by default; legacyWebsiteLine keeps that for them
+ * when the line is read (their settings are not touched). New tills store
+ * '' (no website line) at first-time setup until the owner enters one.
  */
 export const LEGACY_WEBSITE_LINE = 'cheeseoclock.net';
+/** The website link's settings row (web-bridge-config.ts); only its siteUrl is read here, no secret is opened. */
+const WEB_BRIDGE_CONFIG_KEY = 'webBridge.config';
 /** The first shop's receipt name, as those same tills stored it. */
 export const LEGACY_STORE_NAME_PATTERN = /cheese\s*o['’]?\s*clock/i;
 /** Longest website the settings take (it prints on one or two receipt lines). */
@@ -166,7 +168,7 @@ export function setReceiptPrinterConfig(
 export function getReceiptBranding(db: AppDatabase): ReceiptBranding {
   const raw = getSettingRaw(db, BRANDING_KEY);
   const parsed = ReceiptBrandingSchema.safeParse(raw ?? {});
-  if (parsed.success) return withDefaultWebsite(parsed.data);
+  if (parsed.success) return withDefaultWebsite(db, parsed.data);
   // A website or an extra line that no longer passes the check must not cost
   // the shop its name, address and logo on every receipt: keep the rest,
   // print no website (or no extra lines).
@@ -179,10 +181,10 @@ export function getReceiptBranding(db: AppDatabase): ReceiptBranding {
       const retry = ReceiptBrandingSchema.safeParse(rest);
       if (!retry.success) continue;
       log.warn(`Receipt ${drop.join(' and ')} unreadable; printing receipts without it`);
-      return drop.includes('websiteLine') ? { ...retry.data, websiteLine: '' } : withDefaultWebsite(retry.data);
+      return drop.includes('websiteLine') ? { ...retry.data, websiteLine: '' } : withDefaultWebsite(db, retry.data);
     }
   }
-  return withDefaultWebsite(ReceiptBrandingSchema.parse({})); // returns defaults
+  return withDefaultWebsite(db, ReceiptBrandingSchema.parse({})); // returns defaults
 }
 
 /**
@@ -208,9 +210,37 @@ export function setReceiptExtraLines(db: AppDatabase, lines: string[], actorUser
   setSetting(db, BRANDING_KEY, { ...base, extraLines: [...lines] }, { actorUserId });
 }
 
-/** Never set (see ReceiptBrandingSchema.websiteLine): no website line. */
-function withDefaultWebsite(branding: ReceiptBranding): ReceiptBranding {
-  return branding.websiteLine === undefined ? { ...branding, websiteLine: '' } : branding;
+/** The host of a website link without "www."; null for no link or a bad one. */
+export function websiteHost(siteUrl: unknown): string | null {
+  if (typeof siteUrl !== 'string' || !siteUrl) return null;
+  try {
+    const host = new URL(siteUrl).hostname.toLowerCase();
+    return host.startsWith('www.') ? host.slice(4) : host;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Never set (see ReceiptBrandingSchema.websiteLine). Tills from before v0.8
+ * never stored the line and printed the first shop's site; their settings are
+ * left exactly as they are, and the line is worked out when read instead:
+ * the host of the website this till is linked to (Settings → Online orders),
+ * else the first shop's site on a till whose receipt name is that shop's,
+ * else none. First-time setup since v0.8 always stores the line, so a new
+ * till never reaches this.
+ */
+export function legacyWebsiteLine(db: AppDatabase, storeName: string): string {
+  const bridge = getSettingRaw(db, WEB_BRIDGE_CONFIG_KEY);
+  const linked = websiteHost(bridge && typeof bridge === 'object' ? (bridge as Record<string, unknown>)['siteUrl'] : null);
+  if (linked) return linked;
+  return LEGACY_STORE_NAME_PATTERN.test(storeName) ? LEGACY_WEBSITE_LINE : '';
+}
+
+function withDefaultWebsite(db: AppDatabase, branding: ReceiptBranding): ReceiptBranding {
+  return branding.websiteLine === undefined
+    ? { ...branding, websiteLine: legacyWebsiteLine(db, branding.storeName) }
+    : branding;
 }
 
 export function setReceiptBranding(

@@ -1,12 +1,12 @@
 /**
- * The one-time website-line backfill for tills from before v0.8, against a
- * real SQLite database built from every migration: nothing happens without
- * branding or when a line is already stored; a till linked to a website gets
- * that site's host; the first shop's till (by its receipt name) keeps the
- * site it always printed; any other till gets no line; running twice changes
- * nothing. Uses `node:sqlite` with a small `transaction()` shim (better-sqlite3
- * is built for Electron's ABI) and skips itself where node:sqlite is missing.
- * Every name is made up except the first shop's.
+ * The website line a till from before v0.8 prints when it never stored one,
+ * worked out when read — its settings are never written: a till linked to a
+ * website prints that site's host; the first shop's till (by its receipt
+ * name) keeps the site it always printed; any other till prints none; a
+ * stored line, even an empty one, wins. Against a real SQLite database built
+ * from every migration, with `node:sqlite` and a small `transaction()` shim
+ * (better-sqlite3 is built for Electron's ABI); skips itself where node:sqlite
+ * is missing. Every name is made up except the first shop's.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -16,13 +16,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppDatabase } from '../db/connection.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 
-const link = vi.hoisted(() => ({ siteUrl: null as string | null }));
-vi.mock('./web-bridge-config.js', () => ({ getWebBridgeConfig: () => ({ siteUrl: link.siteUrl }) }));
 vi.mock('electron-log/main', () => ({ default: { info: () => {}, warn: () => {}, error: () => {} } }));
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] }, app: { getPath: () => '.' } }));
 
-import { backfillReceiptWebsiteLine, websiteHost } from './receipt-website-backfill.js';
-import { BRANDING_KEY, getReceiptBranding } from './printer-config.js';
+import { BRANDING_KEY, getReceiptBranding, legacyWebsiteLine, websiteHost } from './printer-config.js';
 
 interface Stmt {
   run(...p: unknown[]): unknown;
@@ -76,6 +73,7 @@ function openMigrated(): AppDatabase {
 
 /** Exactly what tills up to v0.7.x stored: no website field. */
 const legacyBranding = (storeName: string) => ({ storeName, storeTagline: 'Test tagline', phoneLine: '0300 0000000' });
+const WEB_BRIDGE_CONFIG_KEY = 'webBridge.config';
 
 describe('websiteHost', () => {
   it('takes the host without www., and nothing from a bad or missing link', () => {
@@ -83,57 +81,46 @@ describe('websiteHost', () => {
     expect(websiteHost('https://orders.testshop.pk/menu')).toBe('orders.testshop.pk');
     expect(websiteHost('not a url')).toBeNull();
     expect(websiteHost(null)).toBeNull();
+    expect(websiteHost(42)).toBeNull();
   });
 });
 
-describe.skipIf(!Sqlite)('receipt website line backfill', () => {
+describe.skipIf(!Sqlite)('the website line a till from before v0.8 prints', () => {
   let db: AppDatabase;
   beforeEach(() => {
     db = openMigrated();
-    link.siteUrl = null;
   });
 
-  it('does nothing on a till with no branding yet (first-time setup writes the line itself)', () => {
-    expect(backfillReceiptWebsiteLine(db)).toEqual({ kind: 'none', why: 'no-branding' });
-    expect(getSettingRaw(db, BRANDING_KEY)).toBeNull();
-  });
-
-  it('a till linked to a website prints that site, without www.', () => {
+  it('a till linked to a website prints that site, without www. — and nothing is written to its settings', () => {
     setSetting(db, BRANDING_KEY, legacyBranding('Test Shop'));
-    link.siteUrl = 'https://www.testshop.pk';
-    expect(backfillReceiptWebsiteLine(db)).toEqual({ kind: 'written', websiteLine: 'testshop.pk', from: 'website-link' });
+    setSetting(db, WEB_BRIDGE_CONFIG_KEY, { enabled: true, siteUrl: 'https://www.testshop.pk', bridgeSecret: 'sealed:x', pollIntervalMs: 20_000 });
     expect(getReceiptBranding(db).websiteLine).toBe('testshop.pk');
     expect(getReceiptBranding(db).storeName).toBe('Test Shop');
+    expect(getSettingRaw(db, BRANDING_KEY)).toEqual(legacyBranding('Test Shop'));
   });
 
   it("the first shop's till keeps printing its own site, with or without the apostrophe", () => {
     setSetting(db, BRANDING_KEY, legacyBranding('Cheese O Clock'));
-    expect(backfillReceiptWebsiteLine(db)).toEqual({ kind: 'written', websiteLine: 'cheeseoclock.net', from: 'first-shop' });
     expect(getReceiptBranding(db).websiteLine).toBe('cheeseoclock.net');
-
-    const db2 = openMigrated();
-    setSetting(db2, BRANDING_KEY, legacyBranding("Cheese O'Clock"));
-    expect(backfillReceiptWebsiteLine(db2).kind).toBe('written');
-    expect(getReceiptBranding(db2).websiteLine).toBe('cheeseoclock.net');
+    expect(legacyWebsiteLine(db, "Cheese O'Clock")).toBe('cheeseoclock.net');
+    expect(legacyWebsiteLine(db, 'CHEESE O’CLOCK')).toBe('cheeseoclock.net');
+    expect(getSettingRaw(db, BRANDING_KEY)).toEqual(legacyBranding('Cheese O Clock'));
   });
 
-  it('any other till gets no website line — never the first shop’s', () => {
+  it('any other till prints no website line — never the first shop’s', () => {
     setSetting(db, BRANDING_KEY, legacyBranding('Test Shop'));
-    expect(backfillReceiptWebsiteLine(db)).toEqual({ kind: 'written', websiteLine: '', from: 'empty' });
     expect(getReceiptBranding(db).websiteLine).toBe('');
+    expect(legacyWebsiteLine(db, 'Test Shop')).toBe('');
   });
 
-  it('a stored line, even an empty one, is left alone; a second run changes nothing', () => {
+  it('a stored line wins, even an empty one — and a bad link is ignored', () => {
     setSetting(db, BRANDING_KEY, { ...legacyBranding('Cheese O Clock'), websiteLine: '' });
-    expect(backfillReceiptWebsiteLine(db)).toEqual({ kind: 'none', why: 'already-set' });
+    setSetting(db, WEB_BRIDGE_CONFIG_KEY, { enabled: true, siteUrl: 'https://www.testshop.pk' });
     expect(getReceiptBranding(db).websiteLine).toBe('');
-
-    const db2 = openMigrated();
-    setSetting(db2, BRANDING_KEY, legacyBranding('Test Shop'));
-    link.siteUrl = 'https://testshop.pk';
-    expect(backfillReceiptWebsiteLine(db2).kind).toBe('written');
-    link.siteUrl = 'https://other.example';
-    expect(backfillReceiptWebsiteLine(db2)).toEqual({ kind: 'none', why: 'already-set' });
-    expect(getReceiptBranding(db2).websiteLine).toBe('testshop.pk');
+    setSetting(db, BRANDING_KEY, { ...legacyBranding('Test Shop'), websiteLine: 'myshop.pk' });
+    expect(getReceiptBranding(db).websiteLine).toBe('myshop.pk');
+    setSetting(db, BRANDING_KEY, legacyBranding('Test Shop'));
+    setSetting(db, WEB_BRIDGE_CONFIG_KEY, { enabled: false, siteUrl: 'not a url' });
+    expect(getReceiptBranding(db).websiteLine).toBe('');
   });
 });
