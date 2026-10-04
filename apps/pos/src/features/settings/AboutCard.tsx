@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
 import { Card } from '@cheeseoclock/ui';
-import { DEFAULT_SHOP_PROFILE } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { Info, Pizza, Heart, Mail, Phone, Code2 } from 'lucide-react';
 import { StoreLogo } from './StoreLogo';
@@ -43,7 +42,7 @@ export function AboutCard() {
         />
         <div className="min-w-0 flex-1">
           <div className="text-xl font-bold tracking-tight">
-            {brandingQ.data?.branding.storeName ?? DEFAULT_SHOP_PROFILE.name}
+            {brandingQ.data?.branding.storeName ?? 'My Store'}
           </div>
           <div className="text-sm text-stone-500">
             {brandingQ.data?.branding.storeTagline ?? 'Modern POS for restaurants & cafés'}

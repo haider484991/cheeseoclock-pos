@@ -28,7 +28,7 @@ import {
   type ShopDetailsForm,
 } from './shopDetailsForm';
 
-const DEFAULT_NAME = 'Cheese O Clock';
+const DEFAULT_NAME = 'My Store';
 /** The till refuses a longer one (printer-config.ts WEBSITE_MAX_CHARS). */
 const WEBSITE_MAX_CHARS = 60;
 
@@ -141,21 +141,21 @@ export function BrandingSettings() {
               hint="At the bottom of receipts."
               value={branchLine}
               onChange={setField('branchLine')}
-              placeholder="DHA Phase 6, Karachi"
+              placeholder="Shop 3, Main Boulevard, Gulshan, Karachi"
             />
             <Field
               label="Phone"
               hint="At the bottom, under the address."
               value={phoneLine}
               onChange={setField('phoneLine')}
-              placeholder="0300 9367865"
+              placeholder="0300 1234567"
             />
             <Field
               label="Website"
               hint="At the bottom, under the phone. Leave empty for none."
               value={websiteLine}
               onChange={setField('websiteLine')}
-              placeholder="cheeseoclock.net"
+              placeholder="yourshop.pk"
               maxLength={WEBSITE_MAX_CHARS}
             />
           </div>
@@ -164,7 +164,7 @@ export function BrandingSettings() {
             hint="Printed at the very bottom of customer receipts and bills."
             value={footerLine}
             onChange={setField('footerLine')}
-            placeholder="Thank you — order again on www.cheeseoclock.net"
+            placeholder="Thank you — see you again soon"
           />
 
           <div className="flex items-center justify-end gap-3 border-t border-stone-200 pt-4 dark:border-stone-700">

@@ -214,7 +214,7 @@ describe.skipIf(!Sqlite)('first-time setup through system:completeOnboarding', (
 });
 
 describe.skipIf(!Sqlite)('system:getBranding (the sign-in screen, before anyone logs in)', () => {
-  it('answers the receipt’s name and the website’s name for the shop — today’s until the owner saves another', async () => {
+  it('answers the receipt’s name, and the website’s name for the shop only once the owner saved one (never the built-in first shop’s)', async () => {
     const { registerSystemHandlers } = await import('./system-handlers.js');
     const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
     const { DEFAULT_SHOP_PROFILE } = await import('@cheeseoclock/shared-types');
@@ -226,7 +226,9 @@ describe.skipIf(!Sqlite)('system:getBranding (the sign-in screen, before anyone 
     const ctx = { db, deviceId: 'dev-A' };
     registerSystemHandlers(ctx as never);
     const branding = registered.get('system:getBranding')!;
-    expect(await branding(ctx, undefined)).toMatchObject({ ok: true, data: { shopName: "Cheese O'Clock" } });
+    const beforeSave = (await branding(ctx, undefined)) as { ok: boolean; data: { storeName: string; shopName?: string } };
+    expect(beforeSave).toMatchObject({ ok: true, data: { storeName: 'My Store' } });
+    expect(beforeSave.data.shopName).toBeUndefined();
     // The owner's Save of Shop details (made-up name) — synced, both tills.
     setBusinessSetting(db, 'shop.profile', { ...structuredClone(DEFAULT_SHOP_PROFILE), name: 'Test Shop' } as never, { userId: 'u_owner', deviceId: 'dev-A' });
     expect(await branding(ctx, undefined)).toMatchObject({ ok: true, data: { shopName: 'Test Shop' } });

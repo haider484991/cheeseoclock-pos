@@ -410,16 +410,19 @@ function sources(dir: string): string[] {
 }
 
 describe('M6: one fallback name for the till’s own screens', () => {
-  it('the sign-in screen, About and the menu bar fall back to the website’s default name — no other hand-typed name fallback in the till’s screens', () => {
-    expect(read('features/auth/LoginPage.tsx')).toMatch(/storeName \?\? brandingQ\.data\?\.shopName \?\? DEFAULT_SHOP_PROFILE\.name/);
-    expect(read('features/settings/AboutCard.tsx')).toMatch(/storeName \?\? DEFAULT_SHOP_PROFILE\.name/);
-    expect(read('features/shell/Sidebar.tsx')).toMatch(/storeName \?\? DEFAULT_SHOP_PROFILE\.name/);
+  it('the sign-in screen and the menu bar show nothing until the till’s own name is known, About says "My Store" — never the first shop’s name, no other hand-typed fallback', () => {
+    expect(read('features/auth/LoginPage.tsx')).toMatch(/storeName \?\? brandingQ\.data\?\.shopName \?\? ''/);
+    expect(read('features/settings/AboutCard.tsx')).toMatch(/storeName \?\? 'My Store'/);
+    expect(read('features/shell/Sidebar.tsx')).toMatch(/storeName \?\? ''/);
+    for (const f of ['features/auth/LoginPage.tsx', 'features/settings/AboutCard.tsx', 'features/shell/Sidebar.tsx']) {
+      expect(read(f)).not.toMatch(/DEFAULT_SHOP_PROFILE|Cheese O/);
+    }
     const handTyped = sources(SRC).filter((p) => /\?\?\s*['"`]Cheese\s?O'?\s?Clock/i.test(readFileSync(p, 'utf8')));
     expect(handTyped).toEqual([]);
   });
 
   it('the printed receipt keeps its own default (not this setting): Receipt branding’s name is untouched', () => {
-    expect(read('features/settings/BrandingSettings.tsx')).toMatch(/const DEFAULT_NAME = 'Cheese O Clock';/);
+    expect(read('features/settings/BrandingSettings.tsx')).toMatch(/const DEFAULT_NAME = 'My Store';/);
     expect(read('features/settings/BrandingSettings.tsx')).toMatch(/Receipt: shop details \(this till\)/);
   });
 

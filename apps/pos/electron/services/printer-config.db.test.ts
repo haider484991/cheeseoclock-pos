@@ -118,19 +118,19 @@ beforeEach(() => {
 });
 
 describe.skipIf(!DatabaseSync)('the website at the bottom of receipts', () => {
-  it("a till that never set one (branding saved by v0.7.7, or none at all) reads the shop's own site", async () => {
-    const { getReceiptBranding, BRANDING_KEY, DEFAULT_WEBSITE_LINE } = await cfg();
+  it('a till that never set one (branding saved by v0.7.7, or none at all) prints no website line — never another shop’s', async () => {
+    const { getReceiptBranding, BRANDING_KEY } = await cfg();
     const { setSetting } = await import('../db/repositories/settings-repo.js');
-    expect(DEFAULT_WEBSITE_LINE).toBe('cheeseoclock.net');
-    expect(getReceiptBranding(db).websiteLine).toBe('cheeseoclock.net');
-    // Exactly what v0.7.7 stored: no website field.
+    expect(getReceiptBranding(db).websiteLine).toBe('');
+    expect(getReceiptBranding(db).storeName).toBe('My Store');
+    // Exactly what v0.7.7 stored: no website field (receipt-website-backfill.ts fills it once at start).
     setSetting(db, BRANDING_KEY, { storeName: 'Test Shop', storeTagline: 'Test tagline', branchLine: 'Test Street 1', phoneLine: '0300 0000000' });
     expect(getReceiptBranding(db)).toEqual({
       storeName: 'Test Shop',
       storeTagline: 'Test tagline',
       branchLine: 'Test Street 1',
       phoneLine: '0300 0000000',
-      websiteLine: 'cheeseoclock.net',
+      websiteLine: '',
     });
   });
 

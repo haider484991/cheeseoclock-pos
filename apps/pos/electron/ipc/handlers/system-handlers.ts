@@ -7,7 +7,7 @@ import { ensureDeviceInfo } from '../../db/repositories/device-repo.js';
 import { createUser } from '../../db/repositories/user-repo.js';
 import { createTaxCategory } from '../../db/repositories/tax-category-repo.js';
 import { getReceiptBranding, setReceiptBranding } from '../../services/printer-config.js';
-import { readShopProfile } from '../../db/business-settings-read.js';
+import { readShopSetting } from '../../db/business-settings-read.js';
 import { tillClose } from '../../services/till-close-hub.js';
 
 /** The close question's id, as the screen sent it back. */
@@ -26,11 +26,14 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
   // and the shop's name as the website shows it (public: it is on every page).
   defineHandler('system:getBranding', ctx, () => {
     const b = getReceiptBranding(ctx.db);
+    // The website's shop name only once the owner saved one: the built-in
+    // default is the first shop's, and must never show on another shop's till.
+    const profile = readShopSetting(ctx.db, 'shop.profile');
     return ok({
       storeName: b.storeName,
       storeTagline: b.storeTagline ?? null,
       logoUrl: b.logoUrl ?? null,
-      shopName: readShopProfile(ctx.db).name,
+      ...(profile.isDefault ? {} : { shopName: profile.value.name }),
     });
   });
 
@@ -136,6 +139,8 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
             ...(payload.phoneLine ? { phoneLine: payload.phoneLine } : {}),
             ...(payload.footerLine ? { footerLine: payload.footerLine } : {}),
             ...(payload.logoUrl ? { logoUrl: payload.logoUrl } : {}),
+            // Always stored, so no till ever prints another shop's site by default.
+            websiteLine: (payload.websiteLine ?? '').trim().slice(0, 60),
           });
 
           // Tax categories — only insert if the user picked some

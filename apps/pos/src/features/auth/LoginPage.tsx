@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Button, NumberPad, cn } from '@cheeseoclock/ui';
 import { PIN_MAX_DIGITS, normalizeSecret, secretProblem } from '@cheeseoclock/shared-schemas/sign-in-secret';
-import { DEFAULT_SHOP_PROFILE } from '@cheeseoclock/shared-types';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useToast } from '../../components/toast/ToastProvider';
 import { SecretInput } from '../../components/secret/SecretInput';
@@ -116,7 +115,8 @@ export function LoginPage() {
   const isDev = versionQ.data?.isDev ?? false;
   const logoUrl = brandingQ.data?.logoUrl ?? undefined;
   // M6: one fallback name while the branding loads — the website's name for the shop (both tills), then today's.
-  const storeName = brandingQ.data?.storeName ?? brandingQ.data?.shopName ?? DEFAULT_SHOP_PROFILE.name;
+  // Nothing until the till's own name is known: never another shop's name on the PIN screen.
+  const storeName = brandingQ.data?.storeName ?? brandingQ.data?.shopName ?? '';
   const tagline = brandingQ.data?.storeTagline ?? undefined;
 
   useEffect(() => {

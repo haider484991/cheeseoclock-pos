@@ -256,6 +256,8 @@ export interface IpcContract {
       phoneLine?: string;
       footerLine?: string;
       logoUrl?: string;
+      /** The shop's own website for the bottom of receipts; none when empty or absent. */
+      websiteLine?: string;
       taxCategories: Array<{ name: string; rateBps: number }>;
       admin: { fullName: string; pin: string };
     };

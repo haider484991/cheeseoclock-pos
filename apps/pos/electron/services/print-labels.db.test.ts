@@ -1122,7 +1122,7 @@ describe.skipIf(!DatabaseSync)('who and when', () => {
 });
 
 describe.skipIf(!DatabaseSync)('the shop on paper (owner 2026-09-27)', () => {
-  it("a till that never set a website prints the shop's own at the bottom, under the address and phone; the name on top with no logo", async () => {
+  it('a till that never set a website prints no website line under the address and phone (never another shop’s); the name on top with no logo', async () => {
     const s = await spooler();
     await policy({ kitchenTicket: false });
     const cfg = await import('./printer-config.js');
@@ -1141,7 +1141,7 @@ describe.skipIf(!DatabaseSync)('the shop on paper (owner 2026-09-27)', () => {
     expect(lines.slice(0, 4)).toEqual(['Test Shop', 'Test tagline', '', 'RECEIPT']);
     const address = lines.indexOf('Test Street 1');
     expect(address).toBeGreaterThan(lines.indexOf('PAID - CASH'));
-    expect(lines.slice(address, address + 4)).toEqual(['Test Street 1', '0300 0000000', 'cheeseoclock.net', 'Test thanks']);
+    expect(lines.slice(address, address + 3)).toEqual(['Test Street 1', '0300 0000000', 'Test thanks']);
 
     // Cleared in Settings: no website line at all.
     cfg.setReceiptBranding(db, { ...cfg.getReceiptBranding(db), websiteLine: '' });

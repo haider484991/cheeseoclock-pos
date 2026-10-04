@@ -85,22 +85,28 @@ export const PrinterConnectionConfigSchema = z
     }
   });
 
-/** The shop's own site: printed at the bottom of receipts on a till that never set a website. */
-export const DEFAULT_WEBSITE_LINE = 'cheeseoclock.net';
+/**
+ * The first shop's own site. Tills set up before v0.8 never stored a website
+ * line and printed this one by default; receipt-website-backfill.ts writes it
+ * into their settings once at start, so they keep printing it. New tills get
+ * '' (no website line) until the owner enters one.
+ */
+export const LEGACY_WEBSITE_LINE = 'cheeseoclock.net';
+/** The first shop's receipt name, as those same tills stored it. */
+export const LEGACY_STORE_NAME_PATTERN = /cheese\s*o['’]?\s*clock/i;
 /** Longest website the settings take (it prints on one or two receipt lines). */
 export const WEBSITE_MAX_CHARS = 60;
 
 export const ReceiptBrandingSchema = z.object({
-  storeName: z.string().min(1).default('Cheese O Clock'),
+  storeName: z.string().min(1).default('My Store'),
   storeTagline: z.string().optional(),
   branchLine: z.string().optional(),
   phoneLine: z.string().optional(),
   /**
    * The website at the bottom of customer receipts, under the phone. '' =
-   * none (the owner cleared it). Not there at all (a till set up before
-   * 0.7.8, or by first-time setup) = the shop's own site: getReceiptBranding
-   * fills in DEFAULT_WEBSITE_LINE, so existing tills print it without anyone
-   * saving the settings again, and clearing it is still possible.
+   * none. Not there at all = none too (first-time setup always writes it;
+   * tills from before v0.8 get theirs written once at start by
+   * receipt-website-backfill.ts).
    */
   websiteLine: z
     .string()
@@ -202,9 +208,9 @@ export function setReceiptExtraLines(db: AppDatabase, lines: string[], actorUser
   setSetting(db, BRANDING_KEY, { ...base, extraLines: [...lines] }, { actorUserId });
 }
 
-/** Never set (see ReceiptBrandingSchema.websiteLine): the shop's own site. */
+/** Never set (see ReceiptBrandingSchema.websiteLine): no website line. */
 function withDefaultWebsite(branding: ReceiptBranding): ReceiptBranding {
-  return branding.websiteLine === undefined ? { ...branding, websiteLine: DEFAULT_WEBSITE_LINE } : branding;
+  return branding.websiteLine === undefined ? { ...branding, websiteLine: '' } : branding;
 }
 
 export function setReceiptBranding(

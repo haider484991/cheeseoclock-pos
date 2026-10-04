@@ -57,6 +57,7 @@ export function OnboardingPage({ onComplete }: Props) {
   const [storeTagline, setStoreTagline] = useState('');
   const [phoneLine, setPhoneLine] = useState('');
   const [branchLine, setBranchLine] = useState('');
+  const [websiteLine, setWebsiteLine] = useState('');
 
   // Step 2
   const [taxRows, setTaxRows] = useState<TaxRow[]>(DEFAULT_TAX_PRESETS);
@@ -74,6 +75,7 @@ export function OnboardingPage({ onComplete }: Props) {
         ...(storeTagline.trim() ? { storeTagline: storeTagline.trim() } : {}),
         ...(branchLine.trim() ? { branchLine: branchLine.trim() } : {}),
         ...(phoneLine.trim() ? { phoneLine: phoneLine.trim() } : {}),
+        ...(websiteLine.trim() ? { websiteLine: websiteLine.trim() } : {}),
         ...(logoUrl ? { logoUrl } : {}),
         taxCategories: taxRows.filter((r) => r.name.trim()),
         admin: { fullName: adminName.trim(), pin: normalizeSecret(pin) },
@@ -208,7 +210,7 @@ export function OnboardingPage({ onComplete }: Props) {
                   value={storeName}
                   autoFocus
                   onChange={(e) => setStoreName(e.target.value)}
-                  placeholder="e.g. Cheese O Clock"
+                  placeholder="e.g. Karachi Grill House"
                   className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-base dark:border-stone-700 dark:bg-stone-800"
                 />
               </Field>
@@ -243,6 +245,17 @@ export function OnboardingPage({ onComplete }: Props) {
                   />
                 </Field>
               </div>
+
+              <Field label="Website (optional — printed at the bottom of receipts)">
+                <input
+                  type="text"
+                  value={websiteLine}
+                  onChange={(e) => setWebsiteLine(e.target.value)}
+                  placeholder="yourshop.pk"
+                  maxLength={60}
+                  className="w-full rounded-xl border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
+                />
+              </Field>
             </div>
           )}
 

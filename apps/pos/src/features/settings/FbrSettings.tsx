@@ -248,7 +248,7 @@ export function FbrSettings() {
           label="Registered business name"
           value={sellerBusinessName}
           onChange={setSellerBusinessName}
-          placeholder="Cheese O Clock (Pvt) Ltd"
+          placeholder="Your registered business name"
         />
         <Field
           label="Business address"

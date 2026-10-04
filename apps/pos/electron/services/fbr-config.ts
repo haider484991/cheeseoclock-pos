@@ -3,6 +3,7 @@ import type { AppDatabase } from '../db/connection.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import type { FbrAdapterConfig, FbrMode } from '@cheeseoclock/fbr-core';
 import { openSecret, sealSecret } from './secret-seal.js';
+import { getReceiptBranding } from './printer-config.js';
 
 export const FBR_CONFIG_KEY = 'fbr.config';
 
@@ -11,7 +12,8 @@ export const FbrConfigSchema = z.object({
   endpoint: z.string().url().optional(),
   bearerToken: z.string().optional(),
   sellerNTNCNIC: z.string().default(''),
-  sellerBusinessName: z.string().default('Cheese O Clock'),
+  /** '' = use the receipt's shop name (getFbrConfig fills it in). */
+  sellerBusinessName: z.string().default(''),
   sellerProvince: z.string().default('Sindh'),
   sellerAddress: z.string().default(''),
   /** Pause the worker without changing mode (useful when reconfiguring). */
@@ -27,7 +29,13 @@ export function getFbrConfig(db: AppDatabase): FbrConfig {
   const parsed = FbrConfigSchema.safeParse(raw ?? {});
   const cfg = parsed.success ? parsed.data : DEFAULT_CONFIG;
   // Sealed with the OS keychain at rest; unreadable on another PC → absent.
-  return { ...cfg, bearerToken: openSecret(cfg.bearerToken).value };
+  // No seller name saved = the shop's receipt name, so FBR invoices carry the
+  // shop's own name and never another shop's.
+  return {
+    ...cfg,
+    sellerBusinessName: cfg.sellerBusinessName || getReceiptBranding(db).storeName,
+    bearerToken: openSecret(cfg.bearerToken).value,
+  };
 }
 
 /**
