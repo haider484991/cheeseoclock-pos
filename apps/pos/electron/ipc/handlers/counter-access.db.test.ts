@@ -90,6 +90,8 @@ vi.mock('electron-log/main', () => ({ default: { info: () => {}, warn: () => {},
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
   app: { getPath: () => '' },
+  // The owner's "Save list as file" (customers:exportCsv) asks where to save; here nobody answers.
+  dialog: { showSaveDialog: async () => ({ canceled: true, filePath: undefined }) },
   safeStorage: { isEncryptionAvailable: () => false },
   Notification: class {
     static isSupported() {
@@ -361,6 +363,8 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   'customers:searchAddresses': { query: 'House', limit: 6 },
   'customers:setDefaultAddress': { addressId: s.ayeshaOffice },
   'customers:deleteAddress': { addressId: s.sanaHome },
+  // Removing a person (customers.manage): a manager may; nobody here, so no seeded customer goes.
+  'customers:delete': { id: 'c_nobody' },
   'customers:orderHistory': { customerId: s.ayesha, limit: 20 },
   'orders:list': {},
   'orders:history': {},
@@ -505,6 +509,8 @@ const OWNER_ONLY = (): Record<string, unknown> => ({
   // FBR's settings and sending the failed invoices again (settings.manage: never a manager's).
   'fbr:setConfig': { mode: 'noop' },
   'fbr:retryFailed': undefined,
+  // The whole customer book as a file (owner only); the save box is answered 'cancel' by the electron mock.
+  'customers:exportCsv': undefined,
   // The owner's shop rules (Settings → foodpanda …, 2026-09-27): reading a card
   // (commission, fees) and saving one, or putting its default back.
   ...SHOP_SETTINGS_OWNER_ONLY(),

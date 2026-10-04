@@ -327,7 +327,7 @@ async function settle(): Promise<void> {
 const decode = (s: string) => s.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
 const text = (markup: string) => decode(markup.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 /** Node's ICU may write the space before am/pm as U+202F. */
-const plainSpaces = (s: string) => s.replace(/ /g, ' ');
+const plainSpaces = (s: string) => s.replace(/\u202f/g, ' ');
 const sha256 = (s: string) => createHash('sha256').update(plainSpaces(s), 'utf8').digest('hex');
 
 /** 8:00 pm in Pakistan (UTC+5) on 1 Oct 2026, the screens' "now". */
