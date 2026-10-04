@@ -21,7 +21,6 @@ import {
   DAY_NOTE_TAGS,
   DELIVERY_FEE_MAX_CENTS,
   DELIVERY_PLACES,
-  DELIVERY_ZONES,
   DELIVERY_ZONES_MAX,
   DELIVERY_ZONE_GROUP_MAX,
   DELIVERY_ZONE_ID_MAX,
@@ -864,16 +863,9 @@ const zonesWriteRules = (
       return;
     }
   }
-  // The released areas are what every version knows (and the website's pages): switch one off, never remove it.
-  const ids = new Set(zones.map((zn) => zn.id));
-  const missing = DELIVERY_ZONES.find((zn) => !ids.has(zn.id));
-  if (missing) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: `${missing.name} is one of the shop’s own areas: switch it off instead of removing it`,
-    });
-    return;
-  }
+  // Since v0.8 a shop may keep only the areas it delivers to — none at all, or
+  // a list without the built-in Karachi ones. An area saved addresses still
+  // name is protected where the list is saved (delivery-zones-repo.ts), not here.
   // A landmark ("Khayaban-e-Ittehad") lies in areas of one group: the till asks "which phase?" within it.
   const groupOf = new Map(zones.map((zn) => [zn.id, zn.group.trim().toLowerCase()]));
   for (const p of DELIVERY_PLACES) {
@@ -891,7 +883,8 @@ const zonesWriteRules = (
 const zonesList = <T extends z.ZodTypeAny>(item: T) =>
   z
     .array(item)
-    .min(1, { message: 'Keep at least one delivery area' })
+    // None is allowed: a shop that does not deliver, or one that has not set
+    // its areas up yet (first-time setup since v0.8 saves an empty list).
     .max(DELIVERY_ZONES_MAX, { message: `At most ${DELIVERY_ZONES_MAX} delivery areas, switched-off ones included` });
 
 /** 'delivery.zones' as this version writes it. */

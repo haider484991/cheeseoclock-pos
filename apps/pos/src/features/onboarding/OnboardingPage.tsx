@@ -58,6 +58,8 @@ export function OnboardingPage({ onComplete }: Props) {
   const [phoneLine, setPhoneLine] = useState('');
   const [branchLine, setBranchLine] = useState('');
   const [websiteLine, setWebsiteLine] = useState('');
+  const [deliveryCity, setDeliveryCity] = useState('Karachi');
+  const [deliveryAreas, setDeliveryAreas] = useState<'none' | 'karachi-dha-clifton'>('none');
 
   // Step 2
   const [taxRows, setTaxRows] = useState<TaxRow[]>(DEFAULT_TAX_PRESETS);
@@ -76,6 +78,8 @@ export function OnboardingPage({ onComplete }: Props) {
         ...(branchLine.trim() ? { branchLine: branchLine.trim() } : {}),
         ...(phoneLine.trim() ? { phoneLine: phoneLine.trim() } : {}),
         ...(websiteLine.trim() ? { websiteLine: websiteLine.trim() } : {}),
+        deliveryCity: deliveryCity.trim() || 'Karachi',
+        deliveryAreas,
         ...(logoUrl ? { logoUrl } : {}),
         taxCategories: taxRows.filter((r) => r.name.trim()),
         admin: { fullName: adminName.trim(), pin: normalizeSecret(pin) },
@@ -256,6 +260,28 @@ export function OnboardingPage({ onComplete }: Props) {
                   className="w-full rounded-xl border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
                 />
               </Field>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="City (on delivery addresses)">
+                  <input
+                    type="text"
+                    value={deliveryCity}
+                    onChange={(e) => setDeliveryCity(e.target.value)}
+                    maxLength={40}
+                    className="w-full rounded-xl border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
+                  />
+                </Field>
+                <Field label="Delivery areas">
+                  <select
+                    value={deliveryAreas}
+                    onChange={(e) => setDeliveryAreas(e.target.value as 'none' | 'karachi-dha-clifton')}
+                    className="w-full rounded-xl border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
+                  >
+                    <option value="none">None yet — add them in Settings → Delivery areas</option>
+                    <option value="karachi-dha-clifton">Karachi: DHA Phases 1–8 & Clifton Blocks 1–9 (Rs 200/250)</option>
+                  </select>
+                </Field>
+              </div>
             </div>
           )}
 

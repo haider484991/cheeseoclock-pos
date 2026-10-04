@@ -34,6 +34,7 @@ import { useBackupSummary } from './useBackupSummary';
 import { WebsiteSettings } from './WebsiteSettings';
 import { AboutCard } from './AboutCard';
 import { LicenceCard } from './LicenceCard';
+import { DeliveryCityCard } from './DeliveryCityCard';
 import { FoodpandaSettings } from './FoodpandaSettings';
 import { MoneySettings } from './MoneySettings';
 import { TimingSettings } from './TimingSettings';
@@ -182,7 +183,12 @@ export function SettingsPage() {
       <div role="tabpanel" className="space-y-6">
         {tab === 'foodpanda' && <FoodpandaSettings />}
         {tab === 'money' && <MoneySettings />}
-        {tab === 'delivery' && <DeliveryAreasSettings />}
+        {tab === 'delivery' && (
+          <>
+            <DeliveryCityCard />
+            <DeliveryAreasSettings />
+          </>
+        )}
         {tab === 'timing' && <TimingSettings />}
         {tab === 'stock' && <KitchenStockSettings />}
         {tab === 'store' && (

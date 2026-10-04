@@ -9,6 +9,9 @@ import { createTaxCategory } from '../../db/repositories/tax-category-repo.js';
 import { getReceiptBranding, setReceiptBranding } from '../../services/printer-config.js';
 import { readShopSetting } from '../../db/business-settings-read.js';
 import { tillClose } from '../../services/till-close-hub.js';
+import { readTillSetting, setTillSetting } from '../../services/till-settings.js';
+import { saveDeliveryZones } from '../../db/repositories/delivery-zones-repo.js';
+import { getCurrentSession } from '../../services/auth-service.js';
 
 /** The close question's id, as the screen sent it back. */
 function closeRequestId(payload: unknown): string {
@@ -43,6 +46,13 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
       isDev: !app.isPackaged,
     }),
   );
+
+  // The counter writes the city on every delivery address; any signed-in
+  // user may read it (the owner changes it in Settings → Delivery areas).
+  defineHandler('system:getDeliveryCity', ctx, () => {
+    if (!getCurrentSession()) throw new IpcGuardError({ code: 'unauthenticated', message: 'Not logged in' });
+    return ok({ city: readTillSetting(ctx.db, 'delivery.city') });
+  });
 
   defineHandler('system:getDeviceInfo', ctx, () => {
     const info = ensureDeviceInfo(ctx.db);
@@ -151,6 +161,18 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
               { name: t.name.trim(), rateBps: t.rateBps },
               actor,
             );
+          }
+
+          // Where the shop delivers: its city on every address this till saves,
+          // and its areas — the built-in Karachi list, or none to start with.
+          // Absent (an older screen) = nothing written, as before.
+          if (payload.deliveryCity !== undefined) {
+            setTillSetting(ctx.db, { key: 'delivery.city', value: payload.deliveryCity.trim() }, null);
+          }
+          if (payload.deliveryAreas === 'karachi-dha-clifton') {
+            saveDeliveryZones(ctx.db, { useDefault: true }, actor);
+          } else if (payload.deliveryAreas === 'none') {
+            saveDeliveryZones(ctx.db, { zones: [] }, actor);
           }
         },
       },

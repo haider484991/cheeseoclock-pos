@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  DELIVERY_CITY_MAX_CHARS,
   OPENING_FLOAT_MAX_CENTS,
   RECEIPT_EXTRA_LINE_MAX_CHARS,
   RECEIPT_EXTRA_LINES_MAX,
@@ -60,6 +61,13 @@ export const openingFloatSchema = z
   .strict()
   .transform((s): OpeningFloatSetting => (s.mode === 'lastCount' ? { mode: 'lastCount', fixedCents: 0 } : s));
 
+/** 'delivery.city': one city name for this till's delivery addresses. */
+const deliveryCitySchema = z
+  .string()
+  .trim()
+  .min(1, { message: 'Give the city a name' })
+  .max(DELIVERY_CITY_MAX_CHARS, { message: `Keep the city to ${DELIVERY_CITY_MAX_CHARS} letters` });
+
 /** 'pc.power': two yes/no answers, nothing else. */
 export const pcPowerSchema = z
   .object({
@@ -73,6 +81,7 @@ export const TILL_SETTING_SCHEMAS: { readonly [K in TillSettingKey]: z.ZodType<T
   'receipt.extraLines': receiptExtraLinesSchema,
   'drawer.openingFloat': openingFloatSchema,
   'pc.power': pcPowerSchema,
+  'delivery.city': deliveryCitySchema,
 };
 
 /** settings:setTill: a key and its value, or "Put back the default". The value is checked by the key's schema. */

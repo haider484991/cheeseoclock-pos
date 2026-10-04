@@ -37,6 +37,7 @@ const STORED_AS: { readonly [K in TillSettingKey]: { row: string; field: string 
   'receipt.extraLines': { row: BRANDING_KEY, field: 'extraLines' },
   'drawer.openingFloat': { row: OPENING_FLOAT_KEY, field: null },
   'pc.power': { row: PC_POWER_KEY, field: null },
+  'delivery.city': { row: 'delivery.city', field: null },
 };
 
 /** Changes shown under a card. */

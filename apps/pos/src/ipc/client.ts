@@ -58,6 +58,7 @@ export const ipc = {
     getDeviceInfo: () => unwrap(window.api.system.getDeviceInfo()),
     getBranding: () => unwrap(window.api.system.getBranding()),
     getSetupStatus: () => unwrap(window.api.system.getSetupStatus()),
+    getDeliveryCity: () => unwrap(window.api.system.getDeliveryCity()),
     completeOnboarding: (input: IpcRequest<'system:completeOnboarding'>) =>
       unwrap(window.api.system.completeOnboarding(input)),
     /** "Close the till?" is on screen; pending false = out of date, drop it. */

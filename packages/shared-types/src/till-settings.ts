@@ -20,7 +20,15 @@
  */
 
 /** The keys the "this till" Settings cards edit (settings:getTill / settings:setTill). */
-export const TILL_SETTING_KEYS = ['receipt.extraLines', 'drawer.openingFloat', 'pc.power'] as const;
+export const TILL_SETTING_KEYS = ['receipt.extraLines', 'drawer.openingFloat', 'pc.power', 'delivery.city'] as const;
+
+/**
+ * 'delivery.city': the city written on every delivery address this till saves
+ * (the area picker names the area; the city is the shop's). Tills from before
+ * v0.8 wrote the first shop's city, which is this default.
+ */
+export const DEFAULT_DELIVERY_CITY = 'Karachi';
+export const DELIVERY_CITY_MAX_CHARS = 40;
 export type TillSettingKey = (typeof TILL_SETTING_KEYS)[number];
 
 export function isTillSettingKey(key: unknown): key is TillSettingKey {
@@ -108,12 +116,14 @@ export interface TillSettingValues {
   'receipt.extraLines': string[];
   'drawer.openingFloat': OpeningFloatSetting;
   'pc.power': PcPowerSetting;
+  'delivery.city': string;
 }
 
 export const TILL_SETTING_DEFAULTS: { readonly [K in TillSettingKey]: Readonly<TillSettingValues[K]> } = Object.freeze({
   'receipt.extraLines': DEFAULT_RECEIPT_EXTRA_LINES,
   'drawer.openingFloat': DEFAULT_OPENING_FLOAT,
   'pc.power': DEFAULT_PC_POWER,
+  'delivery.city': DEFAULT_DELIVERY_CITY,
 });
 
 /** One change to a till setting, for the card's History (this till's audit trail). */

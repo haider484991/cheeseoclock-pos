@@ -436,13 +436,26 @@ describe.skipIf(!Sqlite)('Settings → Delivery areas: Save', () => {
     ]);
   });
 
-  it('an area is never removed: a Save that leaves one out is refused and writes nothing (not the setting, not an item)', async () => {
+  it('an area a saved address names is never removed — refused, nothing written; one no address uses may go (v0.8)', async () => {
     await save(zones());
+    // A customer in DHA Phase 8, and one whose address uses an added area's spelling.
+    db.prepare(`INSERT INTO customers (id, name, phone, created_at, updated_at, device_id) VALUES ('c1', 'Test Customer', '03000000001', ?, ?, ?)`).run(T0, T0, DEV);
+    db.prepare(
+      `INSERT INTO customer_addresses (id, customer_id, label, address_line, area, city, created_at, updated_at, device_id) VALUES ('a1', 'c1', 'Home', '1 Test Street', 'DHA Phase 8', 'Karachi', ?, ?, ?)`,
+    ).run(T0, T0, DEV);
     const before = writtenRows();
     const o = await save(zones().filter((z) => z.id !== 'dha-8'));
     expect(o).toMatchObject({ ok: false, code: 'validation_failed' });
-    expect(o.ok ? '' : o.message).toMatch(/DHA Phase 8/);
-    // …nor one the owner added and saved.
+    expect(o.ok ? '' : o.message).toMatch(/DHA Phase 8 can’t be removed: addresses still use it/);
+    expect(writtenRows()).toEqual(before);
+
+    // An area no address names may be left out: the setting shrinks, its fee item is only switched off (never deleted).
+    const without7 = await save(zones().filter((z) => z.id !== 'dha-7'));
+    expect(without7.ok ? 'ok' : without7.message).toBe('ok');
+    expect(savedZones().some((z) => z.id === 'dha-7')).toBe(false);
+    expect(Number(writtenRows()['menu_items'])).toBe(Number(before['menu_items']));
+
+    // …and one the owner added: removable until an address uses it, by name or spelling.
     const pechs: DeliveryZoneSetting = {
       id: 'pechs-6',
       name: 'PECHS Block 6',
@@ -454,11 +467,26 @@ describe.skipIf(!Sqlite)('Settings → Delivery areas: Save', () => {
       aliases: ['pechs 6'],
       hints: [],
     };
-    expect((await save([...zones(), pechs])).ok).toBe(true);
+    const current = zones().filter((z) => z.id !== 'dha-7');
+    expect((await save([...current, pechs])).ok).toBe(true);
+    expect((await save(current)).ok).toBe(true);
+    expect((await save([...current, pechs])).ok).toBe(true);
+    db.prepare(
+      `INSERT INTO customer_addresses (id, customer_id, label, address_line, area, city, created_at, updated_at, device_id) VALUES ('a2', 'c1', 'Work', '2 Test Road', 'pechs 6', 'Karachi', ?, ?, ?)`,
+    ).run(T0, T0, DEV);
     const mid = writtenRows();
-    expect((await save(zones())).ok).toBe(false);
+    const refused = await save(current);
+    expect(refused.ok).toBe(false);
+    expect(refused.ok ? '' : refused.message).toMatch(/PECHS Block 6 can’t be removed/);
     expect(writtenRows()).toEqual(mid);
-    expect(before['menu_items']).toBeLessThanOrEqual(Number(mid['menu_items']));
+  });
+
+  it('a till with nothing saved may save an empty list (a shop that does not deliver yet), and add areas later', async () => {
+    const empty = await save([]);
+    expect(empty.ok ? 'ok' : empty.message).toBe('ok');
+    expect(savedZones()).toEqual([]);
+    expect((await save([zones()[0]!])).ok).toBe(true);
+    expect(savedZones().map((z) => z.id)).toEqual([zones()[0]!.id]);
   });
 
   it('a rename keeps the old name as a spelling: an address saved under it is still that area (Customers’ filter, the till’s reader)', async () => {

@@ -5,6 +5,7 @@ import { setBusinessSettings, NEWER_FORMAT_REFUSAL } from './business-settings-r
 import { createCategory, updateCategory } from './category-repo.js';
 import { createMenuItem, restoreMenuItem, updateMenuItem } from './menu-item-repo.js';
 import { readShopSetting } from '../business-settings-read.js';
+import { listAreaUsage } from './customer-repo.js';
 import { BUSINESS_SETTING_SCHEMAS } from '@cheeseoclock/shared-schemas';
 import {
   COC_ID_NAMESPACE,
@@ -61,15 +62,31 @@ export function deliveryChargesCategoryId(): string {
 }
 
 /** Why the new list can't replace the saved one (the rules the schema can't see), or null. */
+/**
+ * An area that saved addresses still name (by its name or a spelling) is never
+ * removed, only switched off; one no address uses may go. `usedAreas` is the
+ * lower-cased area names on customer addresses (usedAreaNames).
+ */
 export function zonesSaveProblem(
-  saved: ReadonlyArray<Pick<DeliveryZoneSetting, 'id' | 'name'>>,
+  saved: ReadonlyArray<Pick<DeliveryZoneSetting, 'id' | 'name' | 'aliases'>>,
   next: ReadonlyArray<Pick<DeliveryZoneSetting, 'id'>>,
+  usedAreas: ReadonlySet<string> = new Set(),
 ): string | null {
   const ids = new Set(next.map((z) => z.id));
-  const gone = saved.find((z) => !ids.has(z.id));
+  const gone = saved.find((z) => !ids.has(z.id) && zoneIsUsed(z, usedAreas));
   return gone
-    ? `${gone.name} can’t be removed: switch it off instead (old addresses, Reports and the website’s page still use it)`
+    ? `${gone.name} can’t be removed: addresses still use it — switch it off instead (old orders, Reports and the website’s page keep it)`
     : null;
+}
+
+function zoneIsUsed(zone: Pick<DeliveryZoneSetting, 'name' | 'aliases'>, usedAreas: ReadonlySet<string>): boolean {
+  if (usedAreas.size === 0) return false;
+  return [zone.name, ...zone.aliases].some((n) => usedAreas.has(n.trim().toLowerCase()));
+}
+
+/** The area names on this till's saved customer addresses, lower-cased. */
+export function usedAreaNames(db: AppDatabase): Set<string> {
+  return new Set(listAreaUsage(db, 100_000).map((a) => a.area.trim().toLowerCase()));
 }
 
 interface ItemRow {
@@ -98,7 +115,9 @@ export function saveDeliveryZones(
       'useDefault' in request ? deliveryZonesPutBack(current.value.zones) : request.zones;
 
     // Never an area removed: the saved list's ids all stay (switched off is how an area goes).
-    const removed = zonesSaveProblem(current.value.zones, input);
+    // Nothing saved yet = nothing to protect: first-time setup may save an
+    // empty list or the preset. Afterwards, an area addresses use stays.
+    const removed = current.isDefault ? null : zonesSaveProblem(current.value.zones, input, usedAreaNames(db));
     if (removed) throw new Error(removed);
 
     const previousFeeItemIds = current.isDefault

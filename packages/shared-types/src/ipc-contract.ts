@@ -248,6 +248,11 @@ export interface IpcContract {
     request: undefined;
     response: ApiResult<{ completed: boolean; userCount: number }>;
   };
+  /** The city for this till's delivery addresses ('delivery.city'); any signed-in user. */
+  'system:getDeliveryCity': {
+    request: undefined;
+    response: ApiResult<{ city: string }>;
+  };
   'system:completeOnboarding': {
     request: {
       storeName: string;
@@ -258,6 +263,10 @@ export interface IpcContract {
       logoUrl?: string;
       /** The shop's own website for the bottom of receipts; none when empty or absent. */
       websiteLine?: string;
+      /** The city on this till's delivery addresses ('delivery.city'); absent = unchanged default. */
+      deliveryCity?: string;
+      /** 'karachi-dha-clifton' saves the built-in Karachi list; 'none' an empty list; absent = nothing saved. */
+      deliveryAreas?: 'karachi-dha-clifton' | 'none';
       taxCategories: Array<{ name: string; rateBps: number }>;
       admin: { fullName: string; pin: string };
     };

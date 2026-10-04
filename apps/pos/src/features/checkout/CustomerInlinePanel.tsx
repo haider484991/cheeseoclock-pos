@@ -27,6 +27,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { useToast } from '../../components/toast/ToastProvider';
 import { counterPhoneHint, savedAddressToMakeUsual, typedAddressToSave } from './counterCustomer';
 import { customersChanged } from './customerLookups';
+import { useDeliveryCity } from './useDeliveryCity';
 
 /**
  * Inline customer + delivery panel — lives in the second step of the order ticket (no modal).
@@ -80,7 +81,7 @@ export function makeEmptyCustomerForm(): CustomerFormState {
     addressLabel: 'Order',
     addressLine: '',
     area: '',
-    // The shop delivers in DHA and Clifton only; the city is never in question.
+    // The till's own city replaces this before anything is saved (useDeliveryCity).
     city: DELIVERY_CITY,
     deliveryNotes: '',
     matchedCustomerId: null,
@@ -90,6 +91,15 @@ export function makeEmptyCustomerForm(): CustomerFormState {
   };
 }
 
+/** The till's city for an address about to be saved; the old fixed city if the till cannot say. */
+async function deliveryCityForSave(): Promise<string> {
+  try {
+    return (await ipc.system.getDeliveryCity()).city;
+  } catch {
+    return DELIVERY_CITY;
+  }
+}
+
 interface PanelProps {
   mode: 'takeaway' | 'delivery';
   form: CustomerFormState;
@@ -97,6 +107,8 @@ interface PanelProps {
 }
 
 export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
+  // The city on every address this till saves (Settings → Delivery areas → City).
+  const tillCity = useDeliveryCity();
   const [phoneOpen, setPhoneOpen] = useState(false);
   const phoneRef = useRef<HTMLInputElement | null>(null);
   // Wraps both the input AND the suggestions dropdown, so click-outside only
@@ -175,7 +187,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
       addressLabel: a.label,
       addressLine: a.addressLine,
       area: a.area ?? '',
-      city: a.city ?? DELIVERY_CITY,
+      city: a.city ?? tillCity,
       // The house tells us who it is, unless the cashier already picked someone.
       ...(prev.matchedCustomerId
         ? {}
@@ -201,7 +213,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
         addressLabel: def.label,
         addressLine: def.addressLine,
         area: def.area ?? '',
-        city: def.city ?? DELIVERY_CITY,
+        city: def.city ?? tillCity,
       }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -254,7 +266,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
       addressLabel: a.label,
       addressLine: a.addressLine,
       area: a.area ?? '',
-      city: a.city ?? DELIVERY_CITY,
+      city: a.city ?? tillCity,
     }));
   }
 
@@ -419,7 +431,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
                   setForm((p) => ({
                     ...p,
                     area,
-                    city: DELIVERY_CITY,
+                    city: tillCity,
                     matchedAddressId: null,
                     makeDefault: p.matchedAddressId ? false : p.makeDefault,
                   }))
@@ -902,7 +914,7 @@ async function saveTypedCustomer(
   // A typed address is saved either way (the order needs an address row to
   // point at); "One-off" keeps a do-not-save address out of the customer's
   // usual list of places, and a kept one is filled in next time.
-  const typedAddress = typedAddressToSave(form, mode, DELIVERY_CITY);
+  const typedAddress = typedAddressToSave(form, mode, await deliveryCityForSave());
   if (typedAddress) {
     addressId = (await ipc.customers.createAddress({ customerId, ...typedAddress })).id;
   }

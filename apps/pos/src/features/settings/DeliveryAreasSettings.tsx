@@ -16,7 +16,9 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
-import { ArrowDown, ArrowUp, Bike, Plus } from 'lucide-react';
+import { ArrowDown, ArrowUp, Bike, Plus, Trash2 } from 'lucide-react';
+import { useAreaUsage } from '../customers/AreaPicker';
+import { useDeliveryAreas } from './shop-rules/useShopSetting';
 import { DELIVERY_FEE_MAX_CENTS, type ShopSettingCard } from '@cheeseoclock/shared-types';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
@@ -92,6 +94,11 @@ function ZonesCard({ card }: { card: ShopSettingCard<'delivery.zones'> }) {
       description: e instanceof IpcError ? e.message : String(e),
       variant: 'error',
     });
+  // Saved addresses per area: an area in use can only be switched off; one no
+  // address names may be removed (the repository refuses otherwise).
+  const liveAreas = useDeliveryAreas();
+  const usage = useAreaUsage(liveAreas);
+  const removeRow = (id: string) => draft.set(rows.filter((r) => r.id !== id));
   const save = useMutation({
     mutationFn: (zones: NonNullable<typeof parsed.value>) =>
       ipc.settings.saveDeliveryZones({ zones }),
@@ -154,6 +161,9 @@ function ZonesCard({ card }: { card: ShopSettingCard<'delivery.zones'> }) {
                 <th className="w-16 p-1">On</th>
                 <th className="w-20 p-1">
                   <span className="sr-only">Order</span>
+                </th>
+                <th className="w-10 p-1">
+                  <span className="sr-only">Remove</span>
                 </th>
               </tr>
             </thead>
@@ -249,6 +259,30 @@ function ZonesCard({ card }: { card: ShopSettingCard<'delivery.zones'> }) {
                           <ArrowDown className="h-4 w-4" />
                         </button>
                       </div>
+                    </td>
+                    <td className="p-1">
+                      {(() => {
+                        const used = usage?.get(r.id) ?? 0;
+                        const canRemove = usage !== undefined && used === 0;
+                        return (
+                          <button
+                            type="button"
+                            aria-label={`Remove ${r.name}`}
+                            disabled={!canRemove}
+                            title={
+                              canRemove
+                                ? 'Remove this area (no saved address uses it)'
+                                : used > 0
+                                  ? `${used} saved ${used === 1 ? 'address uses' : 'addresses use'} this area — switch it off instead`
+                                  : 'Checking saved addresses…'
+                            }
+                            onClick={() => removeRow(r.id)}
+                            className="rounded p-1 text-stone-500 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-30 dark:hover:bg-red-950/40"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))}
