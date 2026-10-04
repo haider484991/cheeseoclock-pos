@@ -32,6 +32,8 @@ export interface PlacedOrder {
   orderId: string;
   /** As the customer typed it; the tracking page matches it server-side. */
   phone: string;
+  /** What the server priced the order at, paisa (api/orders: totalCents, tax and delivery in it): the Meta Pixel's Purchase value. */
+  totalCents?: number;
 }
 
 /**
@@ -152,7 +154,7 @@ export function CheckoutSheet(
           })),
         }),
       });
-      type Reply = OrderErrorBody & { ok?: boolean; data?: { orderId: string } };
+      type Reply = OrderErrorBody & { ok?: boolean; data?: { orderId: string; totalCents?: number } };
       let json: Reply | null = null;
       try {
         json = (await res.json()) as Reply;
@@ -173,7 +175,7 @@ export function CheckoutSheet(
         removeStored(STORAGE_KEYS.details);
       }
       // Stays "Placing…" while the tracking page loads.
-      props.onPlaced({ orderId: json.data.orderId, phone: phone.trim() });
+      props.onPlaced({ orderId: json.data.orderId, phone: phone.trim(), totalCents: json.data.totalCents });
     } catch {
       inFlight.current = false;
       setSubmitting(false);

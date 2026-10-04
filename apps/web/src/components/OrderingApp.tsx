@@ -36,6 +36,7 @@ import {
   cartPricedLines,
   cartSubtotalCents,
   linesSummary,
+  lineUnitPriceCents,
   restoreLines,
   setLineQty,
   toSavedLines,
@@ -56,6 +57,7 @@ import {
   type LastOrder,
 } from '@/lib/device-memory';
 import { menuImageSrcSet } from '@/lib/images';
+import { pixel, type PixelLine } from '@/lib/meta-pixel';
 import { trackPath } from '@/lib/order-display';
 import { NOT_ON_VALUE_DEALS, type PublishedMenuItem, type WebFulfilment } from '@cheeseoclock/shared-types';
 import type { PublicMenu } from '@/lib/public-menu';
@@ -75,6 +77,19 @@ function newOrderId(): string {
     const r = (Math.random() * 16) | 0;
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
   });
+}
+
+/**
+ * A cart as the Meta Pixel is told of it (lib/meta-pixel): item ids, quantities and unit prices.
+ * Never a note, a choice's name or anything the customer typed. It cannot throw: the pixel never
+ * gets in the way of an order, so a cart it cannot read is an empty one.
+ */
+function pixelLines(lines: ReadonlyArray<Pick<CartLine, 'item' | 'quantity' | 'modifierIds'>>): PixelLine[] {
+  try {
+    return lines.map((l) => ({ id: l.item.posItemId, quantity: l.quantity, unitCents: lineUnitPriceCents(l) }));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -188,6 +203,11 @@ export function OrderingApp({
     };
   }, []);
 
+  // The Meta Pixel hears of the menu once per page load (lib/meta-pixel; nothing without a pixel id).
+  useEffect(() => {
+    pixel.viewMenu();
+  }, []);
+
   const sections = useMemo(() => buildMenuView(menu), [menu]);
   // The words under the sections: the food's one tax rate from this menu (charge items left out) and
   // what the rider takes.
@@ -248,6 +268,7 @@ export function OrderingApp({
       removeStored(STORAGE_KEYS.reorder);
       const again = restoreLines(menu, reorder);
       for (const l of again.lines) lines = addLine(lines, l);
+      pixel.addToCart(pixelLines(again.lines));
       if (again.lines.length === 0) flash('Those items are no longer on the menu', 3000);
       else if (again.dropped > 0) flash(`Added your order · ${again.dropped} no longer on the menu`, 3000);
       else flash('Added your last order');
@@ -306,6 +327,7 @@ export function OrderingApp({
   const addToCart = useCallback(
     (item: PublishedMenuItem, label: string, modifierIds: string[], quantity = 1, notes: string | null = null) => {
       setCart((prev) => addLine(prev, { item, label, quantity, modifierIds, notes }));
+      pixel.addToCart(pixelLines([{ item, quantity, modifierIds }]));
       flash(`Added ${quantity > 1 ? `${quantity} × ` : ''}${label}`);
     },
     [flash],
@@ -318,6 +340,7 @@ export function OrderingApp({
       // A pick-up-only size is orderable only while online pick-up is (the whole card, or one size).
       if (!v || !sizeOrderable(v, canPickup)) return;
       if (v.item.modifierGroups.length > 0) {
+        pixel.viewItem({ id: v.item.posItemId, name: variantLabel(card, v), unitCents: v.item.basePriceCents });
         setSheet({ card, variantIndex });
       } else {
         addToCart(v.item, variantLabel(card, v), []);
@@ -339,6 +362,7 @@ export function OrderingApp({
       return;
     }
     setCart((prev) => lines.reduce((acc, l) => addLine(acc, l), prev));
+    pixel.addToCart(pixelLines(lines));
     if (o.fulfilment === 'pickup' && canPickup) setFulfilment('pickup');
     flash(dropped > 0 ? `Added your last order · ${dropped} no longer on the menu` : 'Added your last order', 3000);
   }
@@ -353,8 +377,12 @@ export function OrderingApp({
     return checkoutKey.current.id;
   }
 
-  function onPlaced({ orderId, phone }: PlacedOrder) {
+  function onPlaced({ orderId, phone, totalCents }: PlacedOrder) {
     placed.current = true;
+    // The Meta Pixel hears of the sale here, once, while the page is still /menu (the tracking address
+    // carries the phone, and is never sent): the server's own total, not one worked out from the cart.
+    // A replayed order comes back with the same id, which the pixel's once-only claim covers.
+    pixel.purchase(orderId, totalCents, pixelLines(cart));
     writeStored(
       STORAGE_KEYS.lastOrder,
       serializeLastOrder({ orderId, phone, placedAt: Date.now(), fulfilment, lines: toSavedLines(cart) }),
@@ -369,6 +397,11 @@ export function OrderingApp({
 
   const closeSheet = useCallback(() => setSheet(null), []);
   const closeCheckout = useCallback(() => setCheckoutOpen(false), []);
+  /** The desktop panel and the phone's bar open the checkout alike: the Meta Pixel hears of it once per open. */
+  function openCheckout() {
+    pixel.initiateCheckout(pixelLines(cart));
+    setCheckoutOpen(true);
+  }
 
   const cartProps: CartProps = {
     cart,
@@ -465,7 +498,7 @@ export function OrderingApp({
         {/* Cart — desktop side panel */}
         <aside className="hidden pt-8 lg:block" aria-label="Your order">
           <div className="sticky top-36 rounded-3xl border border-paper-line bg-white p-5 shadow-soft-md">
-            <CartPanel {...cartProps} acceptingOrders={open} onCheckout={() => setCheckoutOpen(true)} />
+            <CartPanel {...cartProps} acceptingOrders={open} onCheckout={openCheckout} />
           </div>
         </aside>
       </div>
@@ -475,7 +508,7 @@ export function OrderingApp({
         <div className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t border-ink/10 bg-paper/95 px-3 pt-3 backdrop-blur lg:hidden">
           <button
             type="button"
-            onClick={() => setCheckoutOpen(true)}
+            onClick={openCheckout}
             className="flex min-h-[3.5rem] w-full items-center justify-between gap-3 rounded-full bg-ink px-5 py-3.5 font-cond text-lg font-bold uppercase tracking-wide text-cheese shadow-soft-lg active:scale-[0.99]"
           >
             <span className="flex items-center gap-2">

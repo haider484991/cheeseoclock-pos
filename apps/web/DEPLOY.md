@@ -33,6 +33,7 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
    |---|---|
    | `DATABASE_URL` | the Neon connection string |
    | `BRIDGE_SECRET` | the secret from step 2 |
+   | `NEXT_PUBLIC_META_PIXEL_ID` | optional, **Production only**: the Meta (Facebook) Pixel ID — see "Meta Pixel" below, and redeploy after setting it |
 5. Deploy. You'll get `https://cheeseoclock-xxx.vercel.app` — open it, the home
    page should load. `/menu` will show "Menu coming right up" until you publish.
 
@@ -545,6 +546,51 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   total changed").
 - From v0.7.34 a delivery bill prints FOOD TOTAL (with tax) / Delivery
   charge / CUSTOMER PAYS; the website's totals and tracker do not change.
+
+## Meta Pixel (ad measurement, optional)
+
+- **What it is.** The shop's Facebook and Instagram ads can be measured on
+  cheeseoclock.net with the Meta Pixel (an ID from Meta Events Manager → Data
+  sources). It is **off until it is given the ID**: with `NEXT_PUBLIC_META_PIXEL_ID`
+  unset, empty, or not 8–20 digits, no script loads, nothing is sent to Meta, and
+  every page is exactly as before (`lib/pages-golden.test.ts` passes untouched).
+  No change to ordering, prices, tax, rate limiting or checkout copy.
+- **Turn it on.** Vercel → project `cheeseoclock-pos-web` → Settings → Environment
+  Variables → add `NEXT_PUBLIC_META_PIXEL_ID` = the pixel ID (digits only) for
+  **Production** only (a preview or a local run must not send test traffic into
+  the real pixel) → then **redeploy** (Deployments → the latest one → Redeploy, or
+  push to `main`). `NEXT_PUBLIC_` variables are written into the site when it is
+  built, so a variable added without a new build does nothing. To turn it off,
+  delete the variable and redeploy.
+- **What it sends** (`lib/meta-pixel.ts`; every value in PKR, from the menu's and
+  the server's own prices):
+  - `PageView` on the first load and on every move between pages — never for
+    `/track`.
+  - `ViewContent` when `/menu` opens (name "Menu"), and when an item's options
+    sheet opens (the item's id, name and price).
+  - `AddToCart` when an item goes into the cart, "Order again" included: the item
+    ids, quantities, and the value of what was added.
+  - `InitiateCheckout` when the checkout sheet opens: the cart's items and their
+    value, before tax and delivery.
+  - `Purchase` when the server confirms the order, **once per order**: the value is
+    what the customer pays (the server's total: tax, delivery charge and any
+    pick-up discount in it), and the event id is the order's id. The shop is cash
+    on delivery, so it counts when the order is placed, and an order the shop
+    cancels later stays counted in Meta.
+- **What it never sends.** Name, phone, e-mail, address, delivery area, or any
+  note (the order's or an item's). Nothing at all from a tracking page, or from a
+  page opened from one: right after checkout its address is
+  `/track/<order id>?phone=<the customer's phone>`, and the pixel sends the page
+  address with every event. The pixel's own automatic features (button-click and
+  form-field capture, automatic advanced matching) and its page counting on
+  history changes are switched off in the snippet, so every event is one of the
+  five above.
+- **Check it.** Events Manager → Test events, and open the site from there:
+  `PageView` on the home page, `ViewContent` on `/menu`, `AddToCart` for an item,
+  `InitiateCheckout` when the cart opens. A `Purchase` is sent only by a placed
+  order: place one test pick-up and delete it at the till afterwards (as in the
+  smoke test above); open its tracking page and confirm no event appears for it.
+  In the pixel's Settings, leave "Automatic advanced matching" off.
 
 ## Free-tier limits (plenty for launch)
 
