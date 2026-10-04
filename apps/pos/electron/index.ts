@@ -35,12 +35,15 @@ const __dirname = path.dirname(__filename);
 
 const isDev = !app.isPackaged;
 
-// A dev run shares %APPDATA%\@cheeseoclock\pos with an installed build, which
+// A run shares %APPDATA%\@cheeseoclock\pos with an installed build, which
 // makes it impossible to try a fresh database (onboarding, seed data, settings)
-// next to a real install. Point a dev run elsewhere with COC_USER_DATA_DIR.
-// Has to happen before electron-log resolves its file path. Production builds
-// never read it.
-if (isDev && process.env['COC_USER_DATA_DIR']) {
+// next to a real install. Point a run elsewhere with COC_USER_DATA_DIR: dev
+// runs, and packaged builds too, so a release candidate can be smoke-tested on
+// a PC that already has a till installed (the single-instance lock is per data
+// directory, so both can run side by side). Has to happen before electron-log
+// resolves its file path. The variable only moves the data directory; it never
+// changes what the app does with it.
+if (process.env['COC_USER_DATA_DIR']) {
   app.setPath('userData', process.env['COC_USER_DATA_DIR']);
 }
 

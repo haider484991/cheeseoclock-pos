@@ -50,13 +50,16 @@ win:
     - target: nsis
       arch: [x64]
   artifactName: ${productName}-${version}-${arch}.${ext}
-  signingHashAlgorithms: [sha256]
+  # electron-builder 26 moved the signtool options (hash algorithms, cert, publisherName)
+  # under `signtoolOptions`; `signAndEditExecutable` stays at this level.
   signAndEditExecutable: true
-  # NOTE: do NOT set `publisherName` until we have a code-signing cert.
-  # electron-updater enforces an Authenticode publisher match on auto-updates;
-  # an unsigned build will always fail that check and the banner gets stuck at
-  # "Downloading…" forever. Once we have a cert (Sectigo/DigiCert EV), restore
-  # `publisherName: Haider Ali` so end users see your name in "Apps & features".
+  signtoolOptions:
+    signingHashAlgorithms: [sha256]
+    # NOTE: do NOT set `publisherName` until we have a code-signing cert.
+    # electron-updater enforces an Authenticode publisher match on auto-updates;
+    # an unsigned build will always fail that check and the banner gets stuck at
+    # "Downloading…" forever. Once we have a cert (OV/EV), restore
+    # `publisherName: Haider Ali` here so end users see your name in "Apps & features".
 
 nsis:
   oneClick: false

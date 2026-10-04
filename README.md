@@ -2,7 +2,7 @@
 
 A modern, **offline-first point-of-sale system for restaurants & cafés**, built specifically with Pakistani retail in mind (FBR Digital Invoicing-ready, PKR-native, Urdu-friendly).
 
-![Built with TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6) ![Electron](https://img.shields.io/badge/Electron-32-47848F) ![SQLite](https://img.shields.io/badge/SQLite-better--sqlite3-003B57) ![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red)
+![Built with TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6) ![Electron](https://img.shields.io/badge/Electron-42-47848F) ![SQLite](https://img.shields.io/badge/SQLite-better--sqlite3-003B57) ![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red)
 
 ---
 
@@ -27,7 +27,7 @@ A modern, **offline-first point-of-sale system for restaurants & cafés**, built
 
 ## Tech stack
 
-- **Electron 32** + **electron-vite** + **electron-builder**
+- **Electron 42** (Node 24 inside) + **electron-vite** + **electron-builder 26**. Electron stays on the newest major that `better-sqlite3` ships a prebuilt Windows binary for (12.11.1 → Electron ABI 146); the 13.x line publishes no prebuilt binaries, and a dev PC without Visual Studio Build Tools cannot compile it.
 - **React 18**, **TypeScript** (strict, `noUncheckedIndexedAccess`)
 - **Tailwind CSS** + custom design tokens (Inter font, soft shadows, glass surfaces)
 - **SQLite** (`better-sqlite3`) — single-file local database with `umzug` migrations
