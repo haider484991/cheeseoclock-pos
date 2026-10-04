@@ -55,11 +55,11 @@ win:
   signAndEditExecutable: true
   signtoolOptions:
     signingHashAlgorithms: [sha256]
-    # NOTE: do NOT set `publisherName` until we have a code-signing cert.
-    # electron-updater enforces an Authenticode publisher match on auto-updates;
-    # an unsigned build will always fail that check and the banner gets stuck at
-    # "Downloading…" forever. Once we have a cert (OV/EV), restore
-    # `publisherName: Haider Ali` here so end users see your name in "Apps & features".
+    # `publisherName` is NOT set here: electron-updater enforces an Authenticode
+    # publisher match on auto-updates, so an unsigned build with a publisher
+    # would stall at "Downloading…". The release workflow passes
+    # --config.win.signtoolOptions.publisherName=<WIN_PUBLISHER_NAME secret>
+    # only when the signing secrets are set (see .github/workflows/release.yml).
 
 nsis:
   oneClick: false

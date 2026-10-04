@@ -162,20 +162,26 @@ export async function initAutoUpdater(): Promise<void> {
     updater.autoDownload = true;
     updater.autoInstallOnAppQuit = true;
 
-    // Until we have a real code-signing cert, the .exe is unsigned. Override
-    // electron-updater's publisher/Authenticode verification so it accepts
-    // unsigned builds instead of erroring out and stalling the banner at
-    // "Downloading…". When we ship signed builds (Sectigo/DigiCert EV), drop
-    // this override and electron-updater will enforce the signature check
-    // normally.
-    try {
-      const updaterAny = updater as unknown as {
-        verifyUpdateCodeSignature?: (publisherNames: string[], path: string) => Promise<string | null>;
-      };
-      updaterAny.verifyUpdateCodeSignature = async () => null;
-      diagLog('signature verification override installed (unsigned-build mode)');
-    } catch (err) {
-      diagLog('failed to install signature verification override', err);
+    // A signed build (CI with the code-signing secrets set; __SIGNED_BUILD__ is
+    // baked in by electron.vite.config.ts) keeps electron-updater's Authenticode
+    // check: a downloaded installer must carry the publisher named in
+    // app-update.yml or it is refused. An unsigned build has no signature to
+    // check and must switch the check off, or every update would stall at
+    // "Downloading…" — so an unsigned build trusts whatever the release feed
+    // serves. Ship signed builds to strangers.
+    if (__SIGNED_BUILD__) {
+      diagLog('signed build: Authenticode verification of updates stays on');
+    } else {
+      try {
+        const updaterAny = updater as unknown as {
+          verifyUpdateCodeSignature?: (publisherNames: string[], path: string) => Promise<string | null>;
+        };
+        updaterAny.verifyUpdateCodeSignature = async () => null;
+        diagLog('signature verification override installed (unsigned-build mode)');
+        log.warn('Auto-updater: this build is unsigned, so updates are not signature-checked');
+      } catch (err) {
+        diagLog('failed to install signature verification override', err);
+      }
     }
     try {
       diag.feedURL = updater.getFeedURL?.() ?? null;

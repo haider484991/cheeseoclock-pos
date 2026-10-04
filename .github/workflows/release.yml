@@ -77,13 +77,29 @@ jobs:
         # The `publish: github` block in apps/pos/electron-builder.yml tells
         # electron-builder where to upload. `--publish always` forces it to
         # publish even if not on a tag (we ARE on a tag — belt + braces).
-        run: pnpm --filter @cheeseoclock/pos exec electron-vite build && pnpm --filter @cheeseoclock/pos exec rimraf node_modules/@cheeseoclock && pnpm --filter @cheeseoclock/pos exec electron-builder --win --x64 --publish always
+        # Code signing: set the repo secrets WIN_CSC_LINK (base64 .pfx or a URL),
+        # WIN_CSC_KEY_PASSWORD and WIN_PUBLISHER_NAME (the certificate's exact
+        # subject name). With them the installer is signed, app-update.yml
+        # names the publisher, and the till keeps electron-updater's
+        # Authenticode check on (__SIGNED_BUILD__, electron.vite.config.ts).
+        # Without them the build is unsigned and says so in the log.
+        shell: pwsh
+        run: |
+          if ($env:WIN_CSC_LINK) { Write-Host "Code signing: ON (publisher '$env:WIN_PUBLISHER_NAME')" } else { Write-Host "Code signing: OFF — unsigned build, updates not signature-checked" }
+          pnpm --filter @cheeseoclock/pos exec electron-vite build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm --filter @cheeseoclock/pos exec rimraf node_modules/@cheeseoclock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $extra = @()
+          if ($env:WIN_CSC_LINK -and $env:WIN_PUBLISHER_NAME) { $extra += "--config.win.signtoolOptions.publisherName=$env:WIN_PUBLISHER_NAME" }
+          pnpm --filter @cheeseoclock/pos exec electron-builder --win --x64 --publish always @extra
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Code signing — leave unset to ship unsigned (SmartScreen warning).
-          # When you buy a cert, store it as a repo secret and uncomment:
-          # WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          # WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-          # Crash reporting — sign up at sentry.io (free 5K events/month):
-          # SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          # VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # Empty when the secret is not set = unsigned build (electron-builder treats '' as unset).
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_PUBLISHER_NAME: ${{ secrets.WIN_PUBLISHER_NAME }}
+          # Crash reporting (services/error-reporter.ts): empty = off. Sign up at sentry.io and add the secret.
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}

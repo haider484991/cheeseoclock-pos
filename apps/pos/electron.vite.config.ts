@@ -100,6 +100,13 @@ function analyticsWorkerPlugin(): Plugin {
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin({ exclude: WORKSPACE_PACKAGES }), analyticsWorkerPlugin()],
+    // Baked in at build time: true when this build is code-signed (CI sets
+    // WIN_CSC_LINK from its secret). A signed build keeps electron-updater's
+    // Authenticode check on; an unsigned one has to switch it off or every
+    // update would stall (services/auto-updater.ts).
+    define: {
+      __SIGNED_BUILD__: JSON.stringify(Boolean(process.env['WIN_CSC_LINK'] || process.env['CSC_LINK'])),
+    },
     build: {
       outDir: 'out/main',
       lib: {

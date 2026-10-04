@@ -87,6 +87,7 @@ All optional. Set them in your CI secrets or your local shell before `pnpm pos:b
 |---|---|
 | `WIN_CSC_LINK` | Path or HTTPS URL to a `.pfx` Windows code-signing cert. Without it, the installer is unsigned. |
 | `WIN_CSC_KEY_PASSWORD` | Password for the `.pfx`. |
+| `WIN_PUBLISHER_NAME` | The certificate's exact subject name. The release workflow passes it to electron-builder (`win.signtoolOptions.publisherName`) only when `WIN_CSC_LINK` is set, so `app-update.yml` names the publisher and the till keeps electron-updater's Authenticode check on. A build made without `WIN_CSC_LINK` is unsigned and switches that check off (`__SIGNED_BUILD__` in `electron.vite.config.ts`, `services/auto-updater.ts`) — never ship such a build to a customer. |
 | `SENTRY_DSN` | Sentry project DSN for **main-process** crash reporting. No-op if unset. |
 | `VITE_SENTRY_DSN` | Same DSN for **renderer-process** crash reporting (Vite-prefixed so it's bundled). |
 | `GH_TOKEN` | GitHub token for the release workflow to upload assets. CI provides `GITHUB_TOKEN` automatically. |
