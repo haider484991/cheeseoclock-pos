@@ -197,6 +197,17 @@ describe('evaluateLicence', () => {
     expect(rolledBack.state).toBe('expired');
   });
 
+  it('says when the clock looks wrong: the latest time seen is more than a day ahead of now', () => {
+    const seenAhead = new Date(NOW.getTime() + 40 * DAY).toISOString();
+    const suspect = evaluateLicence({ ...base, token: issue(), trialStartedAt: null, lastSeenAt: seenAhead });
+    expect(suspect.clockSuspect).toBe(true);
+    // …and the licence counts from that later time until the owner fixes the clock.
+    expect(suspect.daysLeft).toBe(325);
+    const fine = evaluateLicence({ ...base, token: issue(), trialStartedAt: null, lastSeenAt: NOW.toISOString() });
+    expect(fine.clockSuspect).toBe(false);
+    expect(evaluateLicence({ ...base, token: null, trialStartedAt: null }).clockSuspect).toBe(false);
+  });
+
   it('a clock within a day of the latest seen time is believed (time zones, small corrections)', () => {
     const seen = NOW.toISOString();
     expect(effectiveNow(new Date(NOW.getTime() - CLOCK_ROLLBACK_TOLERANCE_MS + 1000), seen).getTime()).toBe(

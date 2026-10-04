@@ -7,10 +7,19 @@
  * the free trial began. Every look at the status also records the latest time
  * the till has seen, so a clock set back cannot rewind the licence.
  *
+ * The trial start and the latest time seen are also kept in a small marker
+ * file outside the data folder (%ProgramData%\CheeseOclock POS on Windows):
+ * a wiped or redirected data folder (COC_USER_DATA_DIR) starts a new device
+ * but not a new trial on the same PC. The marker is advisory — when it cannot
+ * be read or written the settings alone decide — and holds no key.
+ *
  * Nothing here talks to the network. A key is issued by the vendor from this
  * till's Device ID and pasted into Settings → About; a new key for a later
  * period replaces the old one. Tests that never call init() see sales allowed.
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import log from 'electron-log/main';
 import type { LicenceStatus } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../../db/connection.js';
@@ -28,22 +37,77 @@ function asString(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
+function isoMs(iso: string | null): number | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/** Where the machine-wide marker lives by default. */
+export function defaultMachineMarkerPath(): string {
+  const base = process.platform === 'win32' ? process.env['ProgramData'] || 'C:\\ProgramData' : path.join(os.homedir(), '.local', 'share');
+  return path.join(base, 'CheeseOclock POS', 'licence-marker.json');
+}
+
+interface MachineMarker {
+  trialStartedAt: string | null;
+  lastSeenAt: string | null;
+}
+
+function readMarker(file: string | null): MachineMarker {
+  if (!file) return { trialStartedAt: null, lastSeenAt: null };
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    return { trialStartedAt: asString(raw['trialStartedAt']), lastSeenAt: asString(raw['lastSeenAt']) };
+  } catch {
+    return { trialStartedAt: null, lastSeenAt: null };
+  }
+}
+
+function writeMarker(file: string | null, marker: MachineMarker): void {
+  if (!file) return;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(marker));
+  } catch (err) {
+    log.warn('Licence: the machine marker could not be written; the settings alone decide', err);
+  }
+}
+
 export type ActivateResult = { ok: true; status: LicenceStatus } | { ok: false; problem: string };
 
 class LicenceService {
   private db: AppDatabase | null = null;
   private deviceId = '';
   private lastClockWriteMs = 0;
+  private markerPath: string | null = null;
 
-  init(db: AppDatabase, deviceId: string, now: Date = new Date()): LicenceStatus {
+  /** `markerPath`: where the machine marker lives (null = none; tests pass a temp file). */
+  init(db: AppDatabase, deviceId: string, now: Date = new Date(), markerPath: string | null = defaultMachineMarkerPath()): LicenceStatus {
     this.db = db;
     this.deviceId = deviceId;
     this.lastClockWriteMs = 0;
-    if (!asString(getSettingRaw(db, LICENCE_SETTING_TRIAL_STARTED))) {
-      setSetting(db, LICENCE_SETTING_TRIAL_STARTED, now.toISOString());
+    this.markerPath = markerPath;
+
+    const marker = readMarker(markerPath);
+    // The trial began at the earliest start this PC knows of: the settings'
+    // (this data folder) or the marker's (any earlier data folder on this PC).
+    const settingsStart = isoMs(asString(getSettingRaw(db, LICENCE_SETTING_TRIAL_STARTED)));
+    const markerStart = isoMs(marker.trialStartedAt);
+    const starts = [settingsStart, markerStart].filter((v): v is number => v !== null);
+    const startMs = starts.length ? Math.min(...starts) : now.getTime();
+    const startIso = new Date(startMs).toISOString();
+    if (settingsStart !== startMs) setSetting(db, LICENCE_SETTING_TRIAL_STARTED, startIso);
+    // The latest time seen anywhere on this PC.
+    const seen = [isoMs(asString(getSettingRaw(db, LICENCE_SETTING_LAST_SEEN))), isoMs(marker.lastSeenAt)].filter((v): v is number => v !== null);
+    if (seen.length) {
+      const seenIso = new Date(Math.max(...seen)).toISOString();
+      if (asString(getSettingRaw(db, LICENCE_SETTING_LAST_SEEN)) !== seenIso) setSetting(db, LICENCE_SETTING_LAST_SEEN, seenIso);
     }
+    writeMarker(markerPath, { trialStartedAt: startIso, lastSeenAt: asString(getSettingRaw(db, LICENCE_SETTING_LAST_SEEN)) });
+
     const status = this.status(now);
-    log.info('Licence', { state: status.state, daysLeft: status.daysLeft, plan: status.plan, problem: status.problem });
+    log.info('Licence', { state: status.state, daysLeft: status.daysLeft, plan: status.plan, problem: status.problem, clockSuspect: status.clockSuspect });
     return status;
   }
 
@@ -62,6 +126,7 @@ class LicenceService {
         daysLeft: 0,
         salesAllowed: true,
         problem: null,
+        clockSuspect: false,
       };
     }
     const lastSeenAt = asString(getSettingRaw(db, LICENCE_SETTING_LAST_SEEN));
@@ -93,6 +158,24 @@ class LicenceService {
     return { ok: true, status };
   }
 
+  /**
+   * The owner says the PC's date and time are right now: the latest time seen
+   * becomes now, so a clock that was set far ahead and then corrected no
+   * longer counts the licence from the wrong time. Audited (owner's id).
+   */
+  resetClock(actorUserId: string | null, now: Date = new Date()): LicenceStatus {
+    const db = this.db;
+    if (!db) return this.status(now);
+    setSetting(db, LICENCE_SETTING_LAST_SEEN, now.toISOString(), { actorUserId });
+    this.lastClockWriteMs = now.getTime();
+    writeMarker(this.markerPath, {
+      trialStartedAt: asString(getSettingRaw(db, LICENCE_SETTING_TRIAL_STARTED)),
+      lastSeenAt: now.toISOString(),
+    });
+    log.info('Licence: the owner reset the clock fact', { now: now.toISOString() });
+    return this.status(now);
+  }
+
   private rememberClock(db: AppDatabase, now: Date, lastSeenAt: string | null): void {
     const nowMs = now.getTime();
     const seenMs = lastSeenAt ? Date.parse(lastSeenAt) : Number.NaN;
@@ -100,6 +183,10 @@ class LicenceService {
     if (nowMs - this.lastClockWriteMs < CLOCK_WRITE_EVERY_MS) return;
     setSetting(db, LICENCE_SETTING_LAST_SEEN, now.toISOString());
     this.lastClockWriteMs = nowMs;
+    writeMarker(this.markerPath, {
+      trialStartedAt: asString(getSettingRaw(db, LICENCE_SETTING_TRIAL_STARTED)),
+      lastSeenAt: now.toISOString(),
+    });
   }
 }
 

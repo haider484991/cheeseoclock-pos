@@ -23,4 +23,11 @@ export function registerLicenceHandlers(ctx: HandlerContext): void {
     }
     return ok(result.status);
   });
+
+  // Owner only: "the date and time are right now" — the licence counts from
+  // this clock again after the PC's clock was set wrong. Audited.
+  defineHandler('licence:resetClock', ctx, () => {
+    const owner = requireSettingsManage();
+    return ok(licenceService.resetClock(owner.id));
+  });
 }

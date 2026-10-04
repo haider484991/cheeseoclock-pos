@@ -31,4 +31,10 @@ export interface LicenceStatus {
   salesAllowed: boolean;
   /** Why a stored key is being ignored (wrong till, not genuine, damaged); null when fine. */
   problem: string | null;
+  /**
+   * The latest time this till has seen is more than a day ahead of the clock
+   * now: the PC's clock was set wrong at some point. The licence counts from
+   * that later time until the owner says the clock is right (Fix clock).
+   */
+  clockSuspect: boolean;
 }

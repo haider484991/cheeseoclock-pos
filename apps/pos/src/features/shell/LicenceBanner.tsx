@@ -26,7 +26,11 @@ export function LicenceBanner() {
   if (!s) return null;
   const stopped = !s.salesAllowed;
   const needsWord =
-    stopped || s.state === 'grace' || (s.state === 'trial' && s.daysLeft <= TRIAL_REMINDER_DAYS) || s.problem !== null;
+    stopped ||
+    s.state === 'grace' ||
+    (s.state === 'trial' && s.daysLeft <= TRIAL_REMINDER_DAYS) ||
+    s.problem !== null ||
+    s.clockSuspect;
   if (!needsWord) return null;
   const dismissKey = `${s.state}:${s.daysLeft}`;
   if (!stopped && dismissedFor === dismissKey) return null;
@@ -43,6 +47,9 @@ export function LicenceBanner() {
           <span className="font-semibold">{stopped ? 'Sales are stopped. ' : ''}</span>
           {s.message}
           {s.problem && <span className="ml-1 text-xs opacity-80">({s.problem})</span>}
+          {s.clockSuspect && (
+            <span className="ml-1 text-xs opacity-80">The computer’s clock was set ahead at some point — Fix clock in Settings → About → Licence.</span>
+          )}
           <span className="ml-1 text-xs opacity-80">Settings → About → Licence.</span>
         </div>
         {!stopped && (

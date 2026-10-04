@@ -108,6 +108,11 @@ function dateWords(iso: string): string {
   return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+/** The latest time seen is more than a day ahead of the clock: the clock was wrong at some point. */
+export function clockLooksSuspect(now: Date, lastSeenAt: string | null): boolean {
+  return effectiveNow(now, lastSeenAt).getTime() !== now.getTime();
+}
+
 /** The whole answer for the card, the banner and the sales guard. */
 export function evaluateLicence(facts: LicenceFacts): LicenceStatus {
   const now = effectiveNow(facts.now, facts.lastSeenAt);
@@ -119,6 +124,7 @@ export function evaluateLicence(facts: LicenceFacts): LicenceStatus {
     licenceId: null,
     paidUntil: null,
     problem: null,
+    clockSuspect: clockLooksSuspect(facts.now, facts.lastSeenAt),
   };
 
   let problem: string | null = null;

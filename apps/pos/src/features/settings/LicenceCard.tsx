@@ -38,6 +38,11 @@ export function LicenceCard() {
     },
   });
 
+  const resetClock = useMutation({
+    mutationFn: () => ipc.licence.resetClock(),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: LICENCE_STATUS_QUERY }),
+  });
+
   const s = statusQ.data;
   const words = s ? stateWords(s) : null;
   const errorText = activate.error instanceof IpcError ? activate.error.message : activate.error ? 'The key could not be checked. Try again.' : null;
@@ -73,6 +78,17 @@ export function LicenceCard() {
         <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800 ring-1 ring-red-200 dark:bg-red-950/40 dark:text-red-100 dark:ring-red-900">
           The stored key is being ignored: {s.problem}
         </p>
+      )}
+      {s?.clockSuspect && (
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-100 dark:ring-amber-900">
+          <span>
+            This computer’s clock was set ahead at some point, so the licence counts from that later time. If the date and
+            time are right now, press Fix clock.
+          </span>
+          <Button onClick={() => resetClock.mutate()} disabled={resetClock.isPending}>
+            {resetClock.isPending ? 'Fixing…' : 'Fix clock'}
+          </Button>
+        </div>
       )}
 
       <dl className="mt-4 grid grid-cols-2 gap-x-8 gap-y-2 border-t border-stone-200 pt-4 text-sm dark:border-stone-700">
