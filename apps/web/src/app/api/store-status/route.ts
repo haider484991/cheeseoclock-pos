@@ -30,6 +30,8 @@ export async function GET(): Promise<Response> {
         acceptingOrders: status.acceptingOrders,
         pickupAvailable: status.pickupAvailable,
         pickupDiscountPercent: status.pickupDiscountPercent,
+        // v0.7.37: the % off a delivery's food (0 = none) — an open page follows the owner's change.
+        deliveryDiscountPercent: status.deliveryDiscountPercent,
         // Absent (undefined drops out of the JSON) when there is no word: the page keeps its own.
         ...(closedNotice === undefined ? {} : { closedNotice }),
       },

@@ -3,7 +3,7 @@ import { PICKUP_DISCOUNT_PERCENT } from '@cheeseoclock/shared-types';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WEBSITE_UNCONFIRMED_TTL_MS, isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
+import { WEBSITE_UNCONFIRMED_TTL_MS, deliveryPercentOf, isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
 
 const NOW = Date.parse('2026-09-16T18:00:00.000Z');
 const MAX = 45 * 60_000;
@@ -52,6 +52,24 @@ describe('pickupPercentOf', () => {
       { unitPriceCents: 120_000, quantity: 2, noDiscount: true },
     ];
     expect(pickupPercentOf({ fulfilment: 'pickup', subtotalCents: 500_000, discountCents: 0, items })).toBe(0);
+  });
+});
+
+describe('deliveryPercentOf (v0.7.37, WEBSITE DELIVERY DISCOUNT)', () => {
+  const pizza = { name: 'Fajita Pizza — Large', unitPriceCents: 200_000, quantity: 1 };
+  const deal = { name: 'Big Two', unitPriceCents: 360_000, quantity: 1, noDiscount: true };
+  const charge = { name: 'Delivery Charge (Rs 200)', unitPriceCents: 20_000, quantity: 1 };
+  it('reads the % off the food: the charge (by its name) and a flagged deal are never in the base', () => {
+    expect(deliveryPercentOf({ fulfilment: 'delivery', discountCents: 20_000, items: [deal, pizza, charge] })).toBe(10);
+    expect(deliveryPercentOf({ fulfilment: 'delivery', discountCents: 20_000, items: [pizza, charge] })).toBe(10);
+    // Two pizzas: Rs 400 off Rs 4,000.
+    expect(deliveryPercentOf({ fulfilment: 'delivery', discountCents: 40_000, items: [{ ...pizza, quantity: 2 }, charge] })).toBe(10);
+  });
+  it('is 0 for every delivery with no discount (all of them before v0.7.37), for a pick-up, and for deals only', () => {
+    expect(deliveryPercentOf({ fulfilment: 'delivery', discountCents: 0, items: [pizza, charge] })).toBe(0);
+    expect(deliveryPercentOf({ items: [pizza, charge] })).toBe(0);
+    expect(deliveryPercentOf({ fulfilment: 'pickup', discountCents: 20_000, items: [pizza] })).toBe(0);
+    expect(deliveryPercentOf({ fulfilment: 'delivery', discountCents: 100, items: [deal, charge] })).toBe(0);
   });
 });
 

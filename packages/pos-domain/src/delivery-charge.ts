@@ -539,7 +539,8 @@ export function websiteNeedsSettings(
  */
 export function buildSettingsBlock(input: {
   zones: readonly DeliveryZoneSetting[];
-  pickup: { offered: boolean; percent: number };
+  /** `alsoDelivery` (v0.7.37) goes in the block only when true: a block with it off is byte-for-byte a v0.7.36 till's. */
+  pickup: { offered: boolean; percent: number; alsoDelivery?: boolean };
   stamps: ReadonlyArray<SettingStamp | null>;
   menuItems: ReadonlyArray<{ id: string; name: string; basePriceCents: number }>;
   /** The till sending it. */
@@ -565,7 +566,11 @@ export function buildSettingsBlock(input: {
     settingsRev: stamp.settingsRev,
     settingsTie: stamp.settingsTie,
     deviceId: input.deviceId,
-    pickup: { offered: input.pickup.offered, percent: input.pickup.percent },
+    pickup: {
+      offered: input.pickup.offered,
+      percent: input.pickup.percent,
+      ...(input.pickup.alsoDelivery === true ? { alsoDelivery: true } : {}),
+    },
     zones: input.zones.map((z, sort) => {
       const item = z.feeCents > 0 ? zoneFeeItem(z, input.menuItems) : undefined;
       return {

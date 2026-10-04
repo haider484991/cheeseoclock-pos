@@ -278,3 +278,31 @@ live('a v0.7.33 till and the payouts to an outside rider', () => {
     expect(expectedCashV0733(b, 's_b')).toBe(bOwn);
   });
 });
+
+describe('v0.7.37: the website offer ‘discounts.websitePickup’ in format 2 (alsoDelivery)', () => {
+  it('this version writes format 2 with alsoDelivery, and nothing else', () => {
+    expect(SHOP_SETTING_FORMAT['discounts.websitePickup']).toBe(2);
+    const write = BUSINESS_SETTING_SCHEMAS['discounts.websitePickup'];
+    expect(write.safeParse({ v: 2, offered: true, percent: 10, alsoDelivery: true }).success).toBe(true);
+    // A format-1 value (a v0.7.36 till's) is not what this version writes; nor a value missing the field.
+    expect(write.safeParse({ v: 1, offered: true, percent: 10 }).success).toBe(false);
+    expect(write.safeParse({ v: 2, offered: true, percent: 10 }).success).toBe(false);
+    expect(write.safeParse({ v: 2, offered: true, percent: 10, alsoDelivery: 'yes' }).success).toBe(false);
+  });
+
+  it('a format-1 value (saved by a v0.7.36 till) reads with alsoDelivery false: deliveries pay full price, as before', () => {
+    const read = BUSINESS_SETTING_READ_SCHEMAS['discounts.websitePickup'];
+    expect(read.parse({ v: 1, offered: false, percent: 15 })).toEqual({ v: 1, offered: false, percent: 15, alsoDelivery: false });
+    // An unreadable field falls back alone, never taking the % down with it.
+    expect(read.parse({ v: 2, offered: true, percent: 10, alsoDelivery: 'nonsense' })).toEqual({ v: 2, offered: true, percent: 10, alsoDelivery: false });
+    expect(read.parse({ v: 2, offered: true, percent: 10, alsoDelivery: true })).toMatchObject({ alsoDelivery: true });
+  });
+
+  it('format 2 is this version’s own (the card stays editable); a higher format or an unknown field reads as newer', () => {
+    // A v0.7.36 till runs the same check with format 1 and fields v/offered/percent: this version's
+    // value is newer to it, so its card is read-only there and it never saves over the tick box.
+    expect(storedFormatIsNewer('discounts.websitePickup', { v: 2, offered: true, percent: 10, alsoDelivery: true })).toBe(false);
+    expect(storedFormatIsNewer('discounts.websitePickup', { v: 3, offered: true, percent: 10, alsoDelivery: true })).toBe(true);
+    expect(storedFormatIsNewer('discounts.websitePickup', { v: 2, offered: true, percent: 10, alsoDelivery: true, extra: 1 })).toBe(true);
+  });
+});

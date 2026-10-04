@@ -218,7 +218,8 @@ describe('storeAcceptingOrders / storeHeartbeatBody (pure)', () => {
     expect(m.storeHeartbeatBody({ enabled: true }, pause, DEV)).toEqual({
       acceptingOrders: false,
       deviceId: DEV,
-      features: ['pickup'],
+      // v0.7.37: this till also bills the website's delivery % (WEBSITE DELIVERY DISCOUNT).
+      features: ['pickup', 'delivery_discount'],
       pickupDiscountPercent: expect.any(Number),
       reason: 'shift_closed',
     });

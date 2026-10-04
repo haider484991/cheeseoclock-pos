@@ -384,8 +384,10 @@ export async function POST(req: Request): Promise<Response> {
       // gets the order, with the fee spelled out for the cashier. A free area
       // has no charge line.
       const feeItem = zoneFeeItemFor(menu, zone);
+      // The charge never takes a share of the website's delivery % (WEBSITE DELIVERY DISCOUNT, v0.7.37):
+      // noDiscount on its PRICED line only — its stored line stays as before (the till knows it by name).
       if (feeItem) {
-        priced.push({ lineTotalCents: feeItem.basePriceCents, taxRateBps: feeItem.taxRateBps });
+        priced.push({ lineTotalCents: feeItem.basePriceCents, taxRateBps: feeItem.taxRateBps, noDiscount: true });
         lines.push({
           posItemId: feeItem.posItemId,
           name: feeItem.name,
@@ -395,7 +397,7 @@ export async function POST(req: Request): Promise<Response> {
           notes: null,
         });
       } else {
-        priced.push({ lineTotalCents: zone.feeCents, taxRateBps: 0 });
+        priced.push({ lineTotalCents: zone.feeCents, taxRateBps: 0, noDiscount: true });
         const reminder = `Delivery ${zone.name} ${formatCents(zone.feeCents)} — add the delivery charge by hand`;
         orderNotes = orderNotes ? `${reminder}. ${orderNotes}` : reminder;
       }
@@ -404,7 +406,9 @@ export async function POST(req: Request): Promise<Response> {
     // or the import fails validation and retries until it gives up.
     if (orderNotes && orderNotes.length > 490) orderNotes = orderNotes.slice(0, 490);
 
-    const totals = priceOrder(priced, pickup ? store.pickupDiscountPercent : 0);
+    // A pick-up's %, or (v0.7.37) the owner's % off a delivery's food — 0 unless the stored block
+    // asks for it and the listening till bills it (store-status deliveryDiscountPercent).
+    const totals = priceOrder(priced, pickup ? store.pickupDiscountPercent : store.deliveryDiscountPercent);
 
     const id = input.clientOrderId ?? uuidv7();
     const inserted = (await sql()`

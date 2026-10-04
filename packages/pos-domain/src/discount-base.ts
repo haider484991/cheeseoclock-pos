@@ -231,12 +231,23 @@ export function isFreeOrderRule(ruleJson: string | null | undefined): boolean {
  * priceOrder), so the till takes off exactly what the customer was shown,
  * whatever the till's switch says. `skipsNoDiscountLines`: the order carries
  * the website's never-discounted flags, so it left those lines out; an
- * older website sends none and priced every line. (The website only
- * discounts a pick-up, which never carries a delivery charge, so the owner's
- * rule holds there.)
+ * older website sends none and priced every line. A pick-up never carries a
+ * delivery charge, so its rule keeps `alsoOffDeliveryCharge: true` (the
+ * JSON it has had since 0.7.26). A website DELIVERY's % (v0.7.37) is on the
+ * food only: `alsoOffDeliveryCharge: false`, which every till since 0.7.26
+ * reads (parseDiscountBaseRule) — the charge keeps its full price.
  */
-export function websiteDiscountRule(skipsNoDiscountLines: boolean): DiscountBaseRule {
-  return { kind: 'discount_base', v: 1, alsoOffDeliveryCharge: true, from: 'website', ...skipsField(skipsNoDiscountLines) };
+export function websiteDiscountRule(
+  skipsNoDiscountLines: boolean,
+  opts: { alsoOffDeliveryCharge?: boolean } = {},
+): DiscountBaseRule {
+  return {
+    kind: 'discount_base',
+    v: 1,
+    alsoOffDeliveryCharge: opts.alsoOffDeliveryCharge ?? true,
+    from: 'website',
+    ...skipsField(skipsNoDiscountLines),
+  };
 }
 
 /** A staff or website discount row's rule_json back as a rule; null when there is none this version reads. */

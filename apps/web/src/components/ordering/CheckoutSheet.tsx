@@ -206,7 +206,9 @@ export function CheckoutSheet(
               ? 'Online ordering is closed right now'
               : pickup
                 ? `Pick-up · ${props.pickupPct}% off${props.dealInCart ? `, ${NOT_ON_VALUE_DEALS}` : ''} · pay at the counter`
-                : 'Cash on delivery · pay the rider'}
+                : (props.deliveryPct ?? 0) > 0
+                  ? `${props.deliveryPct}% off food${props.dealInCart ? `, ${NOT_ON_VALUE_DEALS}` : ''} · cash on delivery`
+                  : 'Cash on delivery · pay the rider'}
           </p>
         </div>
         <CloseButton onClose={props.onClose} label="Close — keep browsing" />

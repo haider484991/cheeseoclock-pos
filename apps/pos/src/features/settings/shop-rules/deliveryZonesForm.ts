@@ -180,17 +180,19 @@ export const ZONES_SAVED_TOAST =
 
 /** Money & discounts → Website pick-up: the card's introduction. */
 export const PICKUP_INTRO =
-  'Whether website customers may collect their order from the counter, and the % off they get for it. It reaches the website by itself when saved (the menu is not sent with it); pick-up still needs the shop to be taking orders.';
+  'Whether website customers may collect their order from the counter, the % off website orders, and whether delivery orders get it too. It reaches the website by itself when saved (the menu is not sent with it); pick-up still needs the shop to be taking orders. The % is never taken off value deals or a delivery charge.';
 
 // --------------------------------------------------------------- pick-up --
 
 export interface PickupForm {
   offered: boolean;
   percent: string;
+  /** v0.7.37: the % also comes off a website delivery's food. */
+  alsoDelivery: boolean;
 }
 
 export function pickupToForm(p: WebsitePickup): PickupForm {
-  return { offered: p.offered, percent: String(p.percent) };
+  return { offered: p.offered, percent: String(p.percent), alsoDelivery: p.alsoDelivery };
 }
 
 export function pickupFromForm(f: PickupForm): Parsed<WebsitePickup> {
@@ -198,7 +200,7 @@ export function pickupFromForm(f: PickupForm): Parsed<WebsitePickup> {
   if (!/^\d{1,3}$/.test(t) || Number(t) > WEBSITE_PICKUP_MAX_PERCENT) {
     return {
       value: null,
-      problem: `The pick-up discount is a whole % from 0 to ${WEBSITE_PICKUP_MAX_PERCENT}.`,
+      problem: `The website discount is a whole % from 0 to ${WEBSITE_PICKUP_MAX_PERCENT}.`,
     };
   }
   return {
@@ -206,25 +208,31 @@ export function pickupFromForm(f: PickupForm): Parsed<WebsitePickup> {
       v: SHOP_SETTING_FORMAT['discounts.websitePickup'],
       offered: f.offered,
       percent: Number(t),
+      alsoDelivery: f.alsoDelivery,
     },
     problem: null,
   };
 }
 
 export function pickupSummary(p: WebsitePickup): string {
-  if (!p.offered) return 'Pick-up not offered on the website';
-  return p.percent > 0 ? `Pick-up offered, ${p.percent}% off` : 'Pick-up offered, no discount';
+  const delivery = p.alsoDelivery && p.percent > 0 ? `; delivery orders ${p.percent}% off the food` : '';
+  if (!p.offered) return `Pick-up not offered on the website${delivery}`;
+  return (p.percent > 0 ? `Pick-up offered, ${p.percent}% off` : 'Pick-up offered, no discount') + delivery;
 }
 
 /** Rs 2,000 of food: the example's order. */
 export const PICKUP_EXAMPLE_CENTS = 200_000;
 
-export function pickupExample(p: Pick<WebsitePickup, 'offered' | 'percent'>): string {
-  if (!p.offered) return 'Customers can only order delivery on the website.';
+export function pickupExample(p: Pick<WebsitePickup, 'offered' | 'percent'> & { alsoDelivery?: boolean }): string {
+  const off = Math.round((PICKUP_EXAMPLE_CENTS * p.percent) / 100);
+  const delivery =
+    p.alsoDelivery === true && p.percent > 0
+      ? ` A ${formatCents(PICKUP_EXAMPLE_CENTS)} delivery order gets the same ${formatCents(off)} off its food; the delivery charge stays full.`
+      : '';
+  if (!p.offered) return `Customers can only order delivery on the website.${delivery}`;
   if (p.percent === 0)
     return `A ${formatCents(PICKUP_EXAMPLE_CENTS)} pick-up order pays ${formatCents(PICKUP_EXAMPLE_CENTS)} (no discount).`;
-  const off = Math.round((PICKUP_EXAMPLE_CENTS * p.percent) / 100);
-  return `A ${formatCents(PICKUP_EXAMPLE_CENTS)} pick-up order gets ${p.percent}% off: ${formatCents(off)} off, ${formatCents(PICKUP_EXAMPLE_CENTS - off)} before tax. The till bills exactly what the website showed.`;
+  return `A ${formatCents(PICKUP_EXAMPLE_CENTS)} pick-up order gets ${p.percent}% off: ${formatCents(off)} off, ${formatCents(PICKUP_EXAMPLE_CENTS - off)} before tax.${delivery} The till bills exactly what the website showed.`;
 }
 
 export const PICKUP_PRINTED_MENU_NOTE =

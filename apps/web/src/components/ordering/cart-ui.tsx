@@ -11,7 +11,7 @@ export interface CartProps {
   cart: CartLine[];
   subtotal: number;
   deliveryFee: number;
-  /** Pickup discount (0 on a delivery). */
+  /** The discount: a pick-up's %, or (v0.7.37) a delivery's % off the food; 0 when none. */
   discount: number;
   zone: FactZone | undefined;
   tax: number;
@@ -23,6 +23,8 @@ export interface CartProps {
   canPickup: boolean;
   /** The pickup discount that till bills. */
   pickupPct: number;
+  /** The % off a delivery's food (WEBSITE DELIVERY DISCOUNT, v0.7.37); absent or 0 = full price, as before. */
+  deliveryPct?: number;
   onFulfilment: (f: WebFulfilment) => void;
   /** Labels of pick-up-only lines in the cart (they block a delivery). */
   pickupOnlyInCart: string[];
@@ -47,7 +49,7 @@ export interface CartProps {
  * menu's headline offer. Hidden entirely while the till can't take pickups.
  */
 export function FulfilmentToggle(
-  props: Pick<CartProps, 'fulfilment' | 'canPickup' | 'pickupPct' | 'onFulfilment' | 'deliveryNote'>,
+  props: Pick<CartProps, 'fulfilment' | 'canPickup' | 'pickupPct' | 'deliveryPct' | 'onFulfilment' | 'deliveryNote'>,
 ) {
   if (!props.canPickup) return null;
   const opt = (f: WebFulfilment, title: string, note: string) => {
@@ -70,7 +72,7 @@ export function FulfilmentToggle(
   };
   return (
     <div className="grid grid-cols-2 gap-2" role="group" aria-label="Delivery or pick-up">
-      {opt('delivery', 'Delivery', props.deliveryNote)}
+      {opt('delivery', (props.deliveryPct ?? 0) > 0 ? `Delivery · ${props.deliveryPct}% off food` : 'Delivery', props.deliveryNote)}
       {opt('pickup', `Pick up · ${props.pickupPct}% off`, 'Collect from DHA Phase 6')}
     </div>
   );
@@ -258,6 +260,8 @@ export function Stepper({
 
 export function Totals(props: CartProps) {
   const pickup = props.fulfilment === 'pickup';
+  // A delivery's % off the food (v0.7.37): its own row above the charge, which keeps its full price.
+  const deliveryPct = pickup ? 0 : (props.deliveryPct ?? 0);
   return (
     <dl className="mt-4 space-y-1.5 border-t-2 border-dashed border-paper-line pt-3 text-sm">
       <div className="flex justify-between text-ink-muted">
@@ -276,10 +280,23 @@ export function Totals(props: CartProps) {
           </dd>
         </div>
       ) : (
-        <div className="flex justify-between text-ink-muted">
-          <dt>Delivery{props.zone ? ` · ${props.zone.name}` : ''}</dt>
-          <dd className="tabular-nums">{props.zone ? formatCents(props.deliveryFee) : props.feeRange || 'Paused'}</dd>
-        </div>
+        <>
+          {deliveryPct > 0 && (
+            <div className="flex justify-between font-semibold text-emerald-700">
+              <dt>
+                Online {deliveryPct}% off food
+                {props.dealInCart && !props.onlyDeals ? ` (${NOT_ON_VALUE_DEALS})` : ''}
+              </dt>
+              <dd className="tabular-nums">
+                {props.onlyDeals ? NOT_ON_VALUE_DEALS_ALONE : <>−{formatCents(props.discount)}</>}
+              </dd>
+            </div>
+          )}
+          <div className="flex justify-between text-ink-muted">
+            <dt>Delivery{props.zone ? ` · ${props.zone.name}` : ''}</dt>
+            <dd className="tabular-nums">{props.zone ? formatCents(props.deliveryFee) : props.feeRange || 'Paused'}</dd>
+          </div>
+        </>
       )}
       <div className="flex justify-between text-ink-muted">
         <dt>Tax (est.)</dt>

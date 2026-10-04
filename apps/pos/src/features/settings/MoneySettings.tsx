@@ -341,7 +341,7 @@ function WebsitePickupFields({ s }: { s: ReturnType<typeof useShopSetting<'disco
   return (
     <SettingCard
       card={card}
-      title="Website pick-up"
+      title="Website pick-up & discount"
       icon={<ShoppingBag className="h-5 w-5" />}
       intro={PICKUP_INTRO}
       describe={pickupSummary}
@@ -383,7 +383,7 @@ function WebsitePickupFields({ s }: { s: ReturnType<typeof useShopSetting<'disco
         </div>
         <div>
           <label className={labelClass} htmlFor="pk-percent">
-            % off a pick-up
+            % off website orders
           </label>
           <input
             id="pk-percent"
@@ -392,7 +392,23 @@ function WebsitePickupFields({ s }: { s: ReturnType<typeof useShopSetting<'disco
             onChange={(e) => draft.set({ ...draft.form, percent: e.target.value.replace(/[^\d]/g, '').slice(0, 3) })}
             className={inputClass}
           />
-          <p className="mt-1 text-xs text-stone-500">A whole %, 0 to {WEBSITE_PICKUP_MAX_PERCENT}. It is worked on the food (a pick-up has no delivery charge).</p>
+          <p className="mt-1 text-xs text-stone-500">
+            A whole %, 0 to {WEBSITE_PICKUP_MAX_PERCENT}. It is worked on the food only: never value deals, never a delivery charge.
+          </p>
+          <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border-2 border-stone-200 p-3 text-sm dark:border-stone-700">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 accent-amber-500"
+              checked={draft.form.alsoDelivery}
+              onChange={(e) => draft.set({ ...draft.form, alsoDelivery: e.target.checked })}
+            />
+            <span>
+              <span className="font-semibold">Also on delivery orders</span>
+              <span className="block text-xs text-stone-500">
+                Website deliveries get the same % off their food. The delivery charge stays full.
+              </span>
+            </span>
+          </label>
         </div>
       </div>
     </SettingCard>

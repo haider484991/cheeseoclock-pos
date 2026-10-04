@@ -161,8 +161,8 @@ describe('the released defaults are pinned', () => {
     expect(Object.isFrozen(SHOP_SETTING_DEFAULTS)).toBe(true);
   });
 
-  it('discounts.websitePickup: offered, 10% off (today’s website pick-up)', () => {
-    expect(DEFAULT_WEBSITE_PICKUP).toEqual({ v: 1, offered: true, percent: 10 });
+  it('discounts.websitePickup: offered, 10% off (today’s website pick-up); format 2 only added alsoDelivery, off (deliveries pay full price, as before)', () => {
+    expect(DEFAULT_WEBSITE_PICKUP).toEqual({ v: 2, offered: true, percent: 10, alsoDelivery: false });
     expect(PICKUP_DISCOUNT_PERCENT).toBe(10);
   });
 

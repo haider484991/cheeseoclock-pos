@@ -50,6 +50,7 @@ import { getReceiptBranding } from './printer-config.js';
 import {
   ACK_RETRY_WINDOW_MS,
   WEBSITE_UNCONFIRMED_TTL_MS,
+  deliveryPercentOf,
   isStaleWebOrder,
   pickupPercentOf,
 } from './web-order-age.js';
@@ -218,6 +219,23 @@ export const OLDER_WEBSITE_DROPS =
  */
 export const OLDER_WEBSITE_KEEPS_DEALS =
   'The website is older than this till: it still takes the pick-up discount off value deals. It needs its update — then press “Publish menu to website” once.';
+
+/**
+ * Settings → Online orders, when the block asked for the website % on deliveries too (v0.7.37,
+ * WEBSITE DELIVERY DISCOUNT) and the website did not say it takes it (PublishMenuResult.deliveryDiscount):
+ * an older website dropped it and still charges deliveries full price. Totals still agree — the
+ * till bills what the order carries.
+ */
+export const OLDER_WEBSITE_NO_DELIVERY_DISCOUNT =
+  'The website is older than this till: it doesn’t take the discount off delivery orders yet. It needs its update — then save the website offer again (Publish also works).';
+
+/** Did this block ask for the website % on deliveries too, and the website not say it takes it? */
+export function websiteDroppedDeliveryDiscount(
+  block: Pick<PublishedSettings, 'pickup'> | null,
+  data: Partial<PublishMenuResult> | null,
+): boolean {
+  return block?.pickup.alsoDelivery === true && data?.deliveryDiscount !== true;
+}
 
 /** Does this menu carry an item the website must keep no discount off (`noDiscount: true`)? */
 export function carriesNoDiscount(menu: Pick<PublishedMenu, 'categories'>): boolean {
@@ -1752,12 +1770,18 @@ class WebOrdersBridge {
       // site that predates pickup carry no fulfilment and are deliveries.
       const pickup = web.fulfilment === 'pickup';
       const pickupPercent = pickupPercentOf(web);
-      // A pick-up with ANY line the website flagged no discount (NO DISCOUNT ON
-      // VALUE DEALS) was priced by those flags: its lines take the website's
-      // flags and its % leaves them alone. Every other web order (a delivery,
-      // nothing marked, a website older than the mark, which discounted every
-      // line) takes the till's own categories, under a % over every line.
-      const followSite = pickup && web.items.some((l) => l.noDiscount === true);
+      // v0.7.37 (WEBSITE DELIVERY DISCOUNT): the % the website took off a
+      // delivery's food, read back from the order; 0 for every delivery that
+      // carries no discount (all of them before), which imports as before.
+      const deliveryPercent = pickup ? 0 : deliveryPercentOf(web);
+      // A discounted web order (a pick-up, or a delivery with the website's %)
+      // with ANY line the website flagged no discount (NO DISCOUNT ON VALUE
+      // DEALS) was priced by those flags: its lines take the website's flags
+      // and its % leaves them alone. Every other web order (an undiscounted
+      // delivery, nothing marked, a website older than the mark, which
+      // discounted every line) takes the till's own categories, under a % over
+      // every line (a delivery's % never over its charge).
+      const followSite = (pickup || deliveryPercent > 0) && web.items.some((l) => l.noDiscount === true);
       const order = db.transaction(() => {
         // 1. Local order shell (delivery or takeaway, source web).
         const tag = pickup ? '[web pick-up]' : '[web]';
@@ -1856,6 +1880,25 @@ class WebOrdersBridge {
             },
             actor,
             { rule: websiteDiscountRule(followSite) },
+          );
+        }
+
+        // The website delivery % (v0.7.37): the same standing offer, on the
+        // food only — the frozen rule leaves the delivery charge at full price
+        // (the website priced it so) and, when the order carries the website's
+        // marks, the value deals too. A delivery of value deals only reads 0%.
+        if (!pickup && deliveryPercent > 0) {
+          applyDiscount(
+            db,
+            {
+              orderId: shell.id,
+              discountType: 'percent',
+              value: deliveryPercent,
+              reason: `Website delivery ${deliveryPercent}% off`,
+              approverUserId: actor.userId,
+            },
+            actor,
+            { rule: websiteDiscountRule(followSite, { alsoOffDeliveryCharge: false }) },
           );
         }
 
@@ -2283,6 +2326,10 @@ class WebOrdersBridge {
       const olderWebsite =
         data?.websiteMessages !== true && carriesWebsiteMessages(sentBlock ? sb.block : null, menu);
       if (olderWebsite) this.noteSettings(sb.stamp, 'unsupported', OLDER_WEBSITE_DROPS);
+      // …and one older than v0.7.37 dropped "also on delivery orders": deliveries stay full price.
+      else if (websiteDroppedDeliveryDiscount(sentBlock ? sb.block : null, data)) {
+        this.noteSettings(sb.stamp, 'unsupported', OLDER_WEBSITE_NO_DELIVERY_DISCOUNT);
+      }
       // …and one older than v0.7.34 dropped the items no discount comes off: its pick-up % still
       // comes off value deals. Noted under its own key (DEALS_NOTE_KEY), whatever the settings
       // block: Settings says it over the note above (the same update and Publish fix both), and
@@ -2366,6 +2413,8 @@ class WebOrdersBridge {
       // An older website stored the areas but dropped the messages: say so, and send this stamp no more by itself.
       if (data?.websiteMessages !== true && carriesWebsiteMessages(sb.block, null)) {
         this.noteSettings(sb.stamp, 'unsupported', OLDER_WEBSITE_DROPS);
+      } else if (websiteDroppedDeliveryDiscount(sb.block, data)) {
+        this.noteSettings(sb.stamp, 'unsupported', OLDER_WEBSITE_NO_DELIVERY_DISCOUNT);
       }
       log.info('Website settings sent to the website (the menu stays as published)', {
         feeItems: body.feeItems.length,

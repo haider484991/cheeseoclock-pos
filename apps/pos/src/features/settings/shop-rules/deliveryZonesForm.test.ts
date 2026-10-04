@@ -8,6 +8,8 @@ import {
   newZoneRow,
   pickupExample,
   pickupFromForm,
+  pickupSummary,
+  pickupToForm,
   setFeeFor,
   settingsPublishWords,
   zonesFromForm,
@@ -83,16 +85,33 @@ describe('Settings → Delivery areas: the form', () => {
 
 describe('Settings → Money & discounts: website pick-up', () => {
   it('a whole % from 0 to 50; the example is built from the value', () => {
-    expect(pickupFromForm({ offered: true, percent: '15' })).toEqual({
-      value: { v: 1, offered: true, percent: 15 },
+    expect(pickupFromForm({ offered: true, percent: '15', alsoDelivery: false })).toEqual({
+      value: { v: 2, offered: true, percent: 15, alsoDelivery: false },
       problem: null,
     });
-    expect(pickupFromForm({ offered: true, percent: '51' }).problem).toMatch(/0 to 50/);
-    expect(pickupFromForm({ offered: true, percent: '7.5' }).problem).toMatch(/whole %/);
+    expect(pickupFromForm({ offered: true, percent: '51', alsoDelivery: false }).problem).toMatch(/0 to 50/);
+    expect(pickupFromForm({ offered: true, percent: '7.5', alsoDelivery: false }).problem).toMatch(/whole %/);
     expect(pickupExample({ offered: true, percent: 10 })).toMatch(
       /Rs 2,000 pick-up order gets 10% off: Rs 200 off, Rs 1,800/,
     );
     expect(pickupExample({ offered: false, percent: 10 })).toMatch(/only order delivery/);
+  });
+
+  it('v0.7.37: “Also on delivery orders” saves with the value, round-trips, and the words say the food only', () => {
+    const value = { v: 2, offered: true, percent: 10, alsoDelivery: true };
+    expect(pickupFromForm(pickupToForm(value))).toEqual({ value, problem: null });
+    expect(pickupToForm({ ...value, alsoDelivery: false }).alsoDelivery).toBe(false);
+    expect(pickupExample(value)).toMatch(/delivery order gets the same Rs 200 off its food; the delivery charge stays full/);
+    // Off, or at 0%: not a word about deliveries (today's words).
+    expect(pickupExample({ ...value, alsoDelivery: false })).not.toMatch(/delivery order/);
+    expect(pickupExample({ ...value, percent: 0 })).not.toMatch(/delivery order gets/);
+    // Pick-up not offered: deliveries can still get it.
+    expect(pickupExample({ ...value, offered: false })).toMatch(/only order delivery.*delivery order gets the same/);
+    expect(pickupSummary(value)).toBe('Pick-up offered, 10% off; delivery orders 10% off the food');
+    expect(pickupSummary({ ...value, offered: false })).toBe('Pick-up not offered on the website; delivery orders 10% off the food');
+    expect(pickupSummary({ ...value, alsoDelivery: false })).toBe('Pick-up offered, 10% off');
+    // The card says the % never touches value deals or the delivery charge.
+    expect(PICKUP_INTRO).toMatch(/never taken off value deals or a delivery charge/);
   });
 });
 

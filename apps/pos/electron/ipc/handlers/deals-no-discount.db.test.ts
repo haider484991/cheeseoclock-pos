@@ -891,6 +891,83 @@ live('website orders: the bridge follows what the website showed the customer', 
     expect(discountBaseCents(s.items, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: true })).toBe(150_000);
   });
 
+  /**
+   * v0.7.37 (WEBSITE DELIVERY DISCOUNT): a DELIVERY as a website of v0.7.37 sends it — the lines under
+   * the till's own names (the charge is known by its name, never flagged), the owner's % off the food
+   * only: the charge's priced line takes no share (apps/web api/orders), nor a flagged deal.
+   */
+  async function webDelivery(id: string, lines: WebLine[], pct: number): Promise<WebOrder> {
+    const priceOrder = await websitePricing();
+    const items = lines.map(([key, quantity, flagged]) => {
+      const row = db.prepare(`SELECT name, base_price_cents FROM menu_items WHERE id = ?`).get(menu[key]) as Row;
+      return {
+        posItemId: menu[key],
+        name: String(row['name']),
+        quantity,
+        unitPriceCents: Number(row['base_price_cents']),
+        modifiers: [],
+        notes: null,
+        ...(flagged ? { noDiscount: true } : {}),
+      };
+    });
+    const shown = priceOrder(
+      items.map((i) => ({
+        lineTotalCents: i.unitPriceCents * i.quantity,
+        taxRateBps: 1_500,
+        ...(i.noDiscount || /^delivery charge/i.test(i.name) ? { noDiscount: true } : {}),
+      })),
+      pct,
+    );
+    return {
+      id,
+      status: 'new',
+      customerName: 'Web Customer',
+      customerPhone: '03111234567',
+      addressLine: 'Flat 2, Web Road',
+      area: 'Test Area',
+      notes: null,
+      fulfilment: 'delivery',
+      items,
+      subtotalCents: shown.subtotalCents,
+      discountCents: shown.discountCents,
+      taxCents: shown.taxCents,
+      totalCents: shown.totalCents,
+      paymentMethod: 'cod',
+      createdAt: new Date().toISOString(),
+      posOrderId: null,
+      posOrderNumber: null,
+    };
+  }
+
+  it('v0.7.37: a website delivery of Big Two (flagged) + a pizza + the Rs 200 charge at 10% — Rs 150 off the pizza only; the deal and the charge at full price; the rule frozen food-only — the website’s total, no “total changed”', async () => {
+    const web = await webDelivery('web-delivery-10', [['bigTwo', 1, true], ['pizza', 1], ['charge', 1]], 10);
+    // 10% of the Rs 1,500 pizza; tax 15% of Rs 3,600 + Rs 1,350 + Rs 200.
+    expect(web).toMatchObject({ subtotalCents: 530_000, discountCents: 15_000, taxCents: 77_250, totalCents: 592_250 });
+    const orderId = await importWebOrder(web);
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 530_000, discount_cents: 15_000, tax_cents: 77_250, total_cents: 592_250 });
+    expect(marks(orderId)).toEqual({ 'Big Two': 1, 'Test Fajita Pizza': 0, 'Delivery Charge (Rs 200)': 0 });
+    const [row] = liveDiscounts(orderId);
+    expect(row).toMatchObject({ source: null, value: 10, amount_cents: 15_000, approved_by_user_id: 'u_admin' });
+    expect(ruleOf(row)).toEqual({ kind: 'discount_base', v: 1, alsoOffDeliveryCharge: false, from: 'website', skipsNoDiscountLines: true });
+    receivedWithoutMismatch(orderId, 592_250);
+    const s = await snap(orderId);
+    expect(s.discounts).toMatchObject([{ alsoOffDeliveryCharge: false, skipsNoDiscountLines: true }]);
+    expect(fbrLines(s)).toMatchObject({
+      'Test Fajita Pizza': { net: 1_350, tax: 202.5, discount: 150 },
+      'Big Two': { net: 3_600, tax: 540, discount: undefined },
+    });
+    expect(fbrLines(s)['Delivery Charge (Rs 200)']).toMatchObject({ net: 200, discount: undefined });
+  });
+
+  it('v0.7.37: a website delivery with nothing flagged (a pizza + the charge) at 10% — the % over the food, never the charge; no skipping key', async () => {
+    const web = await webDelivery('web-delivery-plain', [['pizza', 1], ['charge', 1]], 10);
+    expect(web).toMatchObject({ subtotalCents: 170_000, discountCents: 15_000, taxCents: 23_250, totalCents: 178_250 });
+    const orderId = await importWebOrder(web);
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 170_000, discount_cents: 15_000, tax_cents: 23_250, total_cents: 178_250 });
+    expect(ruleOf(liveDiscounts(orderId)[0])).toEqual({ kind: 'discount_base', v: 1, alsoOffDeliveryCharge: false, from: 'website' });
+    receivedWithoutMismatch(orderId, 178_250);
+  });
+
   it('a web delivery with a deal (flagged, as a new website stores it): no discount; the deal line is 1 by the till’s category, the charge 0', async () => {
     const web = await webOrder('web-delivery-deal', 'delivery', [['bigTwo', 1, true], ['pizza', 1], ['charge', 1]], 0);
     expect(web).toMatchObject({ subtotalCents: 530_000, discountCents: 0, totalCents: 609_500 });

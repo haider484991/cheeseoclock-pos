@@ -579,7 +579,8 @@ const SHOP_SETTING_SAVES = (): unknown[] => [
   { key: 'discounts.delivery', value: { v: 1, alsoOffDeliveryCharge: true } },
   { key: 'discounts.delivery', useDefault: true },
   // Settings step 3: the website's pick-up offer and "publish the menu by itself" (the areas have their own channel).
-  { key: 'discounts.websitePickup', value: { v: 1, offered: false, percent: 15 } },
+  // v0.7.37: format 2 adds alsoDelivery (the website % off a delivery's food too).
+  { key: 'discounts.websitePickup', value: { v: 2, offered: false, percent: 15, alsoDelivery: true } },
   { key: 'discounts.websitePickup', useDefault: true },
   {
     key: 'online.options',

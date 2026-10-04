@@ -98,6 +98,8 @@ export const publishedZoneSchema = z.object({
 export const publishedPickupSchema = z.object({
   offered: z.boolean(),
   percent: z.number().int().min(0).max(WEBSITE_PICKUP_MAX_PERCENT),
+  /** v0.7.37 (WEBSITE DELIVERY DISCOUNT): sent only as true; absent = deliveries pay full price. */
+  alsoDelivery: z.boolean().optional(),
 });
 
 // ---------------------------------------------------------------------------

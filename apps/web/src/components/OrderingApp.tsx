@@ -119,6 +119,7 @@ export function OrderingApp({
   acceptingOrders,
   pickupAvailable,
   pickupDiscountPercent,
+  deliveryDiscountPercent = 0,
   deliveryFacts,
   closedNotice = null,
   shop = DEFAULT_SHOP_FACTS,
@@ -129,6 +130,11 @@ export function OrderingApp({
   pickupAvailable: boolean;
   /** The pickup discount that till bills — shown and priced here. */
   pickupDiscountPercent: number;
+  /**
+   * The % off a delivery's food (WEBSITE DELIVERY DISCOUNT, v0.7.37; lib/store-status): never value
+   * deals, never the delivery charge. 0 = deliveries pay full price (today).
+   */
+  deliveryDiscountPercent?: number;
   /** Where the owner delivers and the fees (the settings block with this menu, else the built-in areas). */
   deliveryFacts: SiteFacts;
   /**
@@ -162,6 +168,7 @@ export function OrderingApp({
   const [open, setOpen] = useState(acceptingOrders);
   const [canPickup, setCanPickup] = useState(pickupAvailable);
   const [pickupPct, setPickupPct] = useState(pickupDiscountPercent);
+  const [deliveryPct, setDeliveryPct] = useState(deliveryDiscountPercent);
   // The owner's closed notice, kept as current as the rest: its last day ends while the page is open.
   const [notice, setNotice] = useState<string | null>(closedNotice);
   useEffect(() => {
@@ -175,6 +182,7 @@ export function OrderingApp({
             acceptingOrders: boolean;
             pickupAvailable?: boolean;
             pickupDiscountPercent?: number;
+            deliveryDiscountPercent?: number;
             closedNotice?: string | null;
           };
         };
@@ -182,6 +190,8 @@ export function OrderingApp({
           setOpen(json.data.acceptingOrders);
           setCanPickup(json.data.pickupAvailable === true);
           if (typeof json.data.pickupDiscountPercent === 'number') setPickupPct(json.data.pickupDiscountPercent);
+          // An older website's reply has no word about it: deliveries pay full price, as it charges.
+          setDeliveryPct(typeof json.data.deliveryDiscountPercent === 'number' ? json.data.deliveryDiscountPercent : 0);
           // An older website's reply has no word about it: keep what the page was served.
           if (json.data.closedNotice !== undefined) setNotice(json.data.closedNotice);
         }
@@ -304,13 +314,15 @@ export function OrderingApp({
 
   // Same maths as the server and the till (lib/pricing). The delivery fee is
   // a real till item — the same one the server adds (zoneFeeItemFor) — taxed
-  // like one; pickup takes its discount off every line but value deals.
+  // like one; pickup takes its discount off every line but value deals, and a
+  // delivery (v0.7.37) its own % off the food: never the fee, never value deals.
   const subtotal = cartSubtotalCents(cart);
   const priced: PricedLine[] = cartPricedLines(cart);
   const feeItem = zone ? zoneFeeItemFor(menu, zone) : undefined;
   const deliveryFee = zone && cart.length > 0 ? zone.feeCents : 0;
-  if (deliveryFee > 0) priced.push({ lineTotalCents: deliveryFee, taxRateBps: feeItem?.taxRateBps ?? 0 });
-  const totals = priceOrder(priced, pickup ? pickupPct : 0);
+  if (deliveryFee > 0) priced.push({ lineTotalCents: deliveryFee, taxRateBps: feeItem?.taxRateBps ?? 0, noDiscount: true });
+  const discountPct = pickup ? pickupPct : deliveryPct;
+  const totals = priceOrder(priced, discountPct);
   const { discountCents: discount, taxCents: tax, totalCents: total } = totals;
   const cartCount = countLines(cart);
   const pickupOnlyInCart = cart.filter((l) => isPickupOnly(l.item)).map((l) => l.label);
@@ -416,6 +428,7 @@ export function OrderingApp({
     fulfilment,
     canPickup,
     pickupPct,
+    deliveryPct,
     onFulfilment: setFulfilment,
     pickupOnlyInCart,
     feeRange,
@@ -432,6 +445,7 @@ export function OrderingApp({
       <MenuHeader
         canPickup={canPickup}
         pickupPct={pickupPct}
+        deliveryPct={deliveryPct}
         notOnDeals={notOnDeals}
         deliveryChip={deliveryChip(deliveryFacts)}
         hoursChip={copyText(MENU_HEADER_HOURS, { ...deliveryFacts, shop })}
@@ -589,6 +603,7 @@ function sectionNote(sectionName: string): string | null {
 function MenuHeader({
   canPickup,
   pickupPct,
+  deliveryPct = 0,
   notOnDeals,
   deliveryChip,
   hoursChip,
@@ -597,6 +612,8 @@ function MenuHeader({
 }: {
   canPickup: boolean;
   pickupPct: number;
+  /** The % off a delivery's food (v0.7.37); 0 = none, and the header is exactly as before. */
+  deliveryPct?: number;
   /** The menu marks value deals (lib/menu-view menuHasNoDiscountItems): the pick-up chip says they are left out. */
   notOnDeals: boolean;
   deliveryChip: string;
@@ -624,15 +641,29 @@ function MenuHeader({
           </p>
         )}
         <ul className="mt-5 flex flex-wrap gap-2 font-cond text-sm font-bold uppercase tracking-wide">
-          {canPickup && (
+          {/* The same % off a delivery's food as off a pick-up (v0.7.37): one chip for every online order. */}
+          {deliveryPct > 0 && (!canPickup || deliveryPct === pickupPct) ? (
             <li className="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">
-              {/* With value deals marked: shorter words, so the chip stays one line on a 375 px phone. */}
-              {notOnDeals ? (
-                `${pickupPct}% off online pick-up · ${NOT_ON_VALUE_DEALS}`
-              ) : (
-                <>{pickupPct}% off when you order online &amp; pick up</>
-              )}
+              {notOnDeals ? `${deliveryPct}% off online orders · ${NOT_ON_VALUE_DEALS}` : `${deliveryPct}% off every online order`}
             </li>
+          ) : (
+            <>
+              {canPickup && (
+                <li className="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">
+                  {/* With value deals marked: shorter words, so the chip stays one line on a 375 px phone. */}
+                  {notOnDeals ? (
+                    `${pickupPct}% off online pick-up · ${NOT_ON_VALUE_DEALS}`
+                  ) : (
+                    <>{pickupPct}% off when you order online &amp; pick up</>
+                  )}
+                </li>
+              )}
+              {deliveryPct > 0 && (
+                <li className="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">
+                  {`${deliveryPct}% off online delivery food${notOnDeals ? ` · ${NOT_ON_VALUE_DEALS}` : ''}`}
+                </li>
+              )}
+            </>
           )}
           <li className={`rounded-full px-3.5 py-1.5 ${canPickup ? 'border border-cream/20' : 'bg-cheese text-ink'}`}>
             {deliveryChip}

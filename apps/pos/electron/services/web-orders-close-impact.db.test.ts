@@ -237,7 +237,7 @@ live('sayTillClosing: the website hears "not accepting" before the till closes',
     await bridgeMod.webOrdersBridge.sayTillClosing();
 
     expect(beats().slice(before)).toEqual([
-      { acceptingOrders: false, deviceId: DEV, features: ['pickup'], pickupDiscountPercent: expect.any(Number) },
+      { acceptingOrders: false, deviceId: DEV, features: ['pickup', 'delivery_discount'], pickupDiscountPercent: expect.any(Number) },
     ]);
     expect(beats().at(-1)).not.toHaveProperty('reason');
   });

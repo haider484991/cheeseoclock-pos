@@ -475,6 +475,17 @@ describe('buildSettingsBlock (the website’s settings block)', () => {
     expect(settingsBlockProblem(block, menu)).toBeNull();
   });
 
+  it('v0.7.37: “also on delivery orders” goes in the block only when ticked — off, the pick-up is byte-for-byte today’s', () => {
+    const base = { zones: DEFAULT_DELIVERY_ZONES.zones, stamps: [], menuItems, deviceId: 'till-a' };
+    const on = buildSettingsBlock({ ...base, pickup: { offered: true, percent: 10, alsoDelivery: true } });
+    expect(on.pickup).toEqual({ offered: true, percent: 10, alsoDelivery: true });
+    for (const pickup of [{ offered: true, percent: 10, alsoDelivery: false }, { offered: true, percent: 10 }]) {
+      const off = buildSettingsBlock({ ...base, pickup });
+      expect(JSON.stringify(off.pickup)).toBe('{"offered":true,"percent":10}');
+    }
+    expect(settingsBlockProblem(on, menu)).toBeNull();
+  });
+
   it('a switched-off area is still in the block (its page stays), and a missing fee item is caught before sending', () => {
     const zones = zonesWith((z) =>
       z.id === 'emaar'

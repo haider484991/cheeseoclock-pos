@@ -79,6 +79,8 @@ export async function PUT(req: Request): Promise<Response> {
       websiteMessages: true,
       // This website keeps the items' noDiscount and prices pick-ups without them (an older one strips it).
       noDiscountItems: true,
+      // This website keeps pickup.alsoDelivery and takes the % off a delivery's food (v0.7.37).
+      deliveryDiscount: true,
       // THE SHOP BLOCK: what it did with this publish's (or the stored one), what it holds now.
       ...shopAnswer,
     };
