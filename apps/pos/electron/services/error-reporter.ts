@@ -1,24 +1,35 @@
 import { app } from 'electron';
 import log from 'electron-log/main';
+import { scrubEventForSend } from '@cheeseoclock/pos-domain';
 
 /**
  * Crash + error reporting. Wires up @sentry/electron when:
  *   - the package is installed (try-imported, no hard dependency)
- *   - SENTRY_DSN environment variable is present
+ *   - SENTRY_DSN was set when the build was made (the release workflow passes
+ *     the repository secret; empty = off)
  *
  * Otherwise this is a no-op — the app still boots, errors still go to the
- * electron-log file. This pattern keeps the codebase deployable for customers
- * who don't want / can't afford Sentry, while letting us flip it on per-customer
- * by setting the env var at packaging time.
+ * electron-log file.
  *
- * To enable in production:
- *   1. `pnpm add @sentry/electron --filter @cheeseoclock/pos`
- *   2. Set SENTRY_DSN in your build env or in a customer-specific config.
+ * Nothing personal leaves the till: every event is scrubbed (phones, e-mails,
+ * PINs, passwords, tokens — pos-domain pii-scrub.ts) and an event that cannot
+ * be scrubbed is DROPPED, never sent as it is. Sentry's own PII collection is
+ * off. The till's device id is a tag so a report can be matched to a shop.
  *
- * Personally-identifying info (PINs, phones, full customer payloads) is
- * scrubbed in `beforeSend` so a leaked DSN can't exfiltrate PII.
+ * Unhandled promise rejections in the main process are logged (and reported
+ * when Sentry is on) instead of ending the process: a till keeps selling.
  */
+interface SentryMainLike {
+  init: (opts: Record<string, unknown>) => void;
+  setTag?: (key: string, value: string) => void;
+  captureException?: (err: unknown) => unknown;
+}
+
+let sentryRef: SentryMainLike | null = null;
+let rejectionsHooked = false;
+
 export async function initErrorReporter(): Promise<void> {
+  hookUnhandledRejections();
   const dsn = process.env.SENTRY_DSN || (process.env.CHEESEOCLOCK_SENTRY_DSN ?? null);
   if (!dsn) {
     log.info('Sentry: DSN not set — error reporting disabled');
@@ -29,9 +40,7 @@ export async function initErrorReporter(): Promise<void> {
     // we just log and continue.
     const sentry = (await import(/* webpackIgnore: true */ '@sentry/electron/main' as string).catch(
       () => null,
-    )) as null | {
-      init: (opts: Record<string, unknown>) => void;
-    };
+    )) as null | SentryMainLike;
     if (!sentry) {
       log.warn('Sentry: @sentry/electron is not installed; skipping');
       return;
@@ -42,43 +51,45 @@ export async function initErrorReporter(): Promise<void> {
       environment: app.isPackaged ? 'production' : 'development',
       tracesSampleRate: 0,
       autoSessionTracking: false,
-      // Scrub PII before any event leaves the device.
+      sendDefaultPii: false,
+      // Scrub PII before any event leaves the device; drop what cannot be scrubbed.
       beforeSend: (event: Record<string, unknown>) => {
-        try {
-          scrubPii(event);
-        } catch {
-          // never block a send on scrubbing failure
-        }
-        return event;
+        const clean = scrubEventForSend(event);
+        if (!clean) log.warn('Sentry: an event could not be scrubbed and was not sent');
+        return clean;
       },
     });
+    sentryRef = sentry;
     log.info('Sentry: initialized', { dsn: maskDsn(dsn) });
   } catch (e) {
     log.warn('Sentry: init failed', e);
   }
 }
 
-/**
- * Strip likely PII from a Sentry event payload. Stays conservative — we'd
- * rather lose context than leak phone numbers / PINs.
- */
-function scrubPii(event: Record<string, unknown>): void {
-  const json = JSON.stringify(event);
-  const scrubbed = json
-    // Pakistani mobile patterns
-    .replace(/\+?92\s?-?\d{3}\s?-?\d{7}/g, '+92••• ••• ••••')
-    .replace(/\b0\d{10}\b/g, '0•••••••••')
-    // Email patterns
-    .replace(/([\w.-]+)@([\w.-]+)/g, '$1•••@$2')
-    // Sign-in secrets: any value under a key that holds a PIN or a password
-    // (a password may hold escaped quotes, hence the escape-aware match).
-    .replace(
-      /"(pin|pin_hash|pinHash|approverPin|password|secret|newPin|currentPin)"\s*:\s*"(?:[^"\\]|\\.)*"/g,
-      '"$1":"••••"',
-    );
-  const reparsed = JSON.parse(scrubbed) as Record<string, unknown>;
-  for (const k of Object.keys(event)) delete event[k];
-  Object.assign(event, reparsed);
+/** Facts that identify the till, not a person (the device id, its name). No-op when Sentry is off. */
+export function tagErrorReporter(tags: Record<string, string>): void {
+  const s = sentryRef;
+  if (!s?.setTag) return;
+  for (const [k, v] of Object.entries(tags)) {
+    try {
+      s.setTag(k, v);
+    } catch {
+      // a tag is never worth an error
+    }
+  }
+}
+
+function hookUnhandledRejections(): void {
+  if (rejectionsHooked) return;
+  rejectionsHooked = true;
+  process.on('unhandledRejection', (reason) => {
+    log.error('Unhandled promise rejection in the main process', reason);
+    try {
+      sentryRef?.captureException?.(reason);
+    } catch {
+      // the log line is the record
+    }
+  });
 }
 
 function maskDsn(dsn: string): string {

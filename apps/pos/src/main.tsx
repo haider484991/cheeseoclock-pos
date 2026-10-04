@@ -14,6 +14,7 @@ import { CloseTillHost } from './features/shell/CloseTillHost';
 import { OrderAlerts } from './features/notifications/OrderAlerts';
 import { forgetOnWhoChanges } from './stores/forgetOnSignOut';
 import { staleCustomersOnSave } from './features/checkout/customerLookups';
+import { scrubEventForSend } from '@cheeseoclock/pos-domain';
 import './styles/globals.css';
 
 // Renderer-side Sentry — captures React errors + unhandled rejections in the
@@ -26,6 +27,9 @@ if (RENDERER_DSN) {
       dsn: RENDERER_DSN,
       tracesSampleRate: 0.05,
       sendDefaultPii: false,
+      // Nothing personal leaves the till: phones, e-mails and secrets are
+      // blanked; an event that cannot be scrubbed is dropped (pos-domain pii-scrub).
+      beforeSend: (event) => scrubEventForSend(event),
     });
   });
 }

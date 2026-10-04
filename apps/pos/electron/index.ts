@@ -17,7 +17,7 @@ import { fbrWorker } from './services/fbr-worker.js';
 import { syncWorker } from './services/sync-worker.js';
 import { webOrdersBridge } from './services/web-orders-bridge.js';
 import { settleShiftPauseAtStart } from './services/web-orders-shift-pause.js';
-import { initErrorReporter } from './services/error-reporter.js';
+import { initErrorReporter, tagErrorReporter } from './services/error-reporter.js';
 import { initAutoUpdater } from './services/auto-updater.js';
 import {
   initBackupService,
@@ -176,6 +176,8 @@ async function bootstrap() {
 
   const deviceInfo = ensureDeviceInfo(db);
   log.info('Device registered', { deviceId: deviceInfo.deviceId });
+  // A crash report names the till, never a person.
+  tagErrorReporter({ deviceId: deviceInfo.deviceId, deviceName: deviceInfo.displayName, appVersion: app.getVersion() });
 
   // The licence: a 30-day trial from the first start, then a key issued for
   // this Device ID (Settings → About). Expiry stops new sales only; reports,

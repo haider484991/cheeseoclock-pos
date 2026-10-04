@@ -40,3 +40,4 @@ export * from './opening-float.js';
 export * from './menu-deploy.js';
 export * from './cash-count.js';
 export * from './shift-report.js';
+export * from './pii-scrub.js';
