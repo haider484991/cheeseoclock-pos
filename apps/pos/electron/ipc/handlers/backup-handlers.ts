@@ -1,5 +1,7 @@
 import path from 'node:path';
+import { app, dialog } from 'electron';
 import log from 'electron-log/main';
+import { getSecondCopyStatus, setSecondCopyDir } from '../../services/backup-second-copy.js';
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError, markShuttingDown } from '../registry.js';
 import { ok } from '@cheeseoclock/shared-types';
@@ -43,6 +45,28 @@ export function registerBackupHandlers(ctx: HandlerContext): void {
     requireSettingsManage();
     const p = await exportBackup();
     return ok({ path: p });
+  });
+
+  // A second copy of every backup outside this PC. Owner only: the folder is
+  // where the shop's whole database goes.
+  defineHandler('backup:pickSecondCopyFolder', ctx, async () => {
+    const owner = requireAdmin('Choosing the second-copy folder');
+    const picked = await dialog.showOpenDialog({
+      title: 'Folder for a second copy of every backup',
+      buttonLabel: 'Use this folder',
+      properties: ['openDirectory', 'createDirectory', 'dontAddToRecent'],
+    });
+    const dir = picked.canceled ? null : picked.filePaths[0];
+    if (!dir) return ok(getSecondCopyStatus(ctx.db));
+    try {
+      return ok(setSecondCopyDir(ctx.db, dir, app.getPath('userData'), owner.id));
+    } catch (e) {
+      throw new IpcGuardError({ code: 'validation_failed', message: e instanceof Error ? e.message : String(e) });
+    }
+  });
+  defineHandler('backup:clearSecondCopy', ctx, () => {
+    const owner = requireAdmin('Stopping the second copies');
+    return ok(setSecondCopyDir(ctx.db, null, app.getPath('userData'), owner.id));
   });
 
   defineHandler('backup:stageRestoreFromPicker', ctx, async () => {

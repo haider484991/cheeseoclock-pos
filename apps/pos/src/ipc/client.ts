@@ -52,6 +52,7 @@ export const ipc = {
   licence: {
     status: () => unwrap(window.api.licence.status()),
     activate: (token: string) => unwrap(window.api.licence.activate({ token })),
+    resetClock: () => unwrap(window.api.licence.resetClock()),
   },
   system: {
     getVersion: () => unwrap(window.api.system.getVersion()),
@@ -299,6 +300,8 @@ export const ipc = {
     list: () => unwrap(window.api.backup.list()),
     create: () => unwrap(window.api.backup.create()),
     export: () => unwrap(window.api.backup.export()),
+    pickSecondCopyFolder: () => unwrap(window.api.backup.pickSecondCopyFolder()),
+    clearSecondCopy: () => unwrap(window.api.backup.clearSecondCopy()),
     stageRestoreFromPicker: () => unwrap(window.api.backup.stageRestoreFromPicker()),
     stageRestoreFromPath: (path: string) =>
       unwrap(window.api.backup.stageRestoreFromPath({ path })),

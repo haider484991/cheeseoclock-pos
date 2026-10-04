@@ -7,6 +7,7 @@ import {
   isWebBridgeReady,
 } from './web-bridge-config.js';
 import { LAST_CLOUD_ERROR_KEY } from './web-orders-bridge.js';
+import { getSecondCopyStatus } from './backup-second-copy.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** The daily copy on this PC is late after this long. */
@@ -66,5 +67,19 @@ export function getBackupHealth(db: AppDatabase, now = Date.now()) {
     }
   }
 
-  return { lastLocalAt, lastLocalError, cloudOn, lastCloudAt, lastCloudError, warnings };
+  // The second copy outside this PC (backup-second-copy.ts). A till with
+  // neither a cloud copy nor a second-copy folder has every copy on one disk.
+  const secondCopy = getSecondCopyStatus(db);
+  if (secondCopy.dir) {
+    if (secondCopy.lastError) {
+      warnings.push(`The second copy to ${secondCopy.dir} failed: ${secondCopy.lastError.message}`);
+    } else if (!secondCopy.lastAt) {
+      warnings.push(`No second copy has been written to ${secondCopy.dir} yet — it follows the next backup.`);
+    } else if (now - Date.parse(secondCopy.lastAt) > LOCAL_STALE_MS) {
+      warnings.push(`The last second copy in ${secondCopy.dir} is ${daysAgo(secondCopy.lastAt, now)} days old.`);
+    }
+  } else if (!cloudOn) {
+    warnings.push('Every copy is on this PC. Set a second-copy folder (USB drive, OneDrive or Google Drive folder) or link the website for cloud copies.');
+  }
+  return { lastLocalAt, lastLocalError, cloudOn, lastCloudAt, lastCloudError, secondCopy, warnings };
 }

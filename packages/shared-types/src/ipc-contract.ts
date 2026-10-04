@@ -213,6 +213,14 @@ export interface AuditTrailStatus {
   anchor: { uploadedAt: string; headHash: string; present: boolean } | null;
 }
 
+/** Settings → Backups → Second copy: where it goes and how the last one went. */
+export interface BackupSecondCopyStatus {
+  dir: string | null;
+  lastAt: string | null;
+  lastFileName: string | null;
+  lastError: { at: string; message: string } | null;
+}
+
 export interface IpcContract {
   // Licence (readable before anyone logs in: the banner shows on the PIN screen too)
   'licence:status': {
@@ -222,6 +230,11 @@ export interface IpcContract {
   /** Paste a key. Owner only. A refused key changes nothing and says why. */
   'licence:activate': {
     request: { token: string };
+    response: ApiResult<LicenceStatus>;
+  };
+  /** Owner says the PC's date and time are right now: the licence counts from this clock again (audited). */
+  'licence:resetClock': {
+    request: undefined;
     response: ApiResult<LicenceStatus>;
   };
 
@@ -2281,8 +2294,20 @@ export interface IpcContract {
       cloudOn: boolean;
       lastCloudAt: string | null;
       lastCloudError: { at: string; message: string } | null;
+      /** The owner's second-copy folder outside this PC (backup-second-copy.ts); dir null = not set. */
+      secondCopy: BackupSecondCopyStatus;
       warnings: string[];
     }>;
+  };
+  /** Owner picks a folder (USB drive, cloud folder, network share) for a second copy of every backup. Cancelled = unchanged. */
+  'backup:pickSecondCopyFolder': {
+    request: undefined;
+    response: ApiResult<BackupSecondCopyStatus>;
+  };
+  /** Owner stops the second copies; files already in the folder stay. */
+  'backup:clearSecondCopy': {
+    request: undefined;
+    response: ApiResult<BackupSecondCopyStatus>;
   };
 
   // Audit trail (hash-chained; see apps/pos/electron/db/audit-chain.ts)

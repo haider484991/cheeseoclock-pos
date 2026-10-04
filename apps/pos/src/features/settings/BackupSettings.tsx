@@ -50,6 +50,7 @@ export function BackupsPanel({ onGoToOnline }: { onGoToOnline: () => void }) {
     <div className="space-y-6">
       <BackupStatusCard onGoToOnline={onGoToOnline} />
       <CopiesCard />
+      <SecondCopyCard />
       <UsbCard />
       <AdvancedBackups onGoToOnline={onGoToOnline} />
     </div>
@@ -358,6 +359,79 @@ function CopiesCard() {
 
 const FILE_QUESTION =
   'Restore from a USB copy?\nYou pick the file next. Orders, menu, stock, customers and settings on this till are replaced by it, and the app restarts.\n\nToday’s data is saved first as a safety copy, so this can be undone. A copy that was changed after it was saved is refused.';
+
+/**
+ * A folder outside this PC that every daily backup and every "Back up now" is
+ * also copied to: a USB drive, a OneDrive or Google Drive folder, a network
+ * share. Owner only. The health card's warnings say when a copy failed.
+ */
+function SecondCopyCard() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const healthQ = useQuery({ queryKey: ['backup', 'health'], queryFn: () => ipc.backup.health() });
+  const sc = healthQ.data?.secondCopy;
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['backup'] });
+  const pick = useMutation({
+    mutationFn: () => ipc.backup.pickSecondCopyFolder(),
+    onSuccess: (s) => {
+      refresh();
+      if (s.dir) toast({ title: 'Second copy on', description: `Every backup is also copied to ${s.dir}.`, variant: 'success' });
+    },
+    onError: (e) => toast({ title: 'That folder cannot be used', description: errorMessage(e), variant: 'error' }),
+  });
+  const clear = useMutation({
+    mutationFn: () => ipc.backup.clearSecondCopy(),
+    onSuccess: () => {
+      refresh();
+      toast({ title: 'Second copy off', description: 'The copies already in the folder stay there.', variant: 'success' });
+    },
+    onError: (e) => toast({ title: 'Could not switch it off', description: errorMessage(e), variant: 'error' }),
+  });
+
+  return (
+    <Card>
+      <div className="mb-1 flex items-center gap-2">
+        <Download className="h-5 w-5" />
+        <h2 className="text-lg font-semibold">Second copy outside this PC</h2>
+      </div>
+      <p className="mb-3 text-sm text-stone-500">
+        Pick a folder on a USB drive, a OneDrive or Google Drive folder, or a network share. Every daily backup and every
+        “Back up now” is copied there too, the newest 14 kept. If this computer dies, the till comes back from that
+        folder — no website or internet needed.
+      </p>
+      {sc?.dir ? (
+        <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+          <dt className="text-stone-500">Folder</dt>
+          <dd className="break-all font-mono text-xs">{sc.dir}</dd>
+          <dt className="text-stone-500">Last copy</dt>
+          <dd>
+            {sc.lastAt ? `${fmtWhen(sc.lastAt)}${sc.lastFileName ? ` (${sc.lastFileName})` : ''}` : 'Not yet — it follows the next backup'}
+          </dd>
+          {sc.lastError && (
+            <>
+              <dt className="text-red-700">Last try failed</dt>
+              <dd className="text-red-700">
+                {fmtWhen(sc.lastError.at)}: {sc.lastError.message}
+              </dd>
+            </>
+          )}
+        </dl>
+      ) : (
+        <p className="mb-3 text-sm text-stone-600 dark:text-stone-300">No second-copy folder is set.</p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button variant="secondary" onClick={() => pick.mutate()} disabled={pick.isPending}>
+          {pick.isPending ? 'Choosing…' : sc?.dir ? 'Change folder…' : 'Choose a folder…'}
+        </Button>
+        {sc?.dir && (
+          <Button variant="secondary" onClick={() => clear.mutate()} disabled={clear.isPending}>
+            {clear.isPending ? 'Switching off…' : 'Stop the second copies'}
+          </Button>
+        )}
+      </div>
+    </Card>
+  );
+}
 
 function UsbCard() {
   const { toast } = useToast();

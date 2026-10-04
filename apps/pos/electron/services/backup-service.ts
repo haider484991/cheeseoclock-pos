@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import log from 'electron-log/main';
 import { closeDatabase, type AppDatabase } from '../db/connection.js';
 import { deleteSetting, setSetting } from '../db/repositories/settings-repo.js';
+import { copyBackupToSecondFolder } from './backup-second-copy.js';
 
 /**
  * Local backup / restore for the SQLite database.
@@ -198,6 +199,9 @@ function backupCreated(kind: BackupKind, fileName: string, fullPath: string): Cr
   log.info('Backup created', { fileName, sizeBytes });
   if (kind === 'auto') rotateAutoBackups();
   if (kind === 'before-menu') rotateBeforeMenuBackups();
+  // The owner's second-copy folder (USB, cloud folder, network share), when
+  // one is set: copied in the background, recorded, never fails the backup.
+  if (kind !== 'before-menu' && dbRef) void copyBackupToSecondFolder(dbRef, fullPath, fileName);
   return { fileName, fullPath, sizeBytes };
 }
 

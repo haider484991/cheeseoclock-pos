@@ -27,6 +27,7 @@ const api: RendererApi = {
   licence: {
     status: () => invoke('licence:status', undefined),
     activate: (req) => invoke('licence:activate', req),
+    resetClock: () => invoke('licence:resetClock', undefined),
   },
   system: {
     getVersion: () => invoke('system:getVersion', undefined),
@@ -133,6 +134,8 @@ const api: RendererApi = {
     list: () => invoke('backup:list', undefined),
     create: () => invoke('backup:create', undefined),
     export: () => invoke('backup:export', undefined),
+    pickSecondCopyFolder: () => invoke('backup:pickSecondCopyFolder', undefined),
+    clearSecondCopy: () => invoke('backup:clearSecondCopy', undefined),
     stageRestoreFromPicker: () => invoke('backup:stageRestoreFromPicker', undefined),
     stageRestoreFromPath: (req) => invoke('backup:stageRestoreFromPath', req),
     delete: (req) => invoke('backup:delete', req),
