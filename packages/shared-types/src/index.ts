@@ -42,3 +42,4 @@ export * from './shop-settings.js';
 export * from './till-settings.js';
 export * from './till-power.js';
 export * from './till-window.js';
+export * from './licence.js';

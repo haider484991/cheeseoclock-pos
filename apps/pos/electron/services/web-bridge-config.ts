@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { licenceService } from './licence/licence-service.js';
 import {
   PICKUP_DISCOUNT_PERCENT,
   type BridgeHeartbeatBody,
@@ -167,7 +168,9 @@ export function storeAcceptingOrders(
   cfg: Pick<WebBridgeConfig, 'enabled'>,
   pause: StoredShiftPause | null,
 ): boolean {
-  return cfg.enabled && pause === null;
+  // A till whose licence has run out stops selling, so the website must stop
+  // taking orders for it too (licence-service.ts; true before the till starts).
+  return cfg.enabled && pause === null && licenceService.salesAllowed();
 }
 
 /**

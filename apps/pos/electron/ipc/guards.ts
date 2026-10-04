@@ -1,7 +1,23 @@
 import type { AppDatabase } from '../db/connection.js';
 import { COST_CAPABILITY, PROFIT_CAPABILITY, hasCapability, type AuthenticatedUser, type Capability } from '@cheeseoclock/shared-types';
 import { getCurrentSession } from '../services/auth-service.js';
+import { licenceService } from '../services/licence/licence-service.js';
 import { IpcGuardError } from './registry.js';
+
+/**
+ * New orders and payments need a licence that still sells: the free trial,
+ * the paid period or its grace days (licence-core.ts). Everything else on the
+ * till stays open when it has run out. The message is the card's own words.
+ */
+export function requireLicenceForSales(): void {
+  const status = licenceService.status();
+  if (status.salesAllowed) return;
+  throw new IpcGuardError({
+    code: 'precondition_failed',
+    message: `${status.message} (Settings → About → Licence.)`,
+    details: { licence: status.state, daysLeft: status.daysLeft },
+  });
+}
 
 /**
  * Shared guards for IPC handlers. Each throws IpcGuardError, which

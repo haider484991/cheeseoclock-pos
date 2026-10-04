@@ -49,6 +49,10 @@ async function unwrap<T>(p: Promise<ApiResult<T>>): Promise<T> {
 }
 
 export const ipc = {
+  licence: {
+    status: () => unwrap(window.api.licence.status()),
+    activate: (token: string) => unwrap(window.api.licence.activate({ token })),
+  },
   system: {
     getVersion: () => unwrap(window.api.system.getVersion()),
     getDeviceInfo: () => unwrap(window.api.system.getDeviceInfo()),

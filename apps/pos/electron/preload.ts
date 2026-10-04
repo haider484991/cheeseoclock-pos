@@ -24,6 +24,10 @@ async function invoke<C extends IpcChannel>(
 }
 
 const api: RendererApi = {
+  licence: {
+    status: () => invoke('licence:status', undefined),
+    activate: (req) => invoke('licence:activate', req),
+  },
   system: {
     getVersion: () => invoke('system:getVersion', undefined),
     getDeviceInfo: () => invoke('system:getDeviceInfo', undefined),

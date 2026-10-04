@@ -8,6 +8,7 @@
  */
 
 import type { ApiResult } from './ipc.js';
+import type { LicenceStatus } from './licence.js';
 import type { AuthenticatedUser, User, Role } from './auth.js';
 import type {
   Category,
@@ -213,6 +214,17 @@ export interface AuditTrailStatus {
 }
 
 export interface IpcContract {
+  // Licence (readable before anyone logs in: the banner shows on the PIN screen too)
+  'licence:status': {
+    request: undefined;
+    response: ApiResult<LicenceStatus>;
+  };
+  /** Paste a key. Owner only. A refused key changes nothing and says why. */
+  'licence:activate': {
+    request: { token: string };
+    response: ApiResult<LicenceStatus>;
+  };
+
   // System
   'system:getVersion': {
     request: undefined;

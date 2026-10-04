@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { initDatabase, closeDatabase } from './db/connection.js';
 import { runMigrations, MigrationFailedError } from './db/migrator.js';
 import { ensureDeviceInfo } from './db/repositories/device-repo.js';
+import { licenceService } from './services/licence/licence-service.js';
 import { ensureSeedUsers } from './db/repositories/user-repo.js';
 import { ensureSeedMenu } from './db/seed.js';
 import { seedPriceHistoryOnce } from './services/costing-seed.js';
@@ -175,6 +176,15 @@ async function bootstrap() {
 
   const deviceInfo = ensureDeviceInfo(db);
   log.info('Device registered', { deviceId: deviceInfo.deviceId });
+
+  // The licence: a 30-day trial from the first start, then a key issued for
+  // this Device ID (Settings → About). Expiry stops new sales only; reports,
+  // backups and settings stay open. Never throws.
+  try {
+    licenceService.init(db, deviceInfo.deviceId);
+  } catch (err) {
+    log.error('Licence: could not be checked at start; the till opens and checks again on use', err);
+  }
 
   // Secrets stored in clear by older builds get sealed with the OS keychain;
   // a restore leaves a permanent, hash-chained record inside the restored data.

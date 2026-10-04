@@ -1,6 +1,6 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
-import { requireAdmin, requireCapability, REFUSED } from '../guards.js';
+import { requireAdmin, requireCapability, REFUSED, requireLicenceForSales } from '../guards.js';
 import { assertCounterAddress, assertCounterMaySee, assertOrderStillBeingTaken } from '../order-access.js';
 import { COST_CAPABILITY, ok, hasCapability } from '@cheeseoclock/shared-types';
 import type {
@@ -219,6 +219,7 @@ function deliveryAreaPhone(raw: unknown): string | null {
 export function registerOrdersHandlers(ctx: HandlerContext): void {
   defineHandler('orders:create', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
+    requireLicenceForSales();
     // The same address rule as the attach channels, before any row is written.
     if (payload.customerId) assertCounterAddress(ctx.db, s, payload.customerId, payload.customerAddressId);
     // How it came in, when a chip was tapped before the first item: one of the counter's three.
@@ -714,6 +715,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
 
   defineHandler('orders:tender', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
+    requireLicenceForSales();
     const fp = foodpandaTenderCheckSchema.safeParse(payload.foodpanda ?? {});
     if (!fp.success) {
       throw new IpcGuardError({ code: 'validation_failed', message: fp.error.issues[0]?.message ?? 'Check the tablet total' });

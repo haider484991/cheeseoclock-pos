@@ -33,6 +33,7 @@ import { BackupsPanel } from './BackupSettings';
 import { useBackupSummary } from './useBackupSummary';
 import { WebsiteSettings } from './WebsiteSettings';
 import { AboutCard } from './AboutCard';
+import { LicenceCard } from './LicenceCard';
 import { FoodpandaSettings } from './FoodpandaSettings';
 import { MoneySettings } from './MoneySettings';
 import { TimingSettings } from './TimingSettings';
@@ -202,7 +203,12 @@ export function SettingsPage() {
         {tab === 'backups' && <BackupsPanel onGoToOnline={() => setTab('online')} />}
         {tab === 'fbr' && <FbrSettings />}
         {tab === 'advanced' && <SyncSettings />}
-        {tab === 'about' && <AboutCard />}
+        {tab === 'about' && (
+          <>
+            <LicenceCard />
+            <AboutCard />
+          </>
+        )}
       </div>
     </div>
   );

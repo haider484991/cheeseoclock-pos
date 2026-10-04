@@ -31,6 +31,7 @@ import { registerCostingHandlers } from './handlers/costing-handlers.js';
 import { registerSettingsHandlers } from './handlers/settings-handlers.js';
 import { registerPowerHandlers } from './handlers/power-handlers.js';
 import { registerMenuDeployHandlers } from './handlers/menu-deploy-handlers.js';
+import { registerLicenceHandlers } from './handlers/licence-handlers.js';
 import { reapStaleSessions } from '../services/auth-service.js';
 import { markHeldStepIn } from './step-in-hold.js';
 import { startHousekeeping } from '../services/housekeeping.js';
@@ -141,6 +142,7 @@ export function registerAllIpcHandlers(ctx: HandlerContext): void {
   reapStaleSessions(ctx.db);
   startHousekeeping(ctx.db);
   registerSystemHandlers(ctx);
+  registerLicenceHandlers(ctx);
   registerAuthHandlers(ctx);
   registerUsersHandlers(ctx);
   registerMenuHandlers(ctx);

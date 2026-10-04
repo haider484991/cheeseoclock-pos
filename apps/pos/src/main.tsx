@@ -9,6 +9,7 @@ import { ManagerApprovalHost } from './features/printing/ManagerApprovalHost';
 import { ipc } from './ipc/client';
 import { OnboardingPage } from './features/onboarding/OnboardingPage';
 import { UpdateBanner } from './features/shell/UpdateBanner';
+import { LicenceBanner } from './features/shell/LicenceBanner';
 import { CloseTillHost } from './features/shell/CloseTillHost';
 import { OrderAlerts } from './features/notifications/OrderAlerts';
 import { forgetOnWhoChanges } from './stores/forgetOnSignOut';
@@ -96,6 +97,7 @@ function RootGate() {
         <RouterProvider router={router} />
       )}
       <UpdateBanner />
+      <LicenceBanner />
       {/* Here, not in AppShell: a website order rings on the PIN screen too. */}
       {setupQ.data?.completed && <OrderAlerts />}
     </>
