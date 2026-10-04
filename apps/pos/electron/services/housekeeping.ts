@@ -3,6 +3,7 @@ import path from 'node:path';
 import log from 'electron-log/main';
 import type { AppDatabase } from '../db/connection.js';
 import { purgeOldDoneJobs, purgeOldFailedJobs } from '../db/repositories/print-queue-repo.js';
+import { purgeOldNoopRows } from '../db/repositories/fbr-queue-repo.js';
 import {
   QUEUE_CLOCK_ERROR_MS,
   purgeSyncedBatch,
@@ -64,7 +65,41 @@ const QUEUE_TIDY_DELAY_MS = 4 * 60_000;
 /** After this many rows deleted in one run, the WAL file is emptied back into the database. */
 const CHECKPOINT_AFTER_ROWS = 10_000;
 
-export function runHousekeeping(db: AppDatabase, now = Date.now()): void {
+/** FBR dry-run ("noop") rows and payload files a shop that never switched FBR on would otherwise keep for ever. */
+export const FBR_NOOP_KEEP_DAYS = 30;
+/** At most this many old dry-run payload files go per run (a till from before v0.8 may hold tens of thousands). */
+export const FBR_NOOP_FILES_PER_RUN = 2_000;
+
+export interface HousekeepingDirs {
+  /** userData/fbr-noop: payload files the dry-run adapter wrote before v0.8 (and still writes in development). */
+  fbrNoopDir?: string;
+}
+
+/** Old dry-run payload files, oldest first, at most FBR_NOOP_FILES_PER_RUN per run. Returns how many went. */
+export function purgeOldNoopFiles(dir: string, beforeMs: number, cap = FBR_NOOP_FILES_PER_RUN): number {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir).filter((n) => n.endsWith('.json'));
+  } catch {
+    return 0; // no folder = nothing to do
+  }
+  let removed = 0;
+  for (const n of names.sort()) {
+    if (removed >= cap) break;
+    const p = path.join(dir, n);
+    try {
+      if (fs.statSync(p).mtimeMs < beforeMs) {
+        fs.unlinkSync(p);
+        removed++;
+      }
+    } catch {
+      // a file that vanished or is locked is left for the next run
+    }
+  }
+  return removed;
+}
+
+export function runHousekeeping(db: AppDatabase, now = Date.now(), dirs: HousekeepingDirs = {}): void {
   const before = (days: number) => new Date(now - days * DAY_MS).toISOString();
   try {
     const printed = purgeOldDoneJobs(db, before(PRINT_DONE_KEEP_DAYS));
@@ -76,8 +111,10 @@ export function runHousekeeping(db: AppDatabase, now = Date.now()): void {
             AND (status = 'failed' OR IFNULL(last_pushed_status, '') IN ('delivered', 'cancelled'))`,
       )
       .run(before(WEB_IMPORT_KEEP_DAYS)).changes;
-    if (printed + failed + imports > 0) {
-      log.info('Housekeeping: old bookkeeping rows removed', { printed, failed, imports });
+    const noopRows = purgeOldNoopRows(db, before(FBR_NOOP_KEEP_DAYS));
+    const noopFiles = dirs.fbrNoopDir ? purgeOldNoopFiles(dirs.fbrNoopDir, now - FBR_NOOP_KEEP_DAYS * DAY_MS) : 0;
+    if (printed + failed + imports + noopRows + noopFiles > 0) {
+      log.info('Housekeeping: old bookkeeping rows removed', { printed, failed, imports, noopRows, noopFiles });
     }
   } catch (e) {
     // Never fatal: a till that can't tidy up still sells.
@@ -321,15 +358,15 @@ let tidyTimer: NodeJS.Timeout | null = null;
  * At start: compact if worth it, then the small tidy-ups. The queue tidy runs
  * a few minutes later; everything again once a day while the app is open.
  */
-export function startHousekeeping(db: AppDatabase): void {
+export function startHousekeeping(db: AppDatabase, dirs: HousekeepingDirs = {}): void {
   compactIfWorthIt(db);
-  runHousekeeping(db);
+  runHousekeeping(db, Date.now(), dirs);
   if (tidyTimer) clearTimeout(tidyTimer);
   tidyTimer = setTimeout(() => void tidySyncQueue(db), QUEUE_TIDY_DELAY_MS);
   tidyTimer.unref?.();
   if (timer) clearInterval(timer);
   timer = setInterval(() => {
-    runHousekeeping(db);
+    runHousekeeping(db, Date.now(), dirs);
     void tidySyncQueue(db);
   }, DAY_MS);
   timer.unref?.();

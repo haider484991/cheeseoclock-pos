@@ -26,13 +26,19 @@ export class NoopFbrAdapter implements FbrAdapter {
   }
 
   async submitInvoice(payload: FbrInvoicePayload): Promise<FbrSubmitResult> {
-    const dir = path.join(app.getPath('userData'), 'fbr-noop');
-    fs.mkdirSync(dir, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filePath = path.join(dir, `${stamp}_${payload.invoiceRefNo}.json`);
-    fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
     const irn = `NOOP-${uuidv7()}`;
-    log.info('FBR noop dry-run wrote payload', { filePath, irn });
+    // A payload file per sale is a development aid only. A shop that never
+    // switches FBR on would otherwise gain tens of thousands of files a year
+    // (housekeeping removes old ones left by builds before v0.8).
+    let filePath: string | null = null;
+    if (!app.isPackaged) {
+      const dir = path.join(app.getPath('userData'), 'fbr-noop');
+      fs.mkdirSync(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      filePath = path.join(dir, `${stamp}_${payload.invoiceRefNo}.json`);
+      fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
+    }
+    log.info('FBR noop dry-run', { filePath, irn });
     return {
       ok: true,
       irn,

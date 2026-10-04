@@ -1,4 +1,5 @@
-import { ipcMain } from 'electron';
+import path from 'node:path';
+import { app, ipcMain } from 'electron';
 import log from 'electron-log/main';
 import type { AppDatabase } from '../db/connection.js';
 import type {
@@ -140,7 +141,8 @@ export function defineHandler<C extends IpcChannel>(
 
 export function registerAllIpcHandlers(ctx: HandlerContext): void {
   reapStaleSessions(ctx.db);
-  startHousekeeping(ctx.db);
+  // Old dry-run FBR payload files live under userData/fbr-noop (builds before v0.8, and development).
+  startHousekeeping(ctx.db, { fbrNoopDir: path.join(app.getPath('userData'), 'fbr-noop') });
   registerSystemHandlers(ctx);
   registerLicenceHandlers(ctx);
   registerAuthHandlers(ctx);

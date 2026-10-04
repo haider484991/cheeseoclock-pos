@@ -295,3 +295,18 @@ export function retryAllFailed(db: AppDatabase): number {
     .run(now);
   return r.changes;
 }
+
+/**
+ * Housekeeping: rows the dry-run ("noop") mode finished with, older than
+ * `beforeIso`. They were never invoices (a NOOP irn never prints or shows as
+ * one) and this table is this till's own, never synced; pending and failed
+ * rows, and every sandbox or production row, stay.
+ */
+export function purgeOldNoopRows(db: AppDatabase, beforeIso: string): number {
+  return db
+    .prepare(
+      `DELETE FROM fbr_submission_queue
+        WHERE mode_at_enqueue = 'noop' AND status IN ('sent', 'skipped') AND enqueued_at < ?`,
+    )
+    .run(beforeIso).changes;
+}
