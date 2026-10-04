@@ -156,6 +156,8 @@ const api: RendererApi = {
     createAddress: (req) => invoke('customers:createAddress', req),
     setDefaultAddress: (req) => invoke('customers:setDefaultAddress', req),
     deleteAddress: (req) => invoke('customers:deleteAddress', req),
+    delete: (req) => invoke('customers:delete', req),
+    exportCsv: () => invoke('customers:exportCsv', undefined),
     orderHistory: (req) => invoke('customers:orderHistory', req),
     attachToOrder: (req) => invoke('customers:attachToOrder', req),
   },

@@ -69,6 +69,16 @@ export function AboutCard() {
         )}
       </dl>
 
+      <div className="mt-4 rounded-xl border border-stone-200 bg-stone-50/60 p-4 text-xs text-stone-600 dark:border-stone-700 dark:bg-stone-900/40 dark:text-stone-300">
+        <div className="mb-1 text-sm font-semibold text-stone-700 dark:text-stone-200">Customer data on this till</div>
+        <p>
+          The till keeps each customer’s name, phone number, saved addresses and order history so deliveries reach them
+          and bills can be reprinted. It lives on this PC, in its backups and, when the shop’s website is linked, in the
+          website’s order records. It is not shared with anyone else. The owner can save the whole list as a file or
+          remove a person (Customers page); past bills keep what was printed on them, as the tax record requires.
+        </p>
+      </div>
+
       <div className="mt-4 rounded-xl border border-stone-200 bg-stone-50/60 p-4 dark:border-stone-700 dark:bg-stone-900/40">
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-stone-700 dark:text-stone-200">
           <Code2 className="h-4 w-4" />

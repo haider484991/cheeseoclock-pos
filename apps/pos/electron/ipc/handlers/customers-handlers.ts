@@ -17,11 +17,13 @@ import {
   createAddress,
   setDefaultAddress,
   deleteAddress,
+  deleteCustomer,
   getCustomerOrderHistory,
   snapshotCustomerOntoOrder,
 } from '../../db/repositories/customer-repo.js';
 import { getOrderSnapshot } from '../../db/repositories/order-repo.js';
-import { requireCapability, REFUSED } from '../guards.js';
+import { requireAdmin, requireCapability, REFUSED } from '../guards.js';
+import { exportCustomersCsv } from '../../services/customer-export.js';
 import { assertCounterAddress, assertOrderStillBeingTaken } from '../order-access.js';
 
 /**
@@ -132,6 +134,29 @@ export function registerCustomersHandlers(ctx: HandlerContext): void {
     const s = requireCustomersManage();
     setDefaultAddress(ctx.db, payload.addressId, { userId: s.id, deviceId: ctx.deviceId });
     return ok({ addressId: payload.addressId });
+  });
+
+  // Remove a person from the till (customers.manage): blanked and hidden with
+  // every address; past bills keep what was printed on them.
+  defineHandler('customers:delete', ctx, (_ctx, payload) => {
+    const s = requireCustomersManage();
+    const id = typeof payload?.id === 'string' ? payload.id : '';
+    if (!id) throw new IpcGuardError({ code: 'validation_failed', message: 'Which customer?' });
+    try {
+      deleteCustomer(ctx.db, id, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      if (e instanceof Error && e.message === 'Customer not found') {
+        throw new IpcGuardError({ code: 'not_found', message: 'That customer is no longer on the till.' });
+      }
+      throw e;
+    }
+    return ok({ id });
+  });
+
+  // The whole customer book as a file: the owner only.
+  defineHandler('customers:exportCsv', ctx, async () => {
+    const owner = requireAdmin('Saving the customer list as a file');
+    return ok(await exportCustomersCsv(ctx.db, owner.id));
   });
 
   defineHandler('customers:deleteAddress', ctx, (_ctx, payload) => {

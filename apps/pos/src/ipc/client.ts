@@ -282,6 +282,8 @@ export const ipc = {
       unwrap(window.api.customers.setDefaultAddress({ addressId })),
     deleteAddress: (addressId: string) =>
       unwrap(window.api.customers.deleteAddress({ addressId })),
+      delete: (id: string) => unwrap(window.api.customers.delete({ id })),
+      exportCsv: () => unwrap(window.api.customers.exportCsv()),
     orderHistory: (customerId: string, limit?: number) =>
       unwrap(window.api.customers.orderHistory({ customerId, ...(limit ? { limit } : {}) })),
     attachToOrder: (input: IpcRequest<'customers:attachToOrder'>) =>

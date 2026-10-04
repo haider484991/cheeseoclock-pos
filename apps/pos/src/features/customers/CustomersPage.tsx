@@ -98,9 +98,12 @@ export function CustomersPage() {
             Search by name, phone or house number. Tap a customer for their addresses and orders.
           </p>
         </div>
-        <Button variant="primary" onClick={() => setEditing('new')}>
-          <Plus className="h-4 w-4" /> Add customer
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportCustomersButton />
+          <Button variant="primary" onClick={() => setEditing('new')}>
+            <Plus className="h-4 w-4" /> Add customer
+          </Button>
+        </div>
       </header>
 
       <Card>
@@ -395,6 +398,25 @@ export function CustomerDialog({
   );
 }
 
+/** Owner only (the till refuses anyone else): the whole customer book as a CSV file. */
+function ExportCustomersButton() {
+  const { toast } = useToast();
+  const mut = useMutation({
+    mutationFn: () => ipc.customers.exportCsv(),
+    onSuccess: (r) => {
+      if (r.path) {
+        toast({ title: 'Customer list saved', description: `${r.customers} customers, ${r.addresses} addresses → ${r.path}`, variant: 'success' });
+      }
+    },
+    onError: (e) => toast({ title: 'Could not save the list', description: e instanceof Error ? e.message : String(e), variant: 'error' }),
+  });
+  return (
+    <Button variant="secondary" onClick={() => mut.mutate()} disabled={mut.isPending}>
+      {mut.isPending ? 'Saving…' : 'Save list as file'}
+    </Button>
+  );
+}
+
 function CustomerDetailDialog({
   customer,
   onClose,
@@ -406,6 +428,15 @@ function CustomerDetailDialog({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const deleteCustomerMut = useMutation({
+    mutationFn: () => ipc.customers.delete(customer.id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['customers'] });
+      toast({ title: 'Customer removed', description: 'Their name, number and addresses are gone from the till. Past bills keep what was printed.', variant: 'success' });
+      onClose();
+    },
+    onError: (e) => toast({ title: 'Not removed', description: e instanceof Error ? e.message : String(e), variant: 'error' }),
+  });
   const areas = useDeliveryAreas();
   const q = useQuery({ queryKey: ['customers', 'detail', customer.id], queryFn: () => ipc.customers.get(customer.id) });
   const historyQ = useQuery({
@@ -462,6 +493,20 @@ function CustomerDetailDialog({
             <div className="flex shrink-0 items-center gap-1">
               <Button variant="secondary" size="sm" onClick={onEdit}>
                 <Edit className="h-3.5 w-3.5" /> Edit
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={deleteCustomerMut.isPending}
+                onClick={() => {
+                  void askConfirm(
+                    `Remove ${c.name} from the till? Their name, phone number and saved addresses are deleted. Past bills keep what was printed on them.`,
+                  ).then((ok) => {
+                    if (ok) deleteCustomerMut.mutate();
+                  });
+                }}
+              >
+                Remove
               </Button>
               <Dialog.Close asChild>
                 <button type="button" aria-label="Close" className="rounded p-2 text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800">

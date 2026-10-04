@@ -2158,6 +2158,20 @@ export interface IpcContract {
     request: { addressId: string };
     response: ApiResult<{ addressId: string }>;
   };
+  /**
+   * Remove a person from the till: the customer is blanked (name, phone,
+   * e-mail, notes) and hidden with every saved address. Past orders keep what
+   * was printed on their bills (the tax record). Needs customers.manage.
+   */
+  'customers:delete': {
+    request: { id: string };
+    response: ApiResult<{ id: string }>;
+  };
+  /** Owner only: the whole customer book as a CSV file the owner picks a place for. Cancelled = path null. */
+  'customers:exportCsv': {
+    request: undefined;
+    response: ApiResult<{ path: string | null; customers: number; addresses: number }>;
+  };
   'customers:attachToOrder': {
     request: {
       orderId: string;

@@ -910,3 +910,110 @@ export function detachCustomerFromOrder(db: AppDatabase, orderId: string, actor:
   });
   tx();
 }
+
+// ---------------------------------------------------------------------------
+// The owner's rights over the customer book (gap audit item 9).
+// ---------------------------------------------------------------------------
+
+/** One line of the customer CSV: a customer with one of their addresses, or alone. */
+export interface CustomerExportRow {
+  customerId: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+  loyaltyPoints: number;
+  isActive: boolean;
+  createdAt: string;
+  addressLabel: string | null;
+  addressLine: string | null;
+  area: string | null;
+  city: string | null;
+  addressNotes: string | null;
+  isDefaultAddress: boolean | null;
+}
+
+/** Every live customer with each live address (a customer without one once, alone), by name. */
+export function exportCustomerRows(db: AppDatabase): CustomerExportRow[] {
+  const rows = db
+    .prepare(
+      `SELECT c.id AS customer_id, c.name, c.phone, c.email, c.notes, c.loyalty_points, c.is_active, c.created_at,
+              a.label AS address_label, a.address_line, a.area, a.city, a.notes AS address_notes, a.is_default
+         FROM customers c
+         LEFT JOIN customer_addresses a ON a.customer_id = c.id AND a.deleted_at IS NULL
+        WHERE c.deleted_at IS NULL
+        ORDER BY c.name, c.id, a.is_default DESC, a.label`,
+    )
+    .all() as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    customerId: String(r['customer_id']),
+    name: String(r['name']),
+    phone: (r['phone'] as string | null) ?? null,
+    email: (r['email'] as string | null) ?? null,
+    notes: (r['notes'] as string | null) ?? null,
+    loyaltyPoints: Number(r['loyalty_points'] ?? 0),
+    isActive: toBool(r['is_active'] as number),
+    createdAt: String(r['created_at']),
+    addressLabel: (r['address_label'] as string | null) ?? null,
+    addressLine: (r['address_line'] as string | null) ?? null,
+    area: (r['area'] as string | null) ?? null,
+    city: (r['city'] as string | null) ?? null,
+    addressNotes: (r['address_notes'] as string | null) ?? null,
+    isDefaultAddress: r['address_line'] === null || r['address_line'] === undefined ? null : toBool(r['is_default'] as number),
+  }));
+}
+
+export const DELETED_CUSTOMER_NAME = 'Deleted customer';
+
+/**
+ * Remove a person from the till: name, phone, e-mail and notes are blanked and
+ * the customer is hidden (soft-deleted) with every saved address, through the
+ * usual replicable writes so the other till does the same. Past orders keep
+ * what was printed on their bills — the tax record — and the audit trail keeps
+ * its hash-chained record of the removal.
+ */
+export function deleteCustomer(db: AppDatabase, customerId: string, actor: Actor): void {
+  const before = findCustomer(db, customerId);
+  if (!before) throw new Error('Customer not found');
+  const now = nowIso();
+  const tx = db.transaction(() => {
+    for (const a of listAddresses(db, customerId)) deleteAddress(db, a.id, actor);
+    const blanked: Customer = {
+      ...before,
+      name: DELETED_CUSTOMER_NAME,
+      phone: null,
+      email: null,
+      notes: null,
+      isActive: false,
+    };
+    writeWithSync({
+      db,
+      entityType: 'customers',
+      entityId: customerId,
+      op: 'upsert',
+      action: 'anonymise',
+      actor,
+      before,
+      after: blanked,
+      writeRow: () => {
+        db.prepare(
+          `UPDATE customers SET name = ?, phone = NULL, email = NULL, notes = NULL, is_active = 0, updated_at = ?, version = version + 1 WHERE id = ?`,
+        ).run(DELETED_CUSTOMER_NAME, now, customerId);
+      },
+    });
+    writeWithSync({
+      db,
+      entityType: 'customers',
+      entityId: customerId,
+      op: 'delete',
+      action: 'delete',
+      actor,
+      before: blanked,
+      after: null,
+      writeRow: () => {
+        db.prepare(`UPDATE customers SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`).run(now, now, customerId);
+      },
+    });
+  });
+  tx();
+}
