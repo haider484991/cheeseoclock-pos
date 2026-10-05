@@ -15,6 +15,7 @@ import { ShopContactProvider } from '@/components/ordering/ShopContext';
 import { META_PIXEL_ID } from '@/lib/meta-pixel';
 import { shopContactOf } from '@/lib/shop-facts';
 import { getCopyFacts, getShopFacts } from '@/lib/site-facts';
+import { Analytics } from '@vercel/analytics/next';
 import './globals.css';
 
 // The printed menu's type: Anton headlines, Barlow Condensed labels, Barlow body.
@@ -100,6 +101,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           className="bg-noise pointer-events-none fixed inset-0 z-[90] opacity-[0.05] mix-blend-overlay"
         />
         <JsonLd nodes={[restaurantNode(shop), webSiteNode(shop)]} />
+        {/* Vercel Web Analytics: visits and page views on the Vercel dashboard. Cookieless; the script only loads on Vercel. */}
+        <Analytics />
       </body>
     </html>
   );
