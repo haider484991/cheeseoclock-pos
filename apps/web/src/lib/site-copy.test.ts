@@ -98,7 +98,7 @@ describe('with no settings block the site reads exactly as v0.7.26', () => {
     expect(copyText(BURGER_FAQ_AREAS, DEFAULT_FACTS)).toBe(golden.pages.burgerFaqAreas);
     // Two paragraphs moved out of the page files into page-copy (v0.7.26's words, the summary as the golden copy has it).
     expect(copyText(DELIVERY_HUB_INTRO, DEFAULT_FACTS)).toBe(
-      `Every order fires from our kitchen in DHA Phase 6 — daily from 12 noon to 1 am, always cash on delivery. We deliver in DHA and Clifton only: ${golden.feeSummarySentence}. Pick your area below for the streets we cover and answers to the questions your area actually asks.`,
+      `Every order fires from our kitchen in DHA Phase 6 — daily from 1 pm to 1 am, always cash on delivery. We deliver in DHA and Clifton only: ${golden.feeSummarySentence}. Pick your area below for the streets we cover and answers to the questions your area actually asks.`,
     );
     expect(copyText(HOME_DELIVERY_NOTE, DEFAULT_FACTS)).toBe(
       'Our kitchen is in Rahat Commercial Area, DHA Phase 6. Pick your area at checkout and the delivery charge is added for you — we don’t take online orders outside DHA and Clifton.',

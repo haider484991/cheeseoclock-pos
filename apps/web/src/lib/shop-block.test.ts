@@ -909,9 +909,9 @@ describe('every page follows the owner’s details', () => {
     expect(visible(pages['/menu']!)).toContain('Prices in PKR · tax added on the bill');
   });
 
-  it('no social links: no sameAs and no footer row (today’s); only the greeting changed: every order link carries it, encoded once, and the page-specific messages keep their words', async () => {
+  it('no social links (the owner cleared them): no sameAs and no footer row; only the greeting changed: every order link carries it, encoded once, and the page-specific messages keep their words', async () => {
     const greeting = 'Salaam Cheese O’Clock, order please: ';
-    await publish(goldenMenu(), { shop: tillShop({ website: { whatsappGreeting: greeting } }) });
+    await publish(goldenMenu(), { shop: tillShop({ profile: { socialLinks: [] }, website: { whatsappGreeting: greeting } }) });
     const pages = await allPages();
     for (const [route, html] of Object.entries(pages)) {
       expect(restaurant(html), route).not.toHaveProperty('sameAs');

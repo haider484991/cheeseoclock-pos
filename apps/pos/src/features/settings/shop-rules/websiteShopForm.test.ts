@@ -100,7 +100,7 @@ describe('one card’s part of a shared key (B1’s part helpers, for any key)',
     expect(details.lastChanged?.at).toBe(T1);
     // "Put back the default" of Shop details keeps the social link; of the links, keeps the name.
     expect(details.defaultValue).toEqual({ ...linked, name: DEFAULT_SHOP_PROFILE.name });
-    expect(contact.defaultValue).toEqual({ ...renamed, socialLinks: [] });
+    expect(contact.defaultValue).toEqual({ ...renamed, socialLinks: [...DEFAULT_SHOP_PROFILE.socialLinks] });
     // Only the name saved: the links card is at its default, never changed.
     const onlyName = cardPart(cardOf('shop.profile', renamed, [{ at: T1, value: renamed }]), SHOP_CARD_FIELDS.contact);
     expect(onlyName).toMatchObject({ isDefault: true, lastChanged: null, history: [] });

@@ -60,10 +60,10 @@ describe('with nothing stored: today’s details, word for word (v0.7.30’s web
           areaLine: 'Rahat Commercial Area, DHA Phase 6, Karachi',
           postalCode: '75500',
         },
-        socialLinks: [],
+        socialLinks: ['https://www.instagram.com/cheeseoclock_/', 'https://www.facebook.com/cheeseoclock.karachi'],
         priceRange: 'PKR 400–2,500',
       },
-      hours: { opens: '12:00', closes: '01:00', days: ALL_DAYS },
+      hours: { opens: '13:00', closes: '01:00', days: ALL_DAYS },
       website: {
         whatsappGreeting: "Hi Cheese O'Clock! I'd like to place an order: ",
         doorPayments: ['cash'],
@@ -93,7 +93,7 @@ describe('with nothing stored: today’s details, word for word (v0.7.30’s web
     const today =
       '{hours} | {opens} | {closes} | {days} | {hoursLine} | {name} | {nameProse} | {phone} | {waNumbers} | {street} | {areaLine} | {doorPayments} | {DoorPayments} | {pickupPayments} | {tax} | {Tax}';
     expect(fillFees(today, DEFAULT_FACTS)).toBe(
-      "12 noon – 1 am | 12 noon | 1 am | daily | Open daily · 12 noon – 1 am | Cheese O'Clock | Cheese O’Clock | 0300 9367865 | 0300 9367865 or 0331 2188295 | Shop 3, Ground Floor, 41-C, Sehar Lane No. 3, Rahat Commercial Area, DHA Phase 6 | Rahat Commercial Area, DHA Phase 6, Karachi | cash | Cash | cash | 15% tax | 15% tax",
+      "1 pm – 1 am | 1 pm | 1 am | daily | Open daily · 1 pm – 1 am | Cheese O'Clock | Cheese O’Clock | 0300 9367865 | 0300 9367865 or 0331 2188295 | Shop 3, Ground Floor, 41-C, Sehar Lane No. 3, Rahat Commercial Area, DHA Phase 6 | Rahat Commercial Area, DHA Phase 6, Karachi | cash | Cash | cash | 15% tax | 15% tax",
     );
     for (const claim of [
       { everyDay: true },
@@ -356,6 +356,8 @@ describe('the shop’s details are never typed by hand in the website’s source
     ['components/ordering/CheckoutSheet.tsx', "'I’ll be there at 9 pm'"],
     // "Lunch": the office FAQ says "lunch and dinner" only while the shop opens by then.
     ['lib/areas.ts', "{ opensBy: '13:00' }"],
+    // The Buy 1 Get 1 offer's own hours (the poster's, owner 5 Oct 2026), not the shop's opening hours.
+    ['lib/offers.ts', "'1–7 PM'"],
   ];
   // The logo's own words (the image says them) and the share images' static alt text.
   const NAME_ALLOWED: Array<[string, string]> = [

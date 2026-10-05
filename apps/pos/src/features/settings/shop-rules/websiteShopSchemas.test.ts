@@ -202,7 +202,7 @@ describe('the website reads back a stored block section by section', () => {
     const broken = { ...block, hours: { opens: 'noon', closes: '01:00', days: [] }, extra: 'dropped' };
     expect(publishedShopSchema.safeParse(broken).success).toBe(false);
     const read = publishedShopReadSchema.parse(broken);
-    expect(read.hours).toEqual({ opens: '12:00', closes: '01:00', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] });
+    expect(read.hours).toEqual({ opens: '13:00', closes: '01:00', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] });
     expect(read.profile.name).toBe('Test Shop');
     expect(read.shopRev).toBe(3);
     expect(read).not.toHaveProperty('extra');

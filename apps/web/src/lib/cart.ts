@@ -235,6 +235,10 @@ export function whatsappOrderText(
     address?: string | null;
     /** The shop's name the message greets (the owner's; today's when not given). */
     shopName?: string;
+    /** A delivery's map pin as a Google Maps link (5 Oct 2026, lib/checkout-extras pinUrl); none = no line. */
+    pinUrl?: string | null;
+    /** The customer's Instagram / Facebook handle for the Tag-us offer (5 Oct 2026); none = no line. */
+    social?: string | null;
   },
 ): string {
   const rows = cart.map((l) => {
@@ -255,5 +259,8 @@ export function whatsappOrderText(
   const address = opts.address?.trim();
   if (name) out.push(`Name: ${name}`);
   if (opts.fulfilment === 'delivery' && address) out.push(`Address: ${address}`);
+  if (opts.fulfilment === 'delivery' && opts.pinUrl) out.push(`Location: ${opts.pinUrl}`);
+  const social = opts.social?.trim();
+  if (social) out.push(`Instagram/Facebook: ${social}`);
   return out.join('\n');
 }

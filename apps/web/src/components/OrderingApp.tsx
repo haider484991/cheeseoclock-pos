@@ -57,6 +57,7 @@ import {
   type LastOrder,
 } from '@/lib/device-memory';
 import { menuImageSrcSet } from '@/lib/images';
+import { cardOffer, regularPizzaPrices, type CardOffer } from '@/lib/offers';
 import { pixel, type PixelLine } from '@/lib/meta-pixel';
 import { trackPath } from '@/lib/order-display';
 import { NOT_ON_VALUE_DEALS, type PublishedMenuItem, type WebFulfilment } from '@cheeseoclock/shared-types';
@@ -64,6 +65,7 @@ import type { PublicMenu } from '@/lib/public-menu';
 import { CartPanel, type CartProps } from './ordering/cart-ui';
 import { CheckoutSheet, type PlacedOrder } from './ordering/CheckoutSheet';
 import { ItemSheet } from './ordering/ItemSheet';
+import { OfferBanner, OfferStrip } from './ordering/Offers';
 import { sheetOnTopOfHistory } from './ordering/Sheet';
 import { ShopFactsContext, useShopFacts } from './ordering/ShopContext';
 
@@ -239,6 +241,14 @@ export function OrderingApp({
     }
     return m;
   }, [menu, sections]);
+  // The offers each card shows (lib/offers, display only): Buy 1 Get 1 (1–7 PM) and the % off with what each size
+  // comes to. Kept per card key so the memoised cards re-render only when the percents or the menu change.
+  const offersByCard = useMemo(() => {
+    const m = new Map<string, CardOffer>();
+    for (const s of sections) for (const c of s.cards) m.set(c.key, cardOffer(s.name, c, { pickupPct, deliveryPct, canPickup }));
+    return m;
+  }, [sections, pickupPct, deliveryPct, canPickup]);
+  const offerPrices = useMemo(() => regularPizzaPrices(sections), [sections]);
 
   const [cart, setCart] = useState<CartLine[]>([]);
   const [sheet, setSheet] = useState<{ card: MenuCard; variantIndex: number } | null>(null);
@@ -451,6 +461,7 @@ export function OrderingApp({
         hoursChip={copyText(MENU_HEADER_HOURS, { ...deliveryFacts, shop })}
         announcement={deliveryFacts.announcement}
         shop={shop}
+        offerPrices={offerPrices}
       />
 
       {lastOrder && (
@@ -490,6 +501,7 @@ export function OrderingApp({
                       qtyByItem={qtyByItem}
                       canPickup={canPickup}
                       onPick={pickVariant}
+                      offer={offersByCard.get(card.key)}
                     />
                   ) : (
                     <ItemCard
@@ -498,6 +510,7 @@ export function OrderingApp({
                       qtyByItem={qtyByItem}
                       canPickup={canPickup}
                       onPick={pickVariant}
+                      offer={offersByCard.get(card.key)}
                     />
                   ),
                 )}
@@ -609,6 +622,7 @@ function MenuHeader({
   hoursChip,
   announcement,
   shop,
+  offerPrices,
 }: {
   canPickup: boolean;
   pickupPct: number;
@@ -623,6 +637,8 @@ function MenuHeader({
   announcement: string | null;
   /** The shop's tagline and allergy notice (the owner's). */
   shop: ShopFacts;
+  /** The regular pizzas' Medium and Large prices, for the Buy 1 Get 1 banner (lib/offers). */
+  offerPrices: { mediumCents: number | null; largeCents: number | null };
 }) {
   return (
     <div className="bg-ink text-cream">
@@ -671,6 +687,7 @@ function MenuHeader({
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">{hoursChip}</li>
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">Cash on delivery</li>
         </ul>
+        <OfferBanner prices={offerPrices} />
         <p className="mt-4 max-w-2xl text-sm leading-snug text-cream/75">{shop.website.allergyNotice}</p>
       </div>
     </div>
@@ -936,6 +953,8 @@ interface CardProps {
   qtyByItem: Map<string, number>;
   canPickup: boolean;
   onPick: PickFn;
+  /** What the card says of the offers (lib/offers); none on a value deal. */
+  offer?: CardOffer;
 }
 
 function countFor(card: MenuCard, qtyByItem: Map<string, number>): number {
@@ -943,7 +962,7 @@ function countFor(card: MenuCard, qtyByItem: Map<string, number>): number {
 }
 
 /** Signature pizzas and anything photographed: the food leads. */
-const PhotoCard = memo(function PhotoCard({ card, qtyByItem, canPickup, onPick }: CardProps) {
+const PhotoCard = memo(function PhotoCard({ card, qtyByItem, canPickup, onPick, offer }: CardProps) {
   const count = countFor(card, qtyByItem);
   return (
     <article className="group relative flex overflow-hidden rounded-3xl bg-ink text-cream shadow-soft-md">
@@ -973,6 +992,7 @@ const PhotoCard = memo(function PhotoCard({ card, qtyByItem, canPickup, onPick }
         {card.description && (
           <p className="mt-1.5 line-clamp-4 text-[0.82rem] leading-snug text-cream/70">{card.description}</p>
         )}
+        {offer && <OfferStrip offer={offer} dark />}
         <div className="mt-auto pt-3">
           <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} dark />
         </div>
@@ -982,7 +1002,7 @@ const PhotoCard = memo(function PhotoCard({ card, qtyByItem, canPickup, onPick }
 });
 
 /** Everything else: set like a line on the printed menu. */
-const ItemCard = memo(function ItemCard({ card, qtyByItem, canPickup, onPick }: CardProps) {
+const ItemCard = memo(function ItemCard({ card, qtyByItem, canPickup, onPick, offer }: CardProps) {
   const count = countFor(card, qtyByItem);
   const single = card.variants.length === 1 ? card.variants[0] : undefined;
   return (
@@ -999,6 +1019,7 @@ const ItemCard = memo(function ItemCard({ card, qtyByItem, canPickup, onPick }: 
         <InCartBadge count={count} />
       </div>
       {card.description && <p className="mt-1 text-sm leading-snug text-ink-muted">{card.description}</p>}
+      {offer && <OfferStrip offer={offer} />}
       <div className="mt-auto pt-3">
         <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} />
       </div>

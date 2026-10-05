@@ -719,3 +719,75 @@ describe('POST /api/orders — the website % off a delivery’s food (v0.7.37, W
     expect(r.json.data).toMatchObject({ discountCents: 0 });
   });
 });
+
+// Last in the file on purpose: the bridge's order pull returns 25 rows, so orders placed here must not come
+// before the tests above that look their own order up in it.
+describe('POST /api/orders — location pin and social handle (5 Oct 2026)', () => {
+  const PIN = { lat: 24.80835364, lng: 67.06845187, accuracyM: 24.6 };
+  const PIN_LINE = 'Map pin: https://maps.google.com/?q=24.808354,67.068452 (about 25 m)';
+
+  it('a delivery with a pin and a handle: both lead the notes, the customer’s words follow; the totals are untouched', async () => {
+    const plain = await place({ zoneId: 'dha-6' });
+    const r = await place({ zoneId: 'dha-6', locationPin: PIN, social: '  @ahmed_k ', notes: 'Ring twice' });
+    expect(r.status).toBe(200);
+    const row = await stored(r.json.data!.orderId);
+    expect(row.notes).toBe(`${PIN_LINE}. Social: @ahmed_k. Ring twice`);
+    expect(row.total_cents).toBe((await stored(plain.json.data!.orderId)).total_cents);
+  });
+
+  it('a pin alone, a handle alone, and neither (notes stay null, as before)', async () => {
+    const pinOnly = await place({ zoneId: 'dha-6', locationPin: PIN });
+    expect((await stored(pinOnly.json.data!.orderId)).notes).toBe(PIN_LINE);
+    const socialOnly = await place({ zoneId: 'dha-6', social: '@ahmed_k' });
+    expect((await stored(socialOnly.json.data!.orderId)).notes).toBe('Social: @ahmed_k');
+    const neither = await place({ zoneId: 'dha-6' });
+    expect((await stored(neither.json.data!.orderId)).notes).toBeNull();
+  });
+
+  it('with the till lacking charge items, the cashier’s reminder stays with the customer’s words, after the pin', async () => {
+    await publish(menu(false));
+    const r = await place({ zoneId: 'emaar', locationPin: PIN, notes: 'Ring twice' });
+    const row = await stored(r.json.data!.orderId);
+    expect(row.notes).toBe(`${PIN_LINE}. Delivery Emaar Crescent Bay (DHA) Rs 250 — add the delivery charge by hand. Ring twice`);
+  });
+
+  it('never a reason to refuse: a pin or a handle that does not read is dropped and the order goes through', async () => {
+    for (const bad of [
+      { locationPin: 'here', social: 42 },
+      { locationPin: { lat: 'x', lng: 67 }, social: { a: 1 } },
+      { locationPin: { lat: 95, lng: 67 }, social: '@' },
+      { locationPin: { lat: 0, lng: 0 }, social: '   ' },
+      { locationPin: null, social: null },
+    ]) {
+      const r = await place({ zoneId: 'dha-6', ...bad });
+      expect(r.status, JSON.stringify(bad)).toBe(200);
+      expect((await stored(r.json.data!.orderId)).notes, JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it('a handle is cleaned: control characters and angle brackets out, at most 80 characters', async () => {
+    const r = await place({ zoneId: 'dha-6', social: '@a\nhmed <b>' + 'z'.repeat(200) });
+    const notes = (await stored(r.json.data!.orderId)).notes!;
+    expect(notes.startsWith('Social: @a hmed b zzz')).toBe(true);
+    expect(notes).not.toMatch(/[<>\n]/);
+    expect(notes.length).toBeLessThanOrEqual('Social: '.length + 80);
+  });
+
+  it('a long note gives way, the pin and the handle never do; the whole stays under the till’s cap', async () => {
+    await publish(menu(false));
+    const r = await place({ zoneId: 'dha-1', locationPin: PIN, social: '@ahmed_k', notes: 'x'.repeat(500) });
+    const notes = (await stored(r.json.data!.orderId)).notes!;
+    expect(notes.length).toBeLessThanOrEqual(490);
+    expect(notes.startsWith(`${PIN_LINE}. Social: @ahmed_k. `)).toBe(true);
+  });
+
+  it('a pick-up has no address to pin: the pin is dropped, the handle is kept', async () => {
+    await heartbeat(['pickup']);
+    const r = await place({ fulfilment: 'pickup', addressLine: undefined, locationPin: PIN, social: '@ahmed_k', notes: 'Collecting at 9' });
+    expect(r.status).toBe(200);
+    const row = await stored(r.json.data!.orderId);
+    expect(row.notes).toBe('Social: @ahmed_k. Collecting at 9');
+    expect(row.notes).not.toMatch(/maps\.google/);
+  });
+});
+

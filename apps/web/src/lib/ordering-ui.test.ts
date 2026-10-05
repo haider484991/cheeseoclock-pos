@@ -113,7 +113,7 @@ describe('/menu as served', () => {
   it('the header’s hours chip names the days when the shop is not open every day, as the home page’s chip does; every day, the hours alone as before', () => {
     const chip = (html: string) => /<li class="rounded-full border border-cream\/20 px-3\.5 py-1\.5">([^<]*)<\/li>/.exec(html)?.[1];
     // Today's (open every day): the hours alone, exactly as v0.7.30 printed them.
-    expect(chip(app())).toBe('12 noon – 1 am');
+    expect(chip(app())).toBe('1 pm – 1 am');
     // The owner's made-up hours, closed on Mondays: the days follow, in the home chip's words.
     const tueToSun = { ...DEFAULT_SHOP_FACTS, source: 'settings' as const, hours: { opens: '11:00', closes: '23:00', days: ['tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as ['tue', 'wed', 'thu', 'fri', 'sat', 'sun'] } };
     expect(chip(app({ shop: tueToSun }))).toBe('11 am – 11 pm · Tue–Sun');

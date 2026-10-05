@@ -50,7 +50,7 @@ import { normalizePhone } from './phone.js';
  * prices.
  */
 describe('the released defaults are the website today', () => {
-  it('shop.profile: today’s name, tagline, call line, both WhatsApp lines, street address, no social profiles, the price range', () => {
+  it('shop.profile: today’s name, tagline, call line, both WhatsApp lines, street address, the Instagram and Facebook profiles, the price range', () => {
     expect(DEFAULT_SHOP_PROFILE).toEqual({
       v: 1,
       name: "Cheese O'Clock",
@@ -65,19 +65,22 @@ describe('the released defaults are the website today', () => {
         areaLine: 'Rahat Commercial Area, DHA Phase 6, Karachi',
         postalCode: '75500',
       },
-      socialLinks: [],
+      socialLinks: ['https://www.instagram.com/cheeseoclock_/', 'https://www.facebook.com/cheeseoclock.karachi'],
       priceRange: 'PKR 400–2,500',
     });
+    // Each profile passes the till's own check (an https link to a real host, not the shop's website).
+    for (const url of DEFAULT_SHOP_PROFILE.socialLinks) expect(socialLinkProblem(url), url).toBeNull();
+    expect(DEFAULT_SHOP_PROFILE.socialLinks.map(socialLabel)).toEqual(['Instagram', 'Facebook']);
     // Each printed number dials itself, and the first WhatsApp line is today's order link.
     for (const l of [DEFAULT_SHOP_PROFILE.phone, ...DEFAULT_SHOP_PROFILE.whatsappLines]) expect(normalizePhone(l.display)).toBe(l.e164);
     expect(waUrl(DEFAULT_SHOP_PROFILE.whatsappLines[0]!.e164)).toBe('https://wa.me/923009367865');
   });
 
-  it('shop.hours: every day, 12 noon to 1 am — the words the website prints today', () => {
-    expect(DEFAULT_SHOP_HOURS).toEqual({ v: 1, opens: '12:00', closes: '01:00', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] });
-    expect(hoursLine(DEFAULT_SHOP_HOURS)).toBe('Open daily · 12 noon – 1 am');
-    expect(hoursRange(DEFAULT_SHOP_HOURS)).toBe('12 noon – 1 am');
-    expect(hoursRange(DEFAULT_SHOP_HOURS).toUpperCase()).toBe('12 NOON – 1 AM');
+  it('shop.hours: every day, 1 pm to 1 am — the words the website prints (owner, 5 Oct 2026; 12 noon before)', () => {
+    expect(DEFAULT_SHOP_HOURS).toEqual({ v: 1, opens: '13:00', closes: '01:00', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] });
+    expect(hoursLine(DEFAULT_SHOP_HOURS)).toBe('Open daily · 1 pm – 1 am');
+    expect(hoursRange(DEFAULT_SHOP_HOURS)).toBe('1 pm – 1 am');
+    expect(hoursRange(DEFAULT_SHOP_HOURS).toUpperCase()).toBe('1 PM – 1 AM');
     expect(schemaOrgDays(DEFAULT_SHOP_HOURS.days)).toEqual(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']);
     expect([everyDay(DEFAULT_SHOP_HOURS), closesAfterMidnight(DEFAULT_SHOP_HOURS), opensBy(DEFAULT_SHOP_HOURS, '13:00')]).toEqual([true, true, true]);
     expect(shopHoursProblem(DEFAULT_SHOP_HOURS)).toBeNull();
@@ -358,7 +361,7 @@ describe('the shop stamp is THE STAMP of the settings block, over the four keys'
       shopTie: Date.parse(T1),
       deviceId: 'till-a',
       profile: { ...(({ v: _v, ...p }) => p)(DEFAULT_SHOP_PROFILE), name: 'Test Shop' },
-      hours: { opens: '12:00', closes: '01:00', days: [...SHOP_DAYS] },
+      hours: { opens: '13:00', closes: '01:00', days: [...SHOP_DAYS] },
       website: (({ v: _v, ...w }) => w)(DEFAULT_SHOP_WEBSITE),
       home: { pizzas: [{ itemRef: { posItemId: 'p-1', name: 'Test Star — Large' }, headline: 'Made-up hook' }], burger: null, deals: [] },
     });
