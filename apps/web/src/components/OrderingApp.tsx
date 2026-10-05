@@ -13,7 +13,7 @@ import {
   type SiteFacts,
 } from '@/lib/delivery-facts';
 import { feeItemIdsOf, zoneFeeItemFor } from '@/lib/delivery-zones';
-import { MENU_FOOT_LINE, MENU_HEADER_HOURS } from '@/lib/page-copy';
+import { MENU_FOOT_LINE, MENU_HEADER_HOURS, MENU_OFFER_WHERE } from '@/lib/page-copy';
 import { DEFAULT_SHOP_FACTS, lineOrderUrl, orderWhatsappUrl, shopHoursInSentence, whatsappLinesOf, type ShopFacts } from '@/lib/shop-facts';
 import { taxBpsOf } from '@/lib/tax-words';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
@@ -462,6 +462,7 @@ export function OrderingApp({
         announcement={deliveryFacts.announcement}
         shop={shop}
         offerPrices={offerPrices}
+        offerWhere={copyText(MENU_OFFER_WHERE, { ...deliveryFacts, shop })}
       />
 
       {lastOrder && (
@@ -623,6 +624,7 @@ function MenuHeader({
   announcement,
   shop,
   offerPrices,
+  offerWhere,
 }: {
   canPickup: boolean;
   pickupPct: number;
@@ -639,6 +641,8 @@ function MenuHeader({
   shop: ShopFacts;
   /** The regular pizzas' Medium and Large prices, for the Buy 1 Get 1 banner (lib/offers). */
   offerPrices: { mediumCents: number | null; largeCents: number | null };
+  /** The banner's where-and-when line (page-copy MENU_OFFER_WHERE). */
+  offerWhere: string;
 }) {
   return (
     <div className="bg-ink text-cream">
@@ -687,7 +691,7 @@ function MenuHeader({
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">{hoursChip}</li>
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">Cash on delivery</li>
         </ul>
-        <OfferBanner prices={offerPrices} />
+        <OfferBanner prices={offerPrices} where={offerWhere} />
         <p className="mt-4 max-w-2xl text-sm leading-snug text-cream/75">{shop.website.allergyNotice}</p>
       </div>
     </div>

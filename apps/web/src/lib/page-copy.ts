@@ -343,6 +343,15 @@ export const MENU_PAGE_NAME: Copy = '{name} Menu & Prices';
  * says them (HOURS_CHIP_WITH_DAYS) — never hours that read as every day.
  */
 export const MENU_HEADER_HOURS: Copy = { text: '{hours}', when: { everyDay: true }, otherwise: HOURS_CHIP_WITH_DAYS };
+/**
+ * The Buy 1 Get 1 banner's where-and-when line (lib/offers; owner 5 Oct 2026: "Takeaway - Delivery", "everyday from
+ * 1 pm to 7 pm"): "every day" only while the shop opens all seven days — the offer runs only while it is open.
+ */
+export const MENU_OFFER_WHERE: Copy = {
+  text: 'Takeaway & delivery · every day',
+  when: { everyDay: true },
+  otherwise: 'Takeaway & delivery · {days}',
+};
 export const MENU_FOOT_LINE: Copy = taxed(
   {
     text: 'Prices in PKR · {tax} added on the bill · pay {doorPayments} on delivery or at the counter',

@@ -23,8 +23,6 @@ import { percentDiscountCents } from './pricing';
 /** The offer's hours on the Karachi clock, as the poster prints them. */
 export const OFFER_WINDOW = '1–7 PM';
 export const OFFER_HEADLINE = 'Buy 1 Get 1 FREE';
-/** Where it counts: the poster's "IN-SHOP · PICK-UP · DELIVERY", and the website's own orders. */
-export const OFFER_WHERE = 'In-shop · pick-up · delivery · online';
 /** Prominent on the poster, and here. */
 export const OFFER_FINE_PRINT = 'Delivery charges & tax may apply';
 export const OFFER_TAG_LINE = 'Tag us on social media and show us the post to get the free item.';

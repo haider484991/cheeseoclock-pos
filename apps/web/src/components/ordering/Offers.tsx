@@ -4,7 +4,6 @@ import {
   OFFER_HEADLINE,
   OFFER_RULES,
   OFFER_TAG_LINE,
-  OFFER_WHERE,
   OFFER_WINDOW,
   type CardOffer,
 } from '@/lib/offers';
@@ -25,7 +24,14 @@ function ruleParts(rule: string, prices: { mediumCents: number | null; largeCent
  * Under the menu's title: Buy 1 Get 1 FREE, its hours, where it counts, the two rules, how the free item is
  * earned, and — in solid gold, as prominent as the poster has it — that delivery charges and tax may apply.
  */
-export function OfferBanner({ prices }: { prices: { mediumCents: number | null; largeCents: number | null } }) {
+export function OfferBanner({
+  prices,
+  where,
+}: {
+  prices: { mediumCents: number | null; largeCents: number | null };
+  /** Where and when it counts, in the shop's words (page-copy MENU_OFFER_WHERE: "every day" only while open daily). */
+  where: string;
+}) {
   return (
     <section
       aria-label={`${OFFER_HEADLINE}, ${OFFER_WINDOW}`}
@@ -34,7 +40,7 @@ export function OfferBanner({ prices }: { prices: { mediumCents: number | null; 
       <p className="font-display text-3xl uppercase leading-none tracking-wide text-cheese md:text-4xl">
         {OFFER_HEADLINE} <span className="whitespace-nowrap">· {OFFER_WINDOW}</span>
       </p>
-      <p className="mt-1.5 font-cond text-sm font-bold uppercase tracking-[0.1em] text-cream md:text-base md:tracking-[0.16em]">{OFFER_WHERE}</p>
+      <p className="mt-1.5 font-cond text-sm font-bold uppercase tracking-[0.1em] text-cream md:text-base md:tracking-[0.16em]">{where}</p>
       <ul className="mt-3 space-y-1.5 text-[0.95rem] leading-snug text-cream/90">
         {OFFER_RULES.map((rule) => {
           const [buy, get] = ruleParts(rule, prices);

@@ -21,6 +21,14 @@ const nextConfig = {
     return [
       // Gizri / Punjab Colony was never a delivery zone (DHA & Clifton only).
       { source: '/delivery/gizri', destination: '/delivery', permanent: true },
+      // The printed QR codes' short link to the shop's Google "write a review" page (5 Oct 2026: the A5 poster's QR
+      // is 25 mm, too small for the long Google address; a short one makes a coarser, easier-to-scan code). Not
+      // permanent, so the destination can change without reprinting. Place ID: Google's listing for the shop.
+      {
+        source: '/review',
+        destination: 'https://search.google.com/local/writereview?placeid=ChIJ-V27j3c9sz4RUuIYjVnRvFU',
+        permanent: false,
+      },
     ];
   },
 };
