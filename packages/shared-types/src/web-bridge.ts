@@ -15,6 +15,7 @@
  * All money in cents, all rates in basis points — same discipline as the POS.
  */
 
+import type { Buy1Get1Rules } from './buy-1-get-1.js';
 import type { ClosedNotice, WebsiteAnnouncement } from './website-messages.js';
 import type { ShopHours, ShopProfile, ShopWebsite, WebsiteHome } from './website-shop.js';
 
@@ -452,6 +453,49 @@ export interface PublishedMenu {
 // last till's, so a v0.7.36 till beating in turns the delivery % off again.
 
 // ---------------------------------------------------------------------------
+// v0.7.39 — BUY 1 GET 1 DEALS (owner, 2026-10-07: the poster's offer as menu
+// items, "all these settings should be in the settings"). The contract
+// between the till and the website. Rules and words: buy-1-get-1.ts.
+// ---------------------------------------------------------------------------
+//
+// THE DEALS are menu items of a category named "Buy 1 Get 1 …"
+// (isBuy1Get1Category), published like any other; their items carry
+// `noDiscount: true` (categoryNeverDiscounted knows the name), so no % comes
+// off them anywhere.
+//
+// THE SETTING. 'deals.buy1Get1' (Settings → Money & discounts → "Buy 1 Get 1
+// deals"): on or off, the hours (every day, Karachi clock; an end before the
+// start runs past midnight), and whether the website requires the customer's
+// Instagram or Facebook name with a deal in the cart. Never saved = the
+// poster's: on, 1 PM up to 7 PM, required.
+//
+// THE BLOCK. 'deals.buy1Get1' joins PUBLISHED_SETTING_KEYS (a Save of it
+// alone changes the stamp and is sent ALONE, as the messages are); a till of
+// v0.7.39 sends `buy1Get1` in every block, at its defaults too. Absent from a
+// block (an older till's) = the website KEEPS what it stored, field by field
+// (KEPT_MESSAGE_FIELDS), and with nothing stored reads the poster's rules.
+//
+// THE WEBSITE (v0.7.39), on the SERVER from the stored block:
+//   - off: the deals' section, the Buy 1 Get 1 banner and the card strips
+//     are not shown, and an order with a deal is refused 409
+//     'buy1get1_closed' with buy1Get1ClosedMessage;
+//   - outside the hours: the deals show closed (no add button) and the order
+//     is refused the same way. A replayed order is answered before the check;
+//   - asksSocial: an order with a deal and no clean Instagram / Facebook name
+//     is refused 400 'buy1get1_social' (BUY_1_GET_1_SOCIAL_MESSAGE); the name
+//     leads the order's notes ("Buy 1 Get 1: check the post by @…"), which the
+//     till shows and prints as it always has. Off: the field stays optional.
+//
+// THE TILL (v0.7.39) refuses a deal added at the counter (orders:addItem,
+// Edit order) while off or outside the hours, unless the order was started
+// inside them; the menu greys it. A web order is imported as the website
+// took it: never checked again.
+//
+// DEPLOY ORDER. The website first (a push to main deploys it), then the
+// tills, then the menu file with the deals. Until a menu has a "Buy 1 Get 1"
+// category, nothing on either side changes.
+
+// ---------------------------------------------------------------------------
 // THE SHOP BLOCK (sweep B2 + B4, after v0.7.30) — the shop's name, numbers,
 // address and social links, its opening hours, its website words and the
 // home page's lineup, from Settings → Shop & logo → "Website: shop details
@@ -714,8 +758,9 @@ export const SETTINGS_MAX_CLOCK_AHEAD_MS = 10 * 60_000;
  * The shop settings a block carries (their row versions and times make its
  * stamp). 'online.options' since v0.7.30: its website messages and delivery
  * minimum travel in the block (a Save of them alone changes the stamp).
+ * 'deals.buy1Get1' since v0.7.39 (BUY 1 GET 1 DEALS, below).
  */
-export const PUBLISHED_SETTING_KEYS = ['delivery.zones', 'discounts.websitePickup', 'online.options'] as const;
+export const PUBLISHED_SETTING_KEYS = ['delivery.zones', 'discounts.websitePickup', 'online.options', 'deals.buy1Get1'] as const;
 
 /** One delivery area in the settings block. */
 export interface PublishedZone {
@@ -776,6 +821,12 @@ export interface PublishedSettings {
   announcement?: WebsiteAnnouncement;
   /** The smallest website DELIVERY order's food, paisa (0 = no minimum). */
   minDeliveryOrderCents?: number;
+  /**
+   * BUY 1 GET 1 DEALS (v0.7.39; absent from an older till's block = keep
+   * what the website stored, and with nothing stored the poster's rules):
+   * sold at all, their hours, the website's name question.
+   */
+  buy1Get1?: Buy1Get1Rules;
 }
 
 /**

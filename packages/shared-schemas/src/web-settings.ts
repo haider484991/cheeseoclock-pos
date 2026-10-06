@@ -32,6 +32,7 @@ import {
   WEBSITE_TEXT_FORBIDDEN_RE,
   WHATSAPP_GREETING_MAX,
   WHATSAPP_LINES_MAX,
+  buy1Get1HoursProblem,
   canonicalPayments,
   homeDuplicateProblem,
   normalizePhone,
@@ -40,6 +41,7 @@ import {
   socialLinkProblem,
 } from '@cheeseoclock/shared-types';
 import type {
+  Buy1Get1Rules,
   ClosedNotice,
   PublishedPickup,
   PublishedSettings,
@@ -158,6 +160,29 @@ export const minDeliveryOrderCentsSchema = z
   })
   .refine((c) => c % 100 === 0, { message: 'The smallest delivery order is in whole rupees' });
 
+// ---------------------------------------------------------------------------
+// BUY 1 GET 1 DEALS (v0.7.39, shared-types web-bridge.ts): the bounds the till
+// saves them in ('deals.buy1Get1' in business-settings.ts uses these fields)
+// and the website checks them against. THE rule: buy1Get1HoursProblem.
+// ---------------------------------------------------------------------------
+
+/** 'deals.buy1Get1' without its format: on or off, the hours, the website's name question. */
+export const buy1Get1Fields = {
+  on: z.boolean({ errorMap: () => ({ message: 'Say whether the Buy 1 Get 1 deals are on: yes or no' }) }),
+  opensMinute: z.number().int().min(0).max(1439),
+  closesMinute: z.number().int().min(1).max(1440),
+  asksSocial: z.boolean({
+    errorMap: () => ({ message: 'Say whether the website asks for the Instagram or Facebook name: yes or no' }),
+  }),
+};
+export const buy1Get1HoursRule = (h: { opensMinute: number; closesMinute: number }, ctx: z.RefinementCtx) => {
+  const problem = buy1Get1HoursProblem(h);
+  if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+};
+
+/** The block's Buy 1 Get 1 rules. Not strict: a newer till's extra field is dropped. */
+export const publishedBuy1Get1Schema = z.object(buy1Get1Fields).superRefine(buy1Get1HoursRule);
+
 const blockShape = {
   v: z.number().int().min(1),
   settingsAt: instant,
@@ -186,7 +211,8 @@ const zonesDistinct = (b: { zones: Array<{ id: string; name: string }> }, ctx: z
  * A block as a till sends it (PUT /api/bridge/menu's `settings`, PUT
  * /api/bridge/settings): a message field out of its bounds fails the block
  * (400 validation) — a till never sends one. The message fields are
- * OPTIONAL: absent from a v0.7.29 till's block = keep what is stored.
+ * OPTIONAL: absent from a v0.7.29 till's block = keep what is stored. So are
+ * the Buy 1 Get 1 rules (v0.7.39): absent from an older till's block.
  */
 export const publishedSettingsSchema = z
   .object({
@@ -194,15 +220,16 @@ export const publishedSettingsSchema = z
     closedNotice: publishedClosedNoticeSchema.optional(),
     announcement: publishedAnnouncementSchema.optional(),
     minDeliveryOrderCents: minDeliveryOrderCentsSchema.optional(),
+    buy1Get1: publishedBuy1Get1Schema.optional(),
   })
   .superRefine(zonesDistinct);
 
 /**
  * A block as the website READS BACK what it stored (site_menu.menu_json →
- * settings): the same, except that a message field that does not fit (a
- * hand-edited row) reads as ABSENT (its default) instead of throwing the
- * whole block away — the areas and fees must never fall back to the
- * built-in list because of a message.
+ * settings): the same, except that a message field — or the Buy 1 Get 1
+ * rules — that does not fit (a hand-edited row) reads as ABSENT (its
+ * default) instead of throwing the whole block away — the areas and fees
+ * must never fall back to the built-in list because of a message.
  */
 export const publishedSettingsReadSchema = z
   .object({
@@ -210,6 +237,7 @@ export const publishedSettingsReadSchema = z
     closedNotice: publishedClosedNoticeSchema.optional().catch(undefined),
     announcement: publishedAnnouncementSchema.optional().catch(undefined),
     minDeliveryOrderCents: minDeliveryOrderCentsSchema.optional().catch(undefined),
+    buy1Get1: publishedBuy1Get1Schema.optional().catch(undefined),
   })
   .superRefine(zonesDistinct);
 
@@ -220,6 +248,7 @@ const _settingsShape: Same<z.infer<typeof publishedSettingsSchema>, PublishedSet
 const _settingsReadShape: Same<z.infer<typeof publishedSettingsReadSchema>, PublishedSettings> = true;
 const _closedNoticeShape: Same<z.infer<typeof publishedClosedNoticeSchema>, ClosedNotice> = true;
 const _announcementShape: Same<z.infer<typeof publishedAnnouncementSchema>, WebsiteAnnouncement> = true;
+const _buy1Get1Shape: Same<z.infer<typeof publishedBuy1Get1Schema>, Buy1Get1Rules> = true;
 
 // ---------------------------------------------------------------------------
 // THE SHOP BLOCK (sweep B2 + B4, shared-types web-bridge.ts): the bounds of

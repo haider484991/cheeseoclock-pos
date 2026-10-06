@@ -1,7 +1,9 @@
 import {
-  BUY_1_GET_1_CLOSED_MESSAGE,
   BUY_1_GET_1_SOCIAL_MESSAGE,
+  DEFAULT_BUY_1_GET_1_RULES,
+  buy1Get1ClosedMessage,
   deliveryMinimumShortfallCents,
+  type Buy1Get1Rules,
   type WebFulfilment,
 } from '@cheeseoclock/shared-types';
 import { cleanSocial } from './checkout-extras';
@@ -40,11 +42,13 @@ export interface CheckoutInput {
   minDeliveryOrderCents?: number;
   /** The cart's food: each line with its choices × quantity, before tax, the delivery charge and any discount (lib/cart cartSubtotalCents). */
   foodSubtotalCents?: number;
-  /** A Buy 1 Get 1 deal is in the cart (shared-types buy-1-get-1): the hours and the Instagram / Facebook name apply. */
+  /** A Buy 1 Get 1 deal is in the cart (shared-types buy-1-get-1): the owner's rules apply. */
   buy1Get1InCart?: boolean;
-  /** Buy 1 Get 1 deals are on sale right now (1–7 PM, Karachi). Default true. */
+  /** Buy 1 Get 1 deals are on sale right now (the owner's rules on the Karachi clock). Default true. */
   buy1Get1Open?: boolean;
-  /** The customer's Instagram / Facebook name as typed (required with a Buy 1 Get 1 deal). */
+  /** The owner's Buy 1 Get 1 rules (the settings block): the closed words, and whether the name is asked. Default: the poster's. */
+  buy1Get1Rules?: Buy1Get1Rules;
+  /** The customer's Instagram / Facebook name as typed (required with a Buy 1 Get 1 deal while the rules ask for it). */
   social?: string;
 }
 
@@ -61,9 +65,11 @@ export function validateCheckout(v: CheckoutInput): CheckoutProblem | null {
       } to order delivery.`,
     };
   }
-  // Buy 1 Get 1 deals sell 1–7 PM only (the server refuses them too: api/orders 'buy1get1_closed').
+  // Buy 1 Get 1 deals sell only in the owner's hours, and not while switched off (the server refuses them too:
+  // api/orders 'buy1get1_closed').
+  const dealRules = v.buy1Get1Rules ?? DEFAULT_BUY_1_GET_1_RULES;
   if (v.buy1Get1InCart && v.buy1Get1Open === false) {
-    return { field: 'cart', message: `${BUY_1_GET_1_CLOSED_MESSAGE} Remove the deal to order now.` };
+    return { field: 'cart', message: `${buy1Get1ClosedMessage(dealRules)} Remove the deal to order now.` };
   }
   // The server's rule and words (api/orders 'below_minimum'): a delivery only, never a pick-up.
   const short = pickup ? 0 : deliveryMinimumShortfallCents(v.foodSubtotalCents ?? 0, v.minDeliveryOrderCents ?? 0);
@@ -87,8 +93,9 @@ export function validateCheckout(v: CheckoutInput): CheckoutProblem | null {
   if (!pickup && v.address.trim().length < 5) {
     return { field: 'address', message: 'Please enter your house number and street.' };
   }
-  // The customer earns the free item by tagging the shop: the cashier needs whose post to check (api/orders 'buy1get1_social').
-  if (v.buy1Get1InCart && cleanSocial(v.social ?? '') === null) {
+  // The customer earns the free item by tagging the shop: the cashier needs whose post to check, while the owner's
+  // rules ask for it (api/orders 'buy1get1_social').
+  if (v.buy1Get1InCart && dealRules.asksSocial && cleanSocial(v.social ?? '') === null) {
     return { field: 'social', message: BUY_1_GET_1_SOCIAL_MESSAGE };
   }
   return null;

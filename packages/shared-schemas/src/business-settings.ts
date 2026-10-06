@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  buy1Get1Fields,
+  buy1Get1HoursRule,
   shopHoursFields,
   shopHoursRule,
   shopProfileFields,
@@ -71,6 +73,7 @@ import {
   MENU_AUTO_UPDATE_MODES,
 } from '@cheeseoclock/shared-types';
 import type {
+  Buy1Get1Deals,
   DeliveryZones,
   OnlineOptions,
   ShopHours,
@@ -1005,6 +1008,15 @@ const menuAutoUpdateShape = {
 export const menuAutoUpdateSchema = z.object({ v: writesFormat('menu.autoUpdate'), ...menuAutoUpdateShape }).strict();
 const menuAutoUpdateReadSchema = z.object({ v: readsFormat, ...menuAutoUpdateShape });
 
+// ---------------------------------------------------------------------------
+// The Buy 1 Get 1 deals (v0.7.39, shared-types buy-1-get-1.ts). Their fields and hours rule are the settings
+// block's own (web-settings.ts buy1Get1Fields), so what a till saves always passes the website's check.
+// ---------------------------------------------------------------------------
+
+/** 'deals.buy1Get1' as this version writes it. */
+export const buy1Get1DealsSchema = z.object({ v: writesFormat('deals.buy1Get1'), ...buy1Get1Fields }).strict().superRefine(buy1Get1HoursRule);
+const buy1Get1DealsReadSchema = z.object({ v: readsFormat, ...buy1Get1Fields }).superRefine(buy1Get1HoursRule);
+
 const HEX64 = /^[0-9a-f]{64}$/;
 const menuLastPackageShape = {
   /** The website's package (menu_packages.id). */
@@ -1162,6 +1174,7 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'shop.website': shopWebsiteSchema,
   'website.home': websiteHomeSchema,
   'menu.autoUpdate': menuAutoUpdateSchema,
+  'deals.buy1Get1': buy1Get1DealsSchema,
   'menu.lastPackage': menuLastPackageSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
@@ -1206,6 +1219,7 @@ export const BUSINESS_SETTING_READ_SCHEMAS: { readonly [K in BusinessSettingKey]
   'shop.website': shopWebsiteReadSchema,
   'website.home': websiteHomeReadSchema,
   'menu.autoUpdate': menuAutoUpdateReadSchema,
+  'deals.buy1Get1': buy1Get1DealsReadSchema,
   'menu.lastPackage': menuLastPackageReadSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
@@ -1233,6 +1247,7 @@ const SHOP_SETTING_FIELDS: { readonly [K in ShopSettingKey]: ReadonlySet<string>
   'shop.website': new Set(['v', ...Object.keys(shopWebsiteFields)]),
   'website.home': new Set(['v', ...Object.keys(websiteHomeFields)]),
   'menu.autoUpdate': new Set(['v', ...Object.keys(menuAutoUpdateShape)]),
+  'deals.buy1Get1': new Set(['v', ...Object.keys(buy1Get1Fields)]),
 };
 
 /** The fields of the shop keys' nested objects this version writes (a newer till's extra one makes the value "newer"). */
@@ -1517,6 +1532,8 @@ const _websiteHomeShape: Same<z.infer<typeof websiteHomeSchema>, WebsiteHome> = 
 const _websiteHomeReadShape: Same<z.infer<typeof websiteHomeReadSchema>, WebsiteHome> = true;
 const _menuAutoUpdateShape: Same<z.infer<typeof menuAutoUpdateSchema>, MenuAutoUpdate> = true;
 const _menuAutoUpdateReadShape: Same<z.infer<typeof menuAutoUpdateReadSchema>, MenuAutoUpdate> = true;
+const _buy1Get1DealsShape: Same<z.infer<typeof buy1Get1DealsSchema>, Buy1Get1Deals> = true;
+const _buy1Get1DealsReadShape: Same<z.infer<typeof buy1Get1DealsReadSchema>, Buy1Get1Deals> = true;
 const _menuLastPackageReadShape: Same<z.infer<typeof menuLastPackageReadSchema>, MenuLastPackage> = true;
 // The till's view of what a file changed (shared-types menu-deploy-view.ts) is the website's counts, field for field.
 const _menuDeployCountsShape: Same<z.infer<typeof menuDeployCountsSchema>, MenuDeployCountsView> = true;

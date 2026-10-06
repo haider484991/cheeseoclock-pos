@@ -79,15 +79,16 @@ export function composeNotes(
     notes: string | null;
     /**
      * A Buy 1 Get 1 deal is on the order (7 Oct 2026): the handle leads the notes as "Buy 1 Get 1: check the post by
-     * @x" (shared-types buy1Get1NoteLine), so the cashier knows whose post to check, before the pin.
+     * @x" (shared-types buy1Get1NoteLine), so the cashier knows whose post to check, before the pin — or, with no
+     * name (the owner made it optional), "Buy 1 Get 1: ask to see the post".
      */
     buy1Get1?: boolean;
   },
   max: number = ORDER_NOTES_MAX,
 ): string | null {
-  const deal = parts.buy1Get1 === true && parts.social !== null;
+  const deal = parts.buy1Get1 === true;
   const head = [
-    deal ? buy1Get1NoteLine(parts.social!) : null,
+    deal ? buy1Get1NoteLine(parts.social) : null,
     parts.pin ? pinLine(parts.pin) : null,
     parts.social && !deal ? `Social: ${parts.social}` : null,
   ]

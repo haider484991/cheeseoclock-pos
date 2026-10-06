@@ -1,4 +1,4 @@
-import { socialLabel } from '@cheeseoclock/shared-types';
+import { DEFAULT_BUY_1_GET_1_RULES, buy1Get1WindowWords, socialLabel, type Buy1Get1Rules } from '@cheeseoclock/shared-types';
 import type { MenuCard, MenuSectionView } from './menu-view';
 import { cardSizeLabel } from './menu-view';
 import { percentDiscountCents } from './pricing';
@@ -12,11 +12,14 @@ import { percentDiscountCents } from './pricing';
  * takes the free item off the bill. This file only says so, per card.
  *
  * Since 7 Oct 2026 the till sells the offer as Buy 1 Get 1 DEALS (a menu category of their own, shared-types
- * buy-1-get-1: the pizza you pay for with the free item as a Rs 0 choice, 1–7 PM only). While the menu has them
- * (`dealsOnMenu`), each card's strip says the free item comes in a deal, and the banner has a button to them.
+ * buy-1-get-1: the pizza you pay for with the free item as a choice at no charge). While the menu has them (`dealsOnMenu`),
+ * each card's strip says the free item comes in a deal, and the banner has a button to them. The hours, and whether
+ * the offer is on at all, are the owner's (Settings → Money & discounts on the till, carried in the settings block:
+ * SiteFacts.buy1Get1): switched off, no strip and no banner; the hours print as the owner set them (1–7 PM until
+ * changed).
  *
  * Pure and unit-tested (offers.test.ts). The words are one place (OFFER_*): the menu's banner, each card's strip
- * and the checkout's "tag us" hint all read them, so a change of hours or terms is one edit here.
+ * and the checkout's "tag us" hint all read them, so a change of terms is one edit here.
  *
  * Which items: the REGULAR pizzas (the poster's Medium and Large prices) are the "buy"; the
  * burgers (not the Nashville Burger) and the sides are what comes free with a Large; with a Medium only a side,
@@ -24,8 +27,10 @@ import { percentDiscountCents } from './pricing';
  * prices are the regular ones; deals are never discounted again). Dips and drinks have none either.
  */
 
-/** The offer's hours on the Karachi clock, as the poster prints them. */
-export const OFFER_WINDOW = '1–7 PM';
+/** The offer's hours on the Karachi clock, as the poster prints them ("1–7 PM" until the owner changes them). */
+export function offerWindow(rules: Buy1Get1Rules = DEFAULT_BUY_1_GET_1_RULES): string {
+  return buy1Get1WindowWords(rules);
+}
 export const OFFER_HEADLINE = 'Buy 1 Get 1 FREE';
 /** Prominent on the poster, and here. */
 export const OFFER_FINE_PRINT = 'Delivery charges & tax may apply';
@@ -46,11 +51,13 @@ function profileWords(url: string): string {
 
 /**
  * Under the checkout's social field: how the Tag-us free item is earned, naming the shop's own profiles (the owner's
- * social links) so the customer tags the right account; with none, the shop's name.
+ * social links) so the customer tags the right account; with none, the shop's name. While the owner has the offer
+ * switched off it promises nothing: post and tag us.
  */
-export function tagUsHint(shopName: string, socialLinks: readonly string[]): string {
+export function tagUsHint(shopName: string, socialLinks: readonly string[], rules: Buy1Get1Rules = DEFAULT_BUY_1_GET_1_RULES): string {
   const where = socialLinks.length > 0 ? `tag us (${socialLinks.map(profileWords).join(' · ')})` : `tag ${shopName} on Instagram or Facebook`;
-  return `Post your meal, ${where} and show us the post: your Buy 1 Get 1 item is free (${OFFER_WINDOW}).`;
+  if (!rules.on) return `Post your meal and ${where}.`;
+  return `Post your meal, ${where} and show us the post: your Buy 1 Get 1 item is free (${offerWindow(rules)}).`;
 }
 /** Offers 01 and 02, then 03, as the poster words them. */
 export const OFFER_RULES: readonly string[] = [
@@ -121,14 +128,22 @@ function pricesAt(card: Pick<MenuCard, 'name' | 'variants'>, pct: number): Offer
 
 const hasSize = (card: Pick<MenuCard, 'variants'>, size: RegExp) => card.variants.some((v) => size.test(v.size ?? ''));
 
-function bogoFor(section: OfferSection, card: Pick<MenuCard, 'name' | 'variants'>, dealsOnMenu: boolean): CardOffer['bogo'] {
+function bogoFor(
+  section: OfferSection,
+  card: Pick<MenuCard, 'name' | 'variants'>,
+  dealsOnMenu: boolean,
+  rules: Buy1Get1Rules,
+): CardOffer['bogo'] {
+  // Switched off by the owner: no strip anywhere.
+  if (!rules.on) return null;
+  const window = offerWindow(rules);
   // With the deals on the menu the free item comes in one ("…in a Buy 1 Get 1 deal"); before that, the poster's words.
   const inDeal = (words: string) => (dealsOnMenu ? `${words} in a Buy 1 Get 1 deal` : words);
   switch (section) {
     case 'pizza': {
       const medium = hasSize(card, /medium/i);
       const large = hasSize(card, /large/i);
-      const title = `BUY 1 GET 1 FREE · ${OFFER_WINDOW}`;
+      const title = `BUY 1 GET 1 FREE · ${window}`;
       if (dealsOnMenu) {
         if (large && medium) return { title, detail: 'In a Buy 1 Get 1 deal: Large + free burger, side or Medium · Medium + free side' };
         if (large) return { title, detail: 'In a Buy 1 Get 1 deal: + a free burger, side or Medium pizza' };
@@ -141,10 +156,10 @@ function bogoFor(section: OfferSection, card: Pick<MenuCard, 'name' | 'variants'
       return null;
     }
     case 'burger':
-      return /nashville/i.test(card.name) ? null : { title: `FREE · ${OFFER_WINDOW}`, detail: inDeal('With any Large pizza') };
+      return /nashville/i.test(card.name) ? null : { title: `FREE · ${window}`, detail: inDeal('With any Large pizza') };
     case 'side':
       return {
-        title: `FREE · ${OFFER_WINDOW}`,
+        title: `FREE · ${window}`,
         detail: inDeal(/loaded/i.test(card.name) ? 'With any Large pizza' : 'With any Large or Medium pizza'),
       };
     default:
@@ -161,14 +176,19 @@ export function cardOffer(
   sectionName: string,
   card: MenuCard,
   percents: OfferPercents,
-  opts: { /** The menu has Buy 1 Get 1 deals (their own section): the strips say the free item comes in one. */ dealsOnMenu?: boolean } = {},
+  opts: {
+    /** The menu has Buy 1 Get 1 deals (their own section): the strips say the free item comes in one. */
+    dealsOnMenu?: boolean;
+    /** The owner's Buy 1 Get 1 rules (SiteFacts.buy1Get1): off = no strip; the hours in the strip. Default: the poster's. */
+    buy1Get1?: Buy1Get1Rules;
+  } = {},
 ): CardOffer {
   const section = offerSectionOf(sectionName);
   if (section === 'deal') return { bogo: null, discount: null };
   const taking = card.variants.length > 0 && card.variants.some((v) => v.item.noDiscount !== true);
   const words = taking ? discountWords(percents) : null;
   return {
-    bogo: bogoFor(section, card, opts.dealsOnMenu === true),
+    bogo: bogoFor(section, card, opts.dealsOnMenu === true, opts.buy1Get1 ?? DEFAULT_BUY_1_GET_1_RULES),
     discount: words ? { label: words.label, prices: words.pct === null ? null : pricesAt(card, words.pct) } : null,
   };
 }

@@ -674,6 +674,10 @@ const SHOP_SETTING_SAVES = (): unknown[] => [
   // Menu files from the costing PC (v0.7.32): put in by themselves, or wait for the owner's OK.
   { key: 'menu.autoUpdate', value: { v: 1, mode: 'ask' } },
   { key: 'menu.autoUpdate', useDefault: true },
+  // The Buy 1 Get 1 deals (v0.7.39): switched off, or other hours — the owner's alone.
+  { key: 'deals.buy1Get1', value: { v: 1, on: false, opensMinute: 780, closesMinute: 1140, asksSocial: true } },
+  { key: 'deals.buy1Get1', value: { v: 1, on: true, opensMinute: 1320, closesMinute: 60, asksSocial: false } },
+  { key: 'deals.buy1Get1', useDefault: true },
 ];
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */
@@ -1193,7 +1197,7 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
         });
       }
       // …nor may they read a card (foodpanda's carries the commission; every one is the owner's).
-      expect(SHOP_SETTING_KEYS.length).toBe(20);
+      expect(SHOP_SETTING_KEYS.length).toBe(21);
       for (const key of SHOP_SETTING_KEYS) {
         expect({ who: who.role, key, o: await call('settings:getBusiness', { key }) }).toMatchObject({
           who: who.role,
@@ -1261,6 +1265,8 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
       'shop.hours',
       'shop.website',
       'website.home',
+      // The Buy 1 Get 1 deals' rules travel in the settings block (v0.7.39).
+      'deals.buy1Get1',
     ]);
   });
 

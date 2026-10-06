@@ -389,22 +389,28 @@ describe('a block with other fees', () => {
 });
 
 describe('the facts the /menu page hands the browser', () => {
-  it('carry the areas, the pick-up offer, the announcement and the delivery minimum only — never the block’s device id or stamps, nor the closed notice', () => {
+  it('carry the areas, the pick-up offer, the announcement, the delivery minimum and the Buy 1 Get 1 rules only — never the block’s device id or stamps, nor the closed notice', () => {
     const facts = factsFromBlock({
       ...block((zs) => (zone(zs, 'dha-8').feeCents = 30_000)),
       closedNotice: { text: 'Made-up closed words', until: null },
       announcement: { on: true, text: 'Made-up announcement' },
       minDeliveryOrderCents: 100_000,
+      buy1Get1: { on: false, opensMinute: 1320, closesMinute: 60, asksSocial: false },
     });
     const sent = JSON.stringify(facts);
     for (const secret of ['settingsAt', 'settingsRev', 'settingsTie', 'deviceId', 'till-test', '2026-09-27T10:00:00.000Z', 'closedNotice', 'Made-up closed words']) {
       expect(sent, secret).not.toContain(secret);
     }
-    // v0.7.30 added the announcement and the delivery minimum (both at today's values without them).
-    expect(Object.keys(facts).sort()).toEqual(['announcement', 'minDeliveryOrderCents', 'pickup', 'source', 'zones']);
-    expect(Object.keys(DEFAULT_FACTS).sort()).toEqual(['announcement', 'minDeliveryOrderCents', 'pickup', 'source', 'zones']);
+    // v0.7.30 added the announcement and the delivery minimum (both at today's values without them); v0.7.39 the
+    // Buy 1 Get 1 rules (the poster's without them).
+    expect(Object.keys(facts).sort()).toEqual(['announcement', 'buy1Get1', 'minDeliveryOrderCents', 'pickup', 'source', 'zones']);
+    expect(Object.keys(DEFAULT_FACTS).sort()).toEqual(['announcement', 'buy1Get1', 'minDeliveryOrderCents', 'pickup', 'source', 'zones']);
     expect([facts.announcement, facts.minDeliveryOrderCents]).toEqual(['Made-up announcement', 100_000]);
     expect([DEFAULT_FACTS.announcement, DEFAULT_FACTS.minDeliveryOrderCents]).toEqual([null, 0]);
+    expect(facts.buy1Get1).toEqual({ on: false, opensMinute: 1320, closesMinute: 60, asksSocial: false });
+    expect(DEFAULT_FACTS.buy1Get1).toEqual({ on: true, opensMinute: 780, closesMinute: 1140, asksSocial: true });
+    // A block without them (an older till's): the poster's rules.
+    expect(factsFromBlock(block()).buy1Get1).toEqual(DEFAULT_FACTS.buy1Get1);
     expect(facts.zones.find((z) => z.id === 'dha-8')?.feeCents).toBe(30_000);
   });
 });

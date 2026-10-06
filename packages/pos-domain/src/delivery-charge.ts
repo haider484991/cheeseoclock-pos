@@ -23,6 +23,7 @@ import {
   deliveryChargeItemName,
   isDeliveryChargeName,
   zoneFeeItem,
+  type Buy1Get1Rules,
   type ClosedNotice,
   type DeliveryZoneSetting,
   type OrderMode,
@@ -551,6 +552,8 @@ export function buildSettingsBlock(input: {
     announcement: WebsiteAnnouncement;
     minDeliveryOrderCents: number;
   };
+  /** The Buy 1 Get 1 deals' rules ('deals.buy1Get1', v0.7.39): absent = a v0.7.38-shaped block. */
+  buy1Get1?: Buy1Get1Rules;
 }): PublishedSettings {
   const stamp = settingsStampOf(input.stamps);
   const website = input.website
@@ -558,6 +561,16 @@ export function buildSettingsBlock(input: {
         closedNotice: { text: input.website.closedNotice.text, until: input.website.closedNotice.until },
         announcement: { on: input.website.announcement.on, text: input.website.announcement.text },
         minDeliveryOrderCents: input.website.minDeliveryOrderCents,
+      }
+    : {};
+  const deals = input.buy1Get1
+    ? {
+        buy1Get1: {
+          on: input.buy1Get1.on,
+          opensMinute: input.buy1Get1.opensMinute,
+          closesMinute: input.buy1Get1.closesMinute,
+          asksSocial: input.buy1Get1.asksSocial,
+        },
       }
     : {};
   return {
@@ -586,5 +599,6 @@ export function buildSettingsBlock(input: {
       };
     }),
     ...website,
+    ...deals,
   };
 }

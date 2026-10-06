@@ -25,6 +25,7 @@ import {
   type BusinessSettingValue,
 } from '@cheeseoclock/shared-schemas';
 import {
+  DEFAULT_BUY_1_GET_1_RULES,
   DEFAULT_DELIVERY_ZONES,
   DEFAULT_MENU_IMPORT_POLICY,
   DEFAULT_ONLINE_OPTIONS,
@@ -38,6 +39,7 @@ import {
   SHOP_SETTING_DEFAULTS,
   deliveryZoneFeeItemIds,
   type ApprovalLimits,
+  type Buy1Get1Rules,
   type DeliveryZoneSetting,
   type MenuImportPolicy,
   type OnlineOptions,
@@ -286,6 +288,19 @@ export function readOnlineOptions(db: AppDatabase): OnlineOptions {
     return readShopSetting(db, 'online.options').value;
   } catch {
     return { ...DEFAULT_ONLINE_OPTIONS };
+  }
+}
+
+/**
+ * The Buy 1 Get 1 deals' rules ('deals.buy1Get1'), without the format: read on every call by the counter's check,
+ * checkout:getRules and the settings block. The poster's (on, 1–7 PM, the name asked for) when nothing is saved.
+ */
+export function readBuy1Get1Rules(db: AppDatabase): Buy1Get1Rules {
+  try {
+    const { on, opensMinute, closesMinute, asksSocial } = readShopSetting(db, 'deals.buy1Get1').value;
+    return { on, opensMinute, closesMinute, asksSocial };
+  } catch {
+    return { ...DEFAULT_BUY_1_GET_1_RULES };
   }
 }
 

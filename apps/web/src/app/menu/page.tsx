@@ -7,7 +7,7 @@ import { copyText, factsFromBlock } from '@/lib/delivery-facts';
 import { MENU_DESCRIPTION, MENU_PAGE_NAME } from '@/lib/page-copy';
 import { JsonLd, menuNode, webPageNode } from '@/lib/seo';
 import { getStoreStatus } from '@/lib/store-status';
-import { publicMenu } from '@/lib/public-menu';
+import { publicMenu, withDealsForSale } from '@/lib/public-menu';
 import { lineOrderUrl, shopFactsFromBlock, shopHoursLine, whatsappLinesOf } from '@/lib/shop-facts';
 import { getShopFacts, parseStoredSettings, parseStoredShop } from '@/lib/site-facts';
 import { closedNoticeInForce, type PublishedMenu } from '@cheeseoclock/shared-types';
@@ -64,8 +64,9 @@ export default async function MenuPage() {
   // The owner's closed notice, worked out here per request (this page is dynamic): its last day
   // ends on time. null = the page's own closed words, as before.
   const closedNotice = closedNoticeInForce(block?.closedNotice, Date.now());
-  // Sent whole to the browser: the block's areas and pick-up only, never its device id or stamps.
-  const shown = menu ? publicMenu(menu) : null;
+  // Sent whole to the browser: the block's areas and pick-up only, never its device id or stamps — and no Buy 1 Get 1
+  // deal while the owner has them switched off.
+  const shown = menu ? withDealsForSale(publicMenu(menu), deliveryFacts.buy1Get1) : null;
   // The shop's details from the row this page read (sweep B2 + B4) — never the shop block's stamps
   // or device id; with no menu, the pages' own read (today's details with none stored).
   const shop = menu ? shopFactsFromBlock(parseStoredShop(menu.shop ?? null)) : await getShopFacts();

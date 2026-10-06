@@ -11,6 +11,7 @@
  * process decides every discount again when it is saved.
  */
 import {
+  DEFAULT_BUY_1_GET_1_RULES,
   DEFAULT_DELIVERY_ZONES,
   DEFAULT_DISCOUNT_APPROVAL,
   DEFAULT_DISCOUNT_DELIVERY,
@@ -18,6 +19,7 @@ import {
   DEFAULT_KITCHEN_TIMING,
   DEFAULT_ORDER_REASONS,
   DEFAULT_STOCK_RULES,
+  type Buy1Get1Rules,
   type CheckoutRules,
   type CounterOrderReasons,
   type CounterStockRules,
@@ -92,4 +94,9 @@ export const DEFAULT_COUNTER_REASONS: CounterOrderReasons = {
 /** The reason buttons from checkout:getRules, or the released ones until it has answered. */
 export function orderReasonsOf(rules: Pick<CheckoutRules, 'reasons'> | null | undefined): CounterOrderReasons {
   return rules?.reasons ?? DEFAULT_COUNTER_REASONS;
+}
+
+/** The Buy 1 Get 1 deals' rules from checkout:getRules, or the poster's (on, 1–7 PM) until it has answered. */
+export function buy1Get1RulesOf(rules: Pick<CheckoutRules, 'buy1Get1'> | null | undefined): Buy1Get1Rules {
+  return rules?.buy1Get1 ?? DEFAULT_BUY_1_GET_1_RULES;
 }

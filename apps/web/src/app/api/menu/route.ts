@@ -1,5 +1,7 @@
 import { sql } from '@/lib/db';
-import { publicMenu } from '@/lib/public-menu';
+import { factsFromBlock } from '@/lib/delivery-facts';
+import { publicMenu, withDealsForSale } from '@/lib/public-menu';
+import { parseStoredSettings } from '@/lib/site-facts';
 import type { PublishedMenu } from '@cheeseoclock/shared-types';
 
 export const dynamic = 'force-dynamic';
@@ -9,7 +11,8 @@ export const revalidate = 0;
 /**
  * Public: the currently-published menu (or 404 until the POS publishes) —
  * without the drink brand, and with the settings block's areas and pick-up
- * only (never the sending till's device id or the block's stamps).
+ * only (never the sending till's device id or the block's stamps); without
+ * the Buy 1 Get 1 deals while the owner has them switched off.
  */
 export async function GET(): Promise<Response> {
   try {
@@ -23,8 +26,9 @@ export async function GET(): Promise<Response> {
         { status: 404 },
       );
     }
+    const deals = factsFromBlock(parseStoredSettings(row.menu_json.settings ?? null)).buy1Get1;
     return Response.json(
-      { ok: true, data: publicMenu(row.menu_json) },
+      { ok: true, data: withDealsForSale(publicMenu(row.menu_json), deals) },
       // Cache at the CDN for 60s — menu changes are infrequent and the POS
       // republish simply overwrites; a stale minute is fine.
       { headers: { 'Cache-Control': 's-maxage=60, stale-while-revalidate=300' } },

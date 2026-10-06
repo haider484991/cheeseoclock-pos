@@ -116,8 +116,14 @@ describe('composeNotes with a Buy 1 Get 1 deal (7 Oct 2026)', () => {
     expect(composeNotes({ pin: null, social: '@ahmed_k', notes: null, buy1Get1: true })).toBe('Buy 1 Get 1: check the post by @ahmed_k');
   });
 
-  it('without a deal, or without a name, the notes are as before', () => {
+  it('without a deal the notes are as before', () => {
     expect(composeNotes({ pin: null, social: '@ahmed_k', notes: null, buy1Get1: false })).toBe('Social: @ahmed_k');
-    expect(composeNotes({ pin: null, social: null, notes: 'Hi', buy1Get1: true })).toBe('Hi');
+    expect(composeNotes({ pin: null, social: null, notes: 'Hi', buy1Get1: false })).toBe('Hi');
+    expect(composeNotes({ pin: null, social: null, notes: 'Hi' })).toBe('Hi');
+  });
+
+  it('a deal without a name (the owner made it optional) still tells the cashier to ask for the post', () => {
+    expect(composeNotes({ pin: null, social: null, notes: 'Hi', buy1Get1: true })).toBe('Buy 1 Get 1: ask to see the post. Hi');
+    expect(composeNotes({ pin: null, social: null, notes: null, buy1Get1: true })).toBe('Buy 1 Get 1: ask to see the post');
   });
 });

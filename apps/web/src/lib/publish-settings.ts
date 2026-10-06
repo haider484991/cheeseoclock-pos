@@ -61,9 +61,11 @@ export function websiteBlockProblem(
  * about it, so the website keeps the one it stored — field by field, as it
  * keeps the whole stored block when a publish carries none. A block WITH one
  * (a till of v0.7.30 on sends all three, at their defaults too) replaces it.
- * The same three names are written into storePublishedMenu's statement.
+ * The Buy 1 Get 1 deals' rules the same way since v0.7.39 (`buy1Get1`: an
+ * older till's block has none). The same names are written into
+ * storePublishedMenu's statement.
  */
-export const KEPT_MESSAGE_FIELDS = ['closedNotice', 'announcement', 'minDeliveryOrderCents'] as const;
+export const KEPT_MESSAGE_FIELDS = ['closedNotice', 'announcement', 'minDeliveryOrderCents', 'buy1Get1'] as const;
 
 /**
  * `incoming` with each message field it lacks taken from `stored`: the block
@@ -269,7 +271,7 @@ export async function storePublishedMenu(
                    FROM jsonb_each(
                           CASE WHEN jsonb_typeof(site_menu.menu_json -> 'settings') = 'object'
                                THEN site_menu.menu_json -> 'settings' ELSE '{}'::jsonb END) AS kept
-                  WHERE kept.key IN ('closedNotice', 'announcement', 'minDeliveryOrderCents')),
+                  WHERE kept.key IN ('closedNotice', 'announcement', 'minDeliveryOrderCents', 'buy1Get1')),
                 '{}'::jsonb)
               || (EXCLUDED.menu_json -> 'settings'))
           WHEN site_menu.menu_json -> 'settings' IS NOT NULL

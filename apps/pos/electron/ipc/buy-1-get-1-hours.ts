@@ -1,12 +1,15 @@
-import { BUY_1_GET_1_CLOSED_MESSAGE, buy1Get1AllowedOn, isBuy1Get1Category } from '@cheeseoclock/shared-types';
+import { buy1Get1AllowedOn, buy1Get1ClosedMessage, isBuy1Get1Category } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
+import { readBuy1Get1Rules } from '../db/business-settings-read.js';
 import { IpcGuardError } from './registry.js';
 
 /**
- * Buy 1 Get 1 deals are sold from 1 PM to 7 PM (shared-types buy-1-get-1.ts): a counter add or an edit that puts one
- * on an order outside those hours is refused, in the cashier's words, unless the order was started inside them.
- * Website orders are not checked here — the website refused them outside the hours already, and an order placed at
- * 6:59 PM must still go in when the till fetches it at 7:01.
+ * Buy 1 Get 1 deals are sold only while the owner's rules say so (Settings → Money & discounts → "Buy 1 Get 1
+ * deals": on, every day 1 PM to 7 PM until changed; shared-types buy-1-get-1.ts): a counter add or an edit that puts
+ * one on an order while they are off, or outside their hours, is refused in the cashier's words — unless the order
+ * was started inside the hours. The rules are read on every call, so a Save here or on the other till counts at
+ * once. Website orders are not checked here: the website refused them already, and an order placed at 6:59 PM must
+ * still go in when the till fetches it at 7:01.
  */
 export function assertBuy1Get1Hours(
   db: AppDatabase,
@@ -23,7 +26,8 @@ export function assertBuy1Get1Hours(
     return row !== undefined && isBuy1Get1Category(row.name);
   });
   if (!anyDeal) return;
+  const rules = readBuy1Get1Rules(db);
   const order = db.prepare('SELECT created_at FROM orders WHERE id = ?').get(orderId) as { created_at: string } | undefined;
-  if (buy1Get1AllowedOn(nowMs, order?.created_at)) return;
-  throw new IpcGuardError({ code: 'precondition_failed', message: BUY_1_GET_1_CLOSED_MESSAGE });
+  if (buy1Get1AllowedOn(nowMs, order?.created_at, rules)) return;
+  throw new IpcGuardError({ code: 'precondition_failed', message: buy1Get1ClosedMessage(rules) });
 }

@@ -39,6 +39,7 @@ import type { AppDatabase } from '../db/connection.js';
 import {
   readApprovalLimits,
   readBusinessSettingRow,
+  readBuy1Get1Rules,
   readDiscountReasonRequired,
   readDeliveryFeeItemIds,
   readDeliveryZones,
@@ -149,6 +150,9 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
     delivery: {
       zones: zones.map((z) => ({ ...z, aliases: [...z.aliases], hints: [...z.hints] })),
     },
+    // The Buy 1 Get 1 deals' rules: the menu greys a deal while they are off or outside their hours (the main
+    // process decides again when one is added: ipc/buy-1-get-1-hours).
+    buy1Get1: readBuy1Get1Rules(db),
     foodpanda: {
       deal: active
         ? {

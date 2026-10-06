@@ -1,12 +1,5 @@
 import { formatCents } from '@/lib/format';
-import {
-  OFFER_FINE_PRINT,
-  OFFER_HEADLINE,
-  OFFER_RULES,
-  OFFER_TAG_LINE,
-  OFFER_WINDOW,
-  type CardOffer,
-} from '@/lib/offers';
+import { OFFER_FINE_PRINT, OFFER_HEADLINE, OFFER_RULES, OFFER_TAG_LINE, type CardOffer } from '@/lib/offers';
 
 /**
  * The menu's offers, set in the page's own colours (lib/offers has the words and the rules; nothing here
@@ -22,26 +15,30 @@ function ruleParts(rule: string, prices: { mediumCents: number | null; largeCent
 
 /**
  * Under the menu's title: Buy 1 Get 1 FREE, its hours, where it counts, the two rules, how the free item is
- * earned, and — in solid gold, as prominent as the poster has it — that delivery charges and tax may apply.
+ * earned, and — in solid gold, as prominent as the poster has it — that delivery charges and tax may apply. Not
+ * shown at all while the owner has the offer switched off (OrderingApp).
  */
 export function OfferBanner({
   prices,
   where,
+  window,
   dealsAnchor = null,
 }: {
   prices: { mediumCents: number | null; largeCents: number | null };
   /** Where and when it counts, in the shop's words (page-copy MENU_OFFER_WHERE: "every day" only while open daily). */
   where: string;
+  /** The offer's hours in words, as the owner set them on the till (lib/offers offerWindow: "1–7 PM"). */
+  window: string;
   /** The Buy 1 Get 1 deals' section on this menu (7 Oct 2026): a button jumps there; null = none, the banner as before. */
   dealsAnchor?: string | null;
 }) {
   return (
     <section
-      aria-label={`${OFFER_HEADLINE}, ${OFFER_WINDOW}`}
+      aria-label={`${OFFER_HEADLINE}, ${window}`}
       className="mt-5 max-w-3xl rounded-2xl border-2 border-cheese bg-cheese/10 p-4 md:p-5"
     >
       <p className="font-display text-3xl uppercase leading-none tracking-wide text-cheese md:text-4xl">
-        {OFFER_HEADLINE} <span className="whitespace-nowrap">· {OFFER_WINDOW}</span>
+        {OFFER_HEADLINE} <span className="whitespace-nowrap">· {window}</span>
       </p>
       <p className="mt-1.5 font-cond text-sm font-bold uppercase tracking-[0.1em] text-cream md:text-base md:tracking-[0.16em]">{where}</p>
       <ul className="mt-3 space-y-1.5 text-[0.95rem] leading-snug text-cream/90">

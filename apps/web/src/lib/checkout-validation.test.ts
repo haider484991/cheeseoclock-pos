@@ -99,8 +99,25 @@ describe('Buy 1 Get 1 deals at checkout (owner, 7 Oct 2026)', () => {
   it('are refused outside 1–7 PM, at the cart', () => {
     expect(validateCheckout({ ...DEAL, buy1Get1Open: false })).toEqual({
       field: 'cart',
-      message: 'Buy 1 Get 1 deals are sold every day from 1 PM to 7 PM. Remove the deal to order now.',
+      message: 'Buy 1 Get 1 deals are sold from 1 PM to 7 PM. Remove the deal to order now.',
     });
+  });
+
+  it('follow the owner’s rules: their hours in the words, switched off, the name made optional', () => {
+    const late = { on: true, opensMinute: 22 * 60, closesMinute: 60, asksSocial: true };
+    expect(validateCheckout({ ...DEAL, buy1Get1Open: false, buy1Get1Rules: late })).toEqual({
+      field: 'cart',
+      message: 'Buy 1 Get 1 deals are sold from 10 PM to 1 AM. Remove the deal to order now.',
+    });
+    expect(validateCheckout({ ...DEAL, buy1Get1Open: false, buy1Get1Rules: { ...late, on: false } })).toEqual({
+      field: 'cart',
+      message: 'Buy 1 Get 1 deals are not on at the moment. Remove the deal to order now.',
+    });
+    // The name optional: a deal goes without it; with it, as before.
+    const optional = { ...late, asksSocial: false };
+    expect(validateCheckout({ ...DEAL, social: '', buy1Get1Rules: optional })).toBeNull();
+    expect(validateCheckout({ ...DEAL, buy1Get1Rules: optional })).toBeNull();
+    expect(validateCheckout({ ...DEAL, social: '', buy1Get1Rules: late })?.field).toBe('social');
   });
 
   it('need the Instagram or Facebook name — after the other details — and only with a deal in the cart', () => {

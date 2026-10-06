@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { MenuCard } from './menu-view';
+import { DEFAULT_BUY_1_GET_1_RULES, type Buy1Get1Rules } from '@cheeseoclock/shared-types';
 import {
   OFFER_FINE_PRINT,
   OFFER_RULES,
-  OFFER_WINDOW,
   cardOffer,
   offerSectionOf,
+  offerWindow,
   regularPizzaPrices,
   tagUsHint,
 } from './offers';
@@ -38,9 +39,12 @@ function card(name: string, variants: Array<[size: string | null, rupees: number
 
 const PICKUP_10 = { pickupPct: 10, deliveryPct: 0, canPickup: true };
 
+const rules = (over: Partial<Buy1Get1Rules>): Buy1Get1Rules => ({ ...DEFAULT_BUY_1_GET_1_RULES, ...over });
+
 describe('the poster’s words', () => {
-  it('1–7 PM, the two Buy 1 Get 1 rules, the tag-us hint and the delivery-and-tax warning', () => {
-    expect(OFFER_WINDOW).toBe('1–7 PM');
+  it('1–7 PM (until the owner changes the hours), the two Buy 1 Get 1 rules, the tag-us hint and the delivery-and-tax warning', () => {
+    expect(offerWindow()).toBe('1–7 PM');
+    expect(offerWindow(rules({ opensMinute: 22 * 60, closesMinute: 60 }))).toBe('10 PM–1 AM');
     expect(OFFER_FINE_PRINT).toBe('Delivery charges & tax may apply');
     expect(OFFER_RULES).toHaveLength(2);
     expect(OFFER_RULES[0]).toMatch(/Large pizza.*burger.*side.*Nashville.*Medium pizza FREE/);
@@ -64,6 +68,15 @@ describe('tagUsHint: the shop’s own profiles, else its name', () => {
   it('a profile with no path, or a host it does not know, is named by its label alone or its host', () => {
     expect(tagUsHint('Test Shop', ['https://www.tiktok.com/@testshop'])).toContain('TikTok @testshop');
     expect(tagUsHint('Test Shop', ['https://www.instagram.com/'])).toContain('(Instagram)');
+  });
+
+  it('says the owner’s hours, and promises nothing while the offer is switched off', () => {
+    const links = ['https://www.instagram.com/testshop_/'];
+    expect(tagUsHint('Test Shop', links, rules({ opensMinute: 11 * 60, closesMinute: 15 * 60 }))).toBe(
+      'Post your meal, tag us (Instagram @testshop_) and show us the post: your Buy 1 Get 1 item is free (11 AM–3 PM).',
+    );
+    expect(tagUsHint('Test Shop', links, rules({ on: false }))).toBe('Post your meal and tag us (Instagram @testshop_).');
+    expect(tagUsHint('Test Shop', [], rules({ on: false }))).toBe('Post your meal and tag Test Shop on Instagram or Facebook.');
   });
 });
 
@@ -229,5 +242,35 @@ describe('cardOffer with Buy 1 Get 1 deals on the menu (7 Oct 2026)', () => {
 
   it('the deals themselves show no strip and no % off (deals are never discounted)', () => {
     expect(cardOffer('Buy 1 Get 1 Deals', card('Large + Free Medium', [[null, 2000]]), PICKUP_10, ON)).toEqual({ bogo: null, discount: null });
+  });
+});
+
+describe('cardOffer with the owner’s Buy 1 Get 1 rules (Settings on the till, 7 Oct 2026)', () => {
+  const both = card('Fajita Pizza', [
+    ['Medium', 1500],
+    ['Large', 2000],
+  ]);
+
+  it('the strips print the owner’s hours', () => {
+    const late = rules({ opensMinute: 22 * 60, closesMinute: 60 });
+    expect(cardOffer('Pizza', both, PICKUP_10, { dealsOnMenu: true, buy1Get1: late }).bogo?.title).toBe('BUY 1 GET 1 FREE · 10 PM–1 AM');
+    expect(cardOffer('Burgers', card('Classic Crispy Chicken', [[null, 700]]), PICKUP_10, { buy1Get1: late }).bogo?.title).toBe(
+      'FREE · 10 PM–1 AM',
+    );
+    // Never set: the poster's hours, as before.
+    expect(cardOffer('Pizza', both, PICKUP_10, { buy1Get1: DEFAULT_BUY_1_GET_1_RULES })).toEqual(cardOffer('Pizza', both, PICKUP_10));
+  });
+
+  it('switched off: no Buy 1 Get 1 strip on any card — the % off stays', () => {
+    const off = { dealsOnMenu: true, buy1Get1: rules({ on: false }) };
+    for (const [section, c] of [
+      ['Pizza', both],
+      ['Burgers', card('Classic Crispy Chicken', [[null, 700]])],
+      ['Fries & Sides', card('Nuggets', [[null, 670]])],
+    ] as const) {
+      const out = cardOffer(section, c, PICKUP_10, off);
+      expect(out.bogo, section).toBeNull();
+      expect(out.discount, section).toEqual(cardOffer(section, c, PICKUP_10).discount);
+    }
   });
 });

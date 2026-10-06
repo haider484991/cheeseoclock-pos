@@ -9,9 +9,11 @@ import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_BUY_1_GET_1_RULES,
   DEFAULT_DELIVERY_ZONES,
   webOrderDeliveryPercent,
   webOrderPickupPercent,
+  type Buy1Get1Rules,
   type PublishedMenu,
   type PublishedMenuItem,
   type PublishedSettings,
@@ -849,8 +851,70 @@ describe('POST /api/orders — Buy 1 Get 1 deals (owner, 7 Oct 2026)', () => {
       const r = await place({ ...DEAL, social: '@ahmed_k' });
       expect(r.status, `${hour}:${minute}`).toBe(409);
       expect(r.json.error).toBe('buy1get1_closed');
-      expect(r.json.message).toBe('Buy 1 Get 1 deals are sold every day from 1 PM to 7 PM. Remove the deal to order now.');
+      expect(r.json.message).toBe('Buy 1 Get 1 deals are sold from 1 PM to 7 PM. Remove the deal to order now.');
     }
+  });
+
+  /** The deal menu with the owner's Buy 1 Get 1 rules in its settings block, as a till of v0.7.39 publishes it. */
+  function withRules(rules: Buy1Get1Rules): PublishedMenu {
+    const m = dealMenu();
+    return {
+      ...m,
+      settings: buildSettingsBlock({
+        zones: DEFAULT_DELIVERY_ZONES.zones.map((z) => ({ ...z, aliases: [...z.aliases], hints: [...z.hints] })),
+        pickup: { offered: true, percent: 10 },
+        stamps: [{ version: 1, updatedAt: '2026-01-10T10:00:00.000Z' }],
+        menuItems: m.categories.flatMap((c) => c.items.map((i) => ({ id: i.posItemId, name: i.name, basePriceCents: i.basePriceCents }))),
+        deviceId: 'till-1',
+        buy1Get1: rules,
+      }),
+    };
+  }
+
+  it('follows the owner’s hours from the settings block, past midnight too', async () => {
+    await publish(withRules({ ...DEFAULT_BUY_1_GET_1_RULES, opensMinute: 22 * 60, closesMinute: 60 }));
+    at(15, 0);
+    const r = await place({ ...DEAL, social: '@ahmed_k' });
+    expect(r.status).toBe(409);
+    expect(r.json).toMatchObject({
+      error: 'buy1get1_closed',
+      message: 'Buy 1 Get 1 deals are sold from 10 PM to 1 AM. Remove the deal to order now.',
+    });
+    at(23, 0);
+    expect((await place({ ...DEAL, social: '@ahmed_k' })).status).toBe(200);
+    at(0, 30);
+    expect((await place({ ...DEAL, social: '@ahmed_k' })).status).toBe(200);
+  });
+
+  it('switched off: a deal is refused at any hour; the rest of the menu as before', async () => {
+    await publish(withRules({ ...DEFAULT_BUY_1_GET_1_RULES, on: false }));
+    at(15, 0);
+    const r = await place({ ...DEAL, social: '@ahmed_k' });
+    expect(r.status).toBe(409);
+    expect(r.json).toMatchObject({
+      error: 'buy1get1_closed',
+      message: 'Buy 1 Get 1 deals are not on at the moment. Remove the deal to order now.',
+    });
+    expect((await place({ zoneId: 'dha-6' })).status).toBe(200);
+  });
+
+  it('the name made optional: a deal goes without it, and the notes tell the cashier to ask for the post', async () => {
+    await publish(withRules({ ...DEFAULT_BUY_1_GET_1_RULES, asksSocial: false }));
+    at(15, 0);
+    const r = await place({ ...DEAL, notes: 'Ring twice' });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect((await stored(r.json.data!.orderId)).notes).toBe('Buy 1 Get 1: ask to see the post. Ring twice');
+    const named = await place({ ...DEAL, social: '@ahmed_k' });
+    expect((await stored(named.json.data!.orderId)).notes).toBe('Buy 1 Get 1: check the post by @ahmed_k');
+  });
+
+  it('GET /api/menu leaves the deals out while they are switched off, and shows them while on', async () => {
+    const names = async () =>
+      ((await (await apiMenu.GET()).json()) as { data: PublishedMenu }).data.categories.map((c) => c.name);
+    await publish(withRules({ ...DEFAULT_BUY_1_GET_1_RULES, on: false }));
+    expect(await names()).not.toContain('Buy 1 Get 1 Deals');
+    await publish(withRules(DEFAULT_BUY_1_GET_1_RULES));
+    expect(await names()).toContain('Buy 1 Get 1 Deals');
   });
 
   it('refuses a deal without the customer’s name (a stray "@" is no name)', async () => {

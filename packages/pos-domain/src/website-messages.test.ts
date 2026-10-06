@@ -203,8 +203,8 @@ describe('the settings block carries the messages (v0.7.30)', () => {
     deviceId: 'till-a',
   };
 
-  it('online.options is one of the carried keys (a Save of the messages alone changes the stamp)', () => {
-    expect(PUBLISHED_SETTING_KEYS).toEqual(['delivery.zones', 'discounts.websitePickup', 'online.options']);
+  it('online.options is one of the carried keys (a Save of the messages alone changes the stamp); the Buy 1 Get 1 deals too since v0.7.39', () => {
+    expect(PUBLISHED_SETTING_KEYS).toEqual(['delivery.zones', 'discounts.websitePickup', 'online.options', 'deals.buy1Get1']);
   });
 
   it('a till of this version sends all three, at their defaults too (sent at the default = cleared on the website)', () => {
@@ -237,5 +237,14 @@ describe('the settings block carries the messages (v0.7.30)', () => {
     const block = buildSettingsBlock(base);
     expect(Object.keys(block).sort()).toEqual(['deviceId', 'pickup', 'settingsAt', 'settingsRev', 'settingsTie', 'v', 'zones']);
     expect(block.v).toBe(1);
+  });
+
+  it('carries the Buy 1 Get 1 deals’ rules when given (v0.7.39), as saved — and nothing else changes', () => {
+    const rules = { on: false, opensMinute: 22 * 60, closesMinute: 60, asksSocial: false };
+    const block = buildSettingsBlock({ ...base, buy1Get1: rules });
+    expect(block.buy1Get1).toEqual(rules);
+    expect(block.buy1Get1).not.toBe(rules);
+    const { buy1Get1: _deals, ...rest } = block;
+    expect(rest).toEqual(buildSettingsBlock(base));
   });
 });

@@ -19,8 +19,8 @@ import { parseStoredSettings } from '@/lib/site-facts';
 import { getStoreStatus } from '@/lib/store-status';
 import { ensureWebOrderColumns } from '@/lib/web-order-columns';
 import {
-  BUY_1_GET_1_CLOSED_MESSAGE,
   BUY_1_GET_1_SOCIAL_MESSAGE,
+  buy1Get1ClosedMessage,
   buy1Get1OpenAt,
   closedNoticeInForce,
   deliveryMinimumShortfallCents,
@@ -372,21 +372,23 @@ export async function POST(req: Request): Promise<Response> {
       });
     }
 
-    // Buy 1 Get 1 deals (shared-types buy-1-get-1; owner 7 Oct 2026): sold every day 1–7 PM by this server's
-    // clock (Karachi), and the customer's Instagram / Facebook name is required — it leads the order's notes so the
-    // cashier knows whose post to check. A replayed order never gets here (answered above), so a retry after 7 PM of
-    // an order placed at 6:59 still gets its order back.
+    // Buy 1 Get 1 deals (shared-types buy-1-get-1; owner 7 Oct 2026): sold only while the owner's rules say so —
+    // the block stored with this menu (Settings → Money & discounts on the till; the poster's 1–7 PM with none) — by
+    // this server's clock (Karachi). While the rules ask for it, the customer's Instagram / Facebook name is required:
+    // it leads the order's notes so the cashier knows whose post to check. A replayed order never gets here (answered
+    // above), so a retry after closing of an order placed at 6:59 still gets its order back.
+    const dealRules = priceFacts.buy1Get1;
     const buy1Get1Ids = new Set(
       menu.categories.filter((c) => isBuy1Get1Category(c.name)).flatMap((c) => c.items.map((i) => i.posItemId)),
     );
     const buy1Get1 = input.items.some((l) => buy1Get1Ids.has(l.posItemId));
-    if (buy1Get1 && !buy1Get1OpenAt(Date.now())) {
+    if (buy1Get1 && !buy1Get1OpenAt(Date.now(), dealRules)) {
       return Response.json(
-        { ok: false, error: 'buy1get1_closed', message: `${BUY_1_GET_1_CLOSED_MESSAGE} Remove the deal to order now.` },
+        { ok: false, error: 'buy1get1_closed', message: `${buy1Get1ClosedMessage(dealRules)} Remove the deal to order now.` },
         { status: 409 },
       );
     }
-    if (buy1Get1 && cleanSocial(input.social) === null) {
+    if (buy1Get1 && dealRules.asksSocial && cleanSocial(input.social) === null) {
       return Response.json({ ok: false, error: 'buy1get1_social', message: BUY_1_GET_1_SOCIAL_MESSAGE }, { status: 400 });
     }
 

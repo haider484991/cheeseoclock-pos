@@ -3,9 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ShopSettingKey, ShopSettingValues } from '@cheeseoclock/shared-types';
 import { ipc, IpcError, onShopSettingsChanged, onSyncStatusChanged } from '../../../ipc/client';
 import { useToast } from '../../../components/toast/ToastProvider';
-import type { CounterOrderReasons, CounterStockRules } from '@cheeseoclock/shared-types';
+import type { Buy1Get1Rules, CounterOrderReasons, CounterStockRules } from '@cheeseoclock/shared-types';
 import { deliveryAreas, type DeliveryAreas } from '@cheeseoclock/pos-domain';
 import {
+  buy1Get1RulesOf,
   deliveryZonesOf,
   discountRulesOf,
   kitchenTimingOf,
@@ -92,6 +93,14 @@ export function useDeliveryAreas(): DeliveryAreas {
  */
 export function useOrderReasons(): CounterOrderReasons {
   return orderReasonsOf(useCheckoutRules().data);
+}
+
+/**
+ * The Buy 1 Get 1 deals' rules (Settings → Money & discounts): the menu greys a deal while they are off or outside
+ * their hours — the poster's (on, 1–7 PM) until the till has answered. Re-read when a Save lands.
+ */
+export function useBuy1Get1Rules(): Buy1Get1Rules {
+  return buy1Get1RulesOf(useCheckoutRules().data);
 }
 
 /**

@@ -61,10 +61,10 @@ import { cardOffer, regularPizzaPrices, type CardOffer } from '@/lib/offers';
 import { pixel, type PixelLine } from '@/lib/meta-pixel';
 import { trackPath } from '@/lib/order-display';
 import {
-  BUY_1_GET_1_CLOSED_MESSAGE,
-  BUY_1_GET_1_WINDOW,
   NOT_ON_VALUE_DEALS,
+  buy1Get1ClosedMessage,
   buy1Get1OpenAt,
+  buy1Get1WindowWords,
   isBuy1Get1Category,
   type PublishedMenuItem,
   type WebFulfilment,
@@ -249,14 +249,20 @@ export function OrderingApp({
     }
     return m;
   }, [menu, sections]);
-  // The offers each card shows (lib/offers, display only): Buy 1 Get 1 (1–7 PM) and the % off with what each size
-  // comes to. Kept per card key so the memoised cards re-render only when the percents or the menu change.
+  // The owner's Buy 1 Get 1 rules (the settings block; the poster's 1–7 PM with none): their hours in words.
+  const dealRules = deliveryFacts.buy1Get1;
+  const dealWindow = buy1Get1WindowWords(dealRules);
+  // The offers each card shows (lib/offers, display only): Buy 1 Get 1 (in the owner's hours, none while switched
+  // off) and the % off with what each size comes to. Kept per card key so the memoised cards re-render only when the
+  // percents or the menu change.
   const offersByCard = useMemo(() => {
     const m = new Map<string, CardOffer>();
     const dealsOnMenu = sections.some((s) => isBuy1Get1Category(s.name));
-    for (const s of sections) for (const c of s.cards) m.set(c.key, cardOffer(s.name, c, { pickupPct, deliveryPct, canPickup }, { dealsOnMenu }));
+    for (const s of sections) {
+      for (const c of s.cards) m.set(c.key, cardOffer(s.name, c, { pickupPct, deliveryPct, canPickup }, { dealsOnMenu, buy1Get1: dealRules }));
+    }
     return m;
-  }, [sections, pickupPct, deliveryPct, canPickup]);
+  }, [sections, pickupPct, deliveryPct, canPickup, dealRules]);
   const offerPrices = useMemo(() => regularPizzaPrices(sections), [sections]);
   // The Buy 1 Get 1 deals' own section, once the till has published one: the banner's button jumps there, and the
   // cards' strips say the free item comes in a deal.
@@ -351,16 +357,17 @@ export function OrderingApp({
   // Value deals take no pick-up discount (v0.7.34): the words say so only while the menu marks one.
   const notOnDeals = useMemo(() => menuHasNoDiscountItems(menu), [menu]);
   const { dealInCart, onlyDeals } = cartDeals(cart);
-  // Buy 1 Get 1 deals (shared-types buy-1-get-1): sold 1–7 PM only. The clock is read after the page mounts (the page
-  // can be served from a cache made at another hour), then every 30 seconds; until then they count as on sale — the
-  // checkout and the server check the hours again.
+  // Buy 1 Get 1 deals (shared-types buy-1-get-1): sold only while the owner's rules say so (the settings block: on,
+  // 1–7 PM until changed). The clock is read after the page mounts (the page can be served from a cache made at
+  // another hour), then every 30 seconds; until then they count as on sale while switched on — the checkout and the
+  // server check the hours again.
   const [clockMs, setClockMs] = useState<number | null>(null);
   useEffect(() => {
     setClockMs(Date.now());
     const t = setInterval(() => setClockMs(Date.now()), 30_000);
     return () => clearInterval(t);
   }, []);
-  const buy1Get1Open = clockMs === null || buy1Get1OpenAt(clockMs);
+  const buy1Get1Open = clockMs === null ? dealRules.on : buy1Get1OpenAt(clockMs, dealRules);
   const buy1Get1Items = useMemo(
     () => new Set(menu.categories.filter((c) => isBuy1Get1Category(c.name)).flatMap((c) => c.items.map((i) => i.posItemId))),
     [menu],
@@ -389,7 +396,7 @@ export function OrderingApp({
       // A pick-up-only size is orderable only while online pick-up is (the whole card, or one size).
       if (!v || !sizeOrderable(v, canPickup)) return;
       if (!buy1Get1Open && buy1Get1Items.has(v.item.posItemId)) {
-        flash(BUY_1_GET_1_CLOSED_MESSAGE, 3200);
+        flash(buy1Get1ClosedMessage(dealRules), 3200);
         return;
       }
       if (v.item.modifierGroups.length > 0) {
@@ -399,7 +406,7 @@ export function OrderingApp({
         addToCart(v.item, variantLabel(card, v), []);
       }
     },
-    [canPickup, addToCart, buy1Get1Open, buy1Get1Items, flash],
+    [canPickup, addToCart, buy1Get1Open, buy1Get1Items, flash, dealRules],
   );
 
   const setQty = useCallback((key: string, qty: number) => setCart((prev) => setLineQty(prev, key, qty)), []);
@@ -497,6 +504,7 @@ export function OrderingApp({
         offerPrices={offerPrices}
         offerWhere={copyText(MENU_OFFER_WHERE, { ...deliveryFacts, shop })}
         offerDealsAnchor={buy1Get1Anchor}
+        offerWindow={dealRules.on ? dealWindow : null}
       />
 
       {lastOrder && (
@@ -516,7 +524,7 @@ export function OrderingApp({
         <div>
           {sections.map((s) => (
             <section key={s.id} id={s.anchor} className="scroll-mt-36 pt-8" aria-labelledby={`${s.anchor}-title`}>
-              <SectionTitle id={`${s.anchor}-title`} name={s.name} note={sectionNote(s.name)} />
+              <SectionTitle id={`${s.anchor}-title`} name={s.name} note={sectionNote(s.name, dealWindow)} />
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 {s.cards.map((card, i) =>
                   isDealSection(s.name) ? (
@@ -525,6 +533,7 @@ export function OrderingApp({
                       card={card}
                       n={i + 1}
                       kind={isBuy1Get1Category(s.name) ? 'buy1get1' : 'value'}
+                      dealWindow={dealWindow}
                       closed={isBuy1Get1Category(s.name) && !buy1Get1Open}
                       worthCents={dealWorth.get(card.variants[0]?.item.posItemId ?? '') ?? null}
                       qtyByItem={qtyByItem}
@@ -614,7 +623,7 @@ export function OrderingApp({
             // The card's rule again at the cart: a pick-up-only size only while online pick-up is on.
             if (!sizeOrderable(v, canPickup)) return;
             if (!buy1Get1Open && buy1Get1Items.has(v.item.posItemId)) {
-              flash(BUY_1_GET_1_CLOSED_MESSAGE, 3200);
+              flash(buy1Get1ClosedMessage(dealRules), 3200);
               return;
             }
             addToCart(v.item, variantLabel(sheet.card, v), ids, qty, notes);
@@ -647,8 +656,14 @@ function isSignature(sectionName: string): boolean {
   return /signature/i.test(sectionName);
 }
 
-function sectionNote(sectionName: string): string | null {
-  if (isBuy1Get1Category(sectionName)) return `Every day ${BUY_1_GET_1_WINDOW} · regular pizzas · post your meal, tag us & show us the post`;
+/**
+ * `dealWindow`: the Buy 1 Get 1 deals' hours in words, as the owner set them ("1–7 PM", "all day"). Never "every
+ * day": the shop's days are the owner's (the banner's where-and-when line is the claimed copy that may say it).
+ */
+function sectionNote(sectionName: string, dealWindow: string): string | null {
+  if (isBuy1Get1Category(sectionName)) {
+    return `${dealWindow === 'all day' ? 'All day' : dealWindow} · regular pizzas · post your meal, tag us & show us the post`;
+  }
   if (/signature/i.test(sectionName)) return 'Large 12" only';
   if (/deal/i.test(sectionName)) return 'Choice of pizzas only from the regular menu';
   if (/^pizza|regular/i.test(sectionName)) return 'Medium 9" · Large 12"';
@@ -667,6 +682,7 @@ function MenuHeader({
   offerPrices,
   offerWhere,
   offerDealsAnchor = null,
+  offerWindow,
 }: {
   canPickup: boolean;
   pickupPct: number;
@@ -687,6 +703,8 @@ function MenuHeader({
   offerWhere: string;
   /** The Buy 1 Get 1 deals' section anchor, once the menu has them; null = no button (the banner as before). */
   offerDealsAnchor?: string | null;
+  /** The offer's hours in words (the owner's rules); null = the owner switched it off: no banner. */
+  offerWindow: string | null;
 }) {
   return (
     <div className="bg-ink text-cream">
@@ -735,7 +753,9 @@ function MenuHeader({
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">{hoursChip}</li>
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">Cash on delivery</li>
         </ul>
-        <OfferBanner prices={offerPrices} where={offerWhere} dealsAnchor={offerDealsAnchor} />
+        {offerWindow !== null && (
+          <OfferBanner prices={offerPrices} where={offerWhere} window={offerWindow} dealsAnchor={offerDealsAnchor} />
+        )}
         <p className="mt-4 max-w-2xl text-sm leading-snug text-cream/75">{shop.website.allergyNotice}</p>
       </div>
     </div>
@@ -1084,6 +1104,7 @@ const DealCard = memo(function DealCard({
   card,
   n,
   kind = 'value',
+  dealWindow = '',
   closed = false,
   worthCents,
   qtyByItem,
@@ -1091,8 +1112,10 @@ const DealCard = memo(function DealCard({
   onPick,
 }: CardProps & {
   n: number;
-  /** A value deal, or a Buy 1 Get 1 deal (its own label; sold 1–7 PM only). */
+  /** A value deal, or a Buy 1 Get 1 deal (its own label; sold in the owner's hours only). */
   kind?: 'value' | 'buy1get1';
+  /** A Buy 1 Get 1 deal's hours in words ("1–7 PM"). */
+  dealWindow?: string;
   /** A Buy 1 Get 1 deal outside its hours: it says when, and has no add buttons. */
   closed?: boolean;
   worthCents: number | null;
@@ -1112,7 +1135,7 @@ const DealCard = memo(function DealCard({
       <div className="relative flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="font-cond text-xs font-extrabold uppercase tracking-[0.22em] text-ink/70">
-            {kind === 'buy1get1' ? `Buy 1 Get 1 · ${BUY_1_GET_1_WINDOW}` : `Value deal ${num}`}
+            {kind === 'buy1get1' ? `Buy 1 Get 1 · ${dealWindow}` : `Value deal ${num}`}
           </p>
           <h3 className="mt-1 font-display text-3xl uppercase leading-none tracking-wide">{card.name}</h3>
         </div>
@@ -1132,7 +1155,7 @@ const DealCard = memo(function DealCard({
       <div className="relative mt-auto flex flex-wrap items-center gap-3 pt-4">
         {closed ? (
           <span className="rounded-full border-2 border-ink px-4 py-2 font-cond text-sm font-extrabold uppercase tracking-wide text-ink">
-            Available {BUY_1_GET_1_WINDOW}
+            Available {dealWindow}
           </span>
         ) : (
           <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} onGold />

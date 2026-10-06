@@ -2,7 +2,8 @@
  * The settings block of the menu publish (shared-types web-bridge.ts, THE
  * SETTINGS BLOCK): the owner's delivery areas and fees, the website's
  * pick-up offer and — since v0.7.30 — the website's messages and delivery
- * minimum ('online.options', WEBSITE MESSAGES), stamped with the carried
+ * minimum ('online.options', WEBSITE MESSAGES), and since v0.7.39 the Buy 1
+ * Get 1 deals' rules ('deals.buy1Get1'), stamped with the carried
  * keys' row versions and times, and
  * checked against the very menu it travels with before it goes (the website
  * refuses a block whose active area names an item not in that menu at its
@@ -21,6 +22,7 @@ import type { AppDatabase } from '../db/connection.js';
 import {
   getBusinessSetting,
   readBusinessSettingRow,
+  readBuy1Get1Rules,
   readDeliveryZones,
   readOnlineOptions,
   readWebsitePickup,
@@ -51,7 +53,9 @@ export function carriedKeyProblem(db: AppDatabase): string | null {
           ? 'The delivery areas were'
           : key === 'discounts.websitePickup'
             ? 'The website pick-up offer was'
-            : 'The website messages were';
+            : key === 'deals.buy1Get1'
+              ? 'The Buy 1 Get 1 deals were'
+              : 'The website messages were';
       return `${what} saved by a newer version of the app — update this till (the website keeps what it has).`;
     }
   }
@@ -105,6 +109,8 @@ export function settingsBlockFor(
       announcement: online.announcement,
       minDeliveryOrderCents: online.minDeliveryOrderCents,
     },
+    // v0.7.39, always too: the deals' on/off, hours and name question (the poster's when never saved).
+    buy1Get1: readBuy1Get1Rules(db),
   });
   const problem = settingsBlockProblem(block, menu);
   return problem ? { block: null, problem, stamp } : { block, problem: null, stamp };

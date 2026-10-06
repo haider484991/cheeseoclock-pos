@@ -1,4 +1,4 @@
-import type { PublishedMenu, PublishedSettings } from '@cheeseoclock/shared-types';
+import { isBuy1Get1Category, type Buy1Get1Rules, type PublishedMenu, type PublishedSettings } from '@cheeseoclock/shared-types';
 import { menuWithoutDrinkBrand } from './menu-view';
 
 /**
@@ -23,4 +23,14 @@ export function publicMenu(menu: PublishedMenu): PublicMenu {
   const { settings, shop: _shop, ...rest } = menuWithoutDrinkBrand(menu);
   if (!settings) return rest;
   return { ...rest, settings: { v: settings.v, pickup: settings.pickup, zones: settings.zones } };
+}
+
+/**
+ * The menu without its Buy 1 Get 1 deals while the owner has them switched off (Settings → Money & discounts on the
+ * till; SiteFacts.buy1Get1 from the stored block): the /menu page and GET /api/menu never show a deal nobody can
+ * order. Switched on (or never set): the menu as it is — a deal outside its hours still shows, closed.
+ */
+export function withDealsForSale<M extends Pick<PublishedMenu, 'categories'>>(menu: M, rules: Pick<Buy1Get1Rules, 'on'>): M {
+  if (rules.on) return menu;
+  return { ...menu, categories: menu.categories.filter((c) => !isBuy1Get1Category(c.name)) };
 }

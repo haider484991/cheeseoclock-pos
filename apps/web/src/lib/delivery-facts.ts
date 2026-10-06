@@ -1,4 +1,5 @@
 import {
+  DEFAULT_BUY_1_GET_1_RULES,
   DELIVERY_ZONES,
   FEE_SUMMARY,
   NOT_ON_VALUE_DEALS,
@@ -16,6 +17,7 @@ import {
   opensBy,
   paymentsWords,
   timeWords,
+  type Buy1Get1Rules,
   type PublishedPickup,
   type PublishedSettings,
   type PublishedZone,
@@ -65,6 +67,13 @@ export interface SiteFacts {
    * refused; the order route checks it, the checkout says how much to add.
    */
   minDeliveryOrderCents: number;
+  /**
+   * The Buy 1 Get 1 deals' rules (v0.7.39, Settings → Money & discounts on the till; shared-types buy-1-get-1):
+   * on or off, their hours, whether an order with one needs the customer's Instagram or Facebook name. No block,
+   * or a block without them (an older till's, nothing kept): the poster's — on, 1–7 PM, the name required. They
+   * touch only a menu's "Buy 1 Get 1" deals: a menu without them reads exactly as before.
+   */
+  buy1Get1: Buy1Get1Rules;
   // Never the block's stamps or device id: the /menu page hands these facts to the browser.
   // Never the closed notice either: it has a last day, so it is worked out per request on the
   // server from the block (shared-types closedNoticeInForce: the order route, the /menu page) — an
@@ -94,6 +103,7 @@ export const DEFAULT_FACTS: SiteFacts = Object.freeze({
   pickup: null,
   announcement: null,
   minDeliveryOrderCents: 0,
+  buy1Get1: DEFAULT_BUY_1_GET_1_RULES,
 });
 
 /**
@@ -163,6 +173,8 @@ export function factsFromBlock(block: PublishedSettings | null | undefined): Sit
     // A block without them (a v0.7.29 till's, and nothing kept from an earlier one): today's site.
     announcement: announcementInForce(block.announcement),
     minDeliveryOrderCents: block.minDeliveryOrderCents ?? 0,
+    // A block without them (before v0.7.39, nothing kept): the poster's rules.
+    buy1Get1: block.buy1Get1 ? { ...block.buy1Get1 } : DEFAULT_BUY_1_GET_1_RULES,
   };
 }
 

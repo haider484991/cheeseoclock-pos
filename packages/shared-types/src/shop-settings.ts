@@ -35,6 +35,7 @@
  * drop what it does not understand.
  */
 
+import { DEFAULT_BUY_1_GET_1_RULES, type Buy1Get1Rules } from './buy-1-get-1.js';
 import { WASTE_REASONS, WASTE_REASON_DEFAULT_LABEL, type WasteReasonId } from './inventory.js';
 import { DELIVERY_ZONES, type DeliveryZoneSetting } from './delivery-areas.js';
 import { PICKUP_DISCOUNT_PERCENT } from './web-bridge.js';
@@ -80,6 +81,9 @@ export const SHOP_SETTING_KEYS = [
   'website.home',
   // Menu files from the costing PC (v0.7.32, menu-deploy.ts): put in by themselves, or wait for the owner's OK.
   'menu.autoUpdate',
+  // The Buy 1 Get 1 deals' rules (v0.7.39, buy-1-get-1.ts): on or off, their hours, the website's name question.
+  // Carried to the website in the settings block (web-bridge.ts PUBLISHED_SETTING_KEYS).
+  'deals.buy1Get1',
 ] as const;
 export type ShopSettingKey = (typeof SHOP_SETTING_KEYS)[number];
 
@@ -733,6 +737,17 @@ export interface OnlineOptions {
 /** The most off a website pick-up can be (a whole %, 0–50). */
 export const WEBSITE_PICKUP_MAX_PERCENT = 50;
 
+/**
+ * The Buy 1 Get 1 deals ('deals.buy1Get1', Settings → Money & discounts; v0.7.39, owner 7 Oct 2026: "all these
+ * settings should be in the settings"): sold at all, their hours on the Karachi clock (every day; an end before the
+ * start runs past midnight), and whether a website order with one must carry the customer's Instagram or Facebook
+ * name. The deals themselves are menu items (a category named "Buy 1 Get 1 …"); the till refuses one outside these
+ * rules at the counter, and the website gets them in the settings block. shared-types buy-1-get-1.ts.
+ */
+export interface Buy1Get1Deals extends Buy1Get1Rules {
+  v: number;
+}
+
 export interface ShopSettingValues {
   'foodpanda.deal': FoodpandaDeal;
   'foodpanda.fees': FoodpandaFees;
@@ -754,6 +769,7 @@ export interface ShopSettingValues {
   'shop.website': ShopWebsite;
   'website.home': WebsiteHome;
   'menu.autoUpdate': MenuAutoUpdate;
+  'deals.buy1Get1': Buy1Get1Deals;
 }
 export type ShopSettingValue<K extends ShopSettingKey> = ShopSettingValues[K];
 
@@ -783,6 +799,7 @@ export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Obj
   'shop.website': 1,
   'website.home': 1,
   'menu.autoUpdate': 1,
+  'deals.buy1Get1': 1,
 });
 
 /** foodpanda's commission until the owner confirms his own (costing spec 4.7): shown as "suggested". */
@@ -1015,6 +1032,17 @@ export const DEFAULT_ONLINE_OPTIONS: Readonly<OnlineOptions> = Object.freeze({
   minDeliveryOrderCents: 0,
 }) as Readonly<OnlineOptions>;
 
+/**
+ * The poster's rules (5 Oct 2026): on, every day 1 PM up to 7 PM, the website asking for the customer's Instagram
+ * or Facebook name. NOT an exception to "installing changes nothing": they only touch items of a category named
+ * "Buy 1 Get 1 …", and no menu had one before v0.7.39 — a till whose menu never gets one works exactly as before.
+ * Pinned by pos-domain shop-settings.test.ts.
+ */
+export const DEFAULT_BUY_1_GET_1_DEALS: Readonly<Buy1Get1Deals> = Object.freeze({
+  v: 1,
+  ...DEFAULT_BUY_1_GET_1_RULES,
+});
+
 export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<ShopSettingValues[K]> } = Object.freeze({
   'foodpanda.deal': DEFAULT_FOODPANDA_DEAL,
   'foodpanda.fees': DEFAULT_FOODPANDA_FEES,
@@ -1037,6 +1065,7 @@ export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<S
   'shop.website': DEFAULT_SHOP_WEBSITE,
   'website.home': DEFAULT_WEBSITE_HOME,
   'menu.autoUpdate': DEFAULT_MENU_AUTO_UPDATE,
+  'deals.buy1Get1': DEFAULT_BUY_1_GET_1_DEALS,
 });
 
 /** The longest foodpanda order number kept (payments.reference_no). */
@@ -1331,6 +1360,12 @@ export interface CheckoutRules {
    * test, or before the till answers): the released 21 areas.
    */
   delivery?: { zones: DeliveryZoneSetting[] };
+  /**
+   * The Buy 1 Get 1 deals' rules ('deals.buy1Get1'): the menu greys a deal while they are off or outside their
+   * hours. The main process decides again when one is added (ipc/buy-1-get-1-hours). Absent (a test, or before the
+   * till answers): the poster's (DEFAULT_BUY_1_GET_1_RULES).
+   */
+  buy1Get1?: Buy1Get1Rules;
   foodpanda: {
     /** The deal a foodpanda order started now gets; null when there is none today. */
     deal: {

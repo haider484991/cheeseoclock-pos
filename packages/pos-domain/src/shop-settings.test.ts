@@ -152,6 +152,8 @@ describe('the released defaults are pinned', () => {
       'website.home',
       // Menu files from the costing PC (v0.7.32): put in by themselves, or wait for the owner's OK.
       'menu.autoUpdate',
+      // The Buy 1 Get 1 deals (v0.7.39): their default is pinned in buy-1-get-1.test.ts.
+      'deals.buy1Get1',
     ]);
     for (const key of SHOP_SETTING_KEYS) {
       const d = SHOP_SETTING_DEFAULTS[key];

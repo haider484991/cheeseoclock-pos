@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { MenuItem, Category } from '@cheeseoclock/shared-types';
-import { BUY_1_GET_1_CLOSED_MESSAGE, BUY_1_GET_1_WINDOW, buy1Get1OpenAt, isBuy1Get1Category } from '@cheeseoclock/shared-types';
+import { buy1Get1ClosedMessage, buy1Get1OpenAt, buy1Get1WindowWords, isBuy1Get1Category } from '@cheeseoclock/shared-types';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { cn } from '@cheeseoclock/ui';
+import { useBuy1Get1Rules } from '../settings/shop-rules/useShopSetting';
 import { menuChoices, pizzaSize, type MenuChoice } from './pizzaChoices';
 
-/** The clock, read again every 30 seconds: Buy 1 Get 1 tiles open at 1 PM and close at 7 PM by themselves. */
+/** The clock, read again every 30 seconds: Buy 1 Get 1 tiles open and close with their hours by themselves. */
 function useHalfMinuteNow(): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -27,12 +28,16 @@ interface Props {
  * same height so the eye can scan rows. The category's colour is a thin bar,
  * not a fill — a menu of eighty items must not be eighty coloured blocks. A
  * photo, when the shop has one, sits small at the side; it never decides the
- * tile's size. A Buy 1 Get 1 deal outside its hours (1–7 PM) is greyed and
- * says so; the till refuses it there too (ipc/buy-1-get-1-hours.ts).
+ * tile's size. A Buy 1 Get 1 deal while the owner has them off, or outside
+ * their hours (Settings → Money & discounts; 1–7 PM until changed), is greyed
+ * and says so; the till refuses it there too (ipc/buy-1-get-1-hours.ts).
  */
 export function ItemGrid({ items, categories, onAdd, onChooseSize }: Props) {
   const now = useHalfMinuteNow();
-  const dealsOpen = buy1Get1OpenAt(now);
+  const dealRules = useBuy1Get1Rules();
+  const dealsOpen = buy1Get1OpenAt(now, dealRules);
+  // "1–7 PM only" on a closed tile; "Off" while the owner has them switched off.
+  const closedWords = dealRules.on ? `${buy1Get1WindowWords(dealRules)} only` : 'Off';
   const nameOf = new Map(categories.map((c) => [c.id, c.name] as const));
   const choices = menuChoices(items, categories);
   if (choices.length === 0) {
@@ -56,14 +61,14 @@ export function ItemGrid({ items, categories, onAdd, onChooseSize }: Props) {
           key={choice.id}
           type="button"
           disabled={closed}
-          title={closed ? BUY_1_GET_1_CLOSED_MESSAGE : undefined}
+          title={closed ? buy1Get1ClosedMessage(dealRules) : undefined}
           onClick={() => choice.sizedPizza ? onChooseSize(choice) : onAdd(item)}
           // A tap adds the item without taking the keyboard away from the
           // search box, so the cashier can keep typing the next name.
           onMouseDown={(e) => e.preventDefault()}
           aria-label={
             closed
-              ? `${choice.name}: ${BUY_1_GET_1_WINDOW} only`
+              ? `${choice.name}: ${closedWords}`
               : choice.sizedPizza ? `Choose size for ${choice.name}` : `Add ${item.name}, ${formatCents(price)}`
           }
           aria-haspopup={choice.sizedPizza ? 'dialog' : undefined}
@@ -75,7 +80,7 @@ export function ItemGrid({ items, categories, onAdd, onChooseSize }: Props) {
           )}
           <span className="menu-tile-name">{choice.name}</span>
           {choice.sizedPizza && <span className="menu-tile-sizes">{choice.variants.map(pizzaSize).join(' / ')}</span>}
-          {closed && <span className="menu-tile-hours">{BUY_1_GET_1_WINDOW} only</span>}
+          {closed && <span className="menu-tile-hours">{closedWords}</span>}
           <span className="menu-tile-price">{choice.variants.length > 1 ? 'From ' : ''}{formatCents(price, { showSymbol: false })}</span>
         </button>
         );

@@ -356,8 +356,7 @@ describe('the shop’s details are never typed by hand in the website’s source
     ['components/ordering/CheckoutSheet.tsx', "'I’ll be there at 9 pm'"],
     // "Lunch": the office FAQ says "lunch and dinner" only while the shop opens by then.
     ['lib/areas.ts', "{ opensBy: '13:00' }"],
-    // The Buy 1 Get 1 offer's own hours (the poster's, owner 5 Oct 2026), not the shop's opening hours.
-    ['lib/offers.ts', "'1–7 PM'"],
+    // (The Buy 1 Get 1 offer's hours were typed here until v0.7.39; they are the owner's setting now — SiteFacts.buy1Get1.)
   ];
   // The logo's own words (the image says them) and the share images' static alt text.
   const NAME_ALLOWED: Array<[string, string]> = [

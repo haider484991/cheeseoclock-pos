@@ -222,7 +222,10 @@ describe('the cart’s totals: a value deal takes no share of the pick-up % (v0.
     expect(src).toContain('priced.push({ lineTotalCents: deliveryFee, taxRateBps: feeItem?.taxRateBps ?? 0, noDiscount: true });');
     expect(src).toContain('const notOnDeals = useMemo(() => menuHasNoDiscountItems(menu), [menu]);');
     expect(src).toContain('const { dealInCart, onlyDeals } = cartDeals(cart);');
-    expect(src).toMatch(/minDeliveryOrderCents: deliveryFacts\.minDeliveryOrderCents,\n\s+notOnDeals,\n\s+dealInCart,\n\s+onlyDeals,\n\s+\};/);
+    // (v0.7.39: the Buy 1 Get 1 flags follow them.)
+    expect(src).toMatch(
+      /minDeliveryOrderCents: deliveryFacts\.minDeliveryOrderCents,\n\s+notOnDeals,\n\s+dealInCart,\n\s+onlyDeals,\n\s+buy1Get1InCart,\n\s+buy1Get1Open,\n\s+\};/,
+    );
     expect(src).toMatch(/<MenuHeader\n\s+canPickup=\{canPickup\}\n\s+pickupPct=\{pickupPct\}\n\s+deliveryPct=\{deliveryPct\}\n\s+notOnDeals=\{notOnDeals\}/);
   });
 });

@@ -70,7 +70,7 @@ export function CheckoutSheet(
   const [notes, setNotes] = useState('');
   // Since 5 Oct 2026 (lib/checkout-extras): where a delivery customer pinned themselves, and their Instagram / Facebook
   // handle for the Tag-us offer. Both ride in the order's notes and neither is remembered on the phone; the handle is
-  // required with a Buy 1 Get 1 deal in the cart (7 Oct 2026), optional otherwise.
+  // required with a Buy 1 Get 1 deal in the cart while the owner's rules ask for it (7 Oct 2026), optional otherwise.
   const [pin, setPin] = useState<LocationPin | null>(null);
   const [social, setSocial] = useState('');
   const [remember, setRemember] = useState(true);
@@ -137,6 +137,7 @@ export function CheckoutSheet(
       foodSubtotalCents: props.subtotal,
       buy1Get1InCart: props.buy1Get1InCart === true,
       buy1Get1Open: props.buy1Get1Open !== false,
+      buy1Get1Rules: props.deliveryFacts.buy1Get1,
       social,
     });
     if (invalid) return show(invalid);
@@ -379,11 +380,15 @@ export function CheckoutSheet(
                 placeholder={pickup ? 'I’ll be there at 9 pm' : 'Near the park, ring the bell twice'}
                 maxLength={400}
               />
-              {/* Required with a Buy 1 Get 1 deal in the cart (owner, 7 Oct 2026): it goes first in the order's notes,
-                  so the cashier knows whose post to check. Optional otherwise, as before. */}
+              {/* Required with a Buy 1 Get 1 deal in the cart while the owner's rules ask for it (7 Oct 2026): it goes
+                  first in the order's notes, so the cashier knows whose post to check. Optional otherwise, as before. */}
               <TextField
                 inputRef={setFieldRef('social')}
-                label={props.buy1Get1InCart ? 'Your Instagram or Facebook name (for Buy 1 Get 1)' : 'Your Instagram or Facebook (optional)'}
+                label={
+                  props.buy1Get1InCart && props.deliveryFacts.buy1Get1.asksSocial
+                    ? 'Your Instagram or Facebook name (for Buy 1 Get 1)'
+                    : 'Your Instagram or Facebook (optional)'
+                }
                 value={social}
                 onChange={(v) => {
                   edited('social');
@@ -393,7 +398,7 @@ export function CheckoutSheet(
                 autoComplete="off"
                 maxLength={SOCIAL_MAX}
                 error={fieldError('social')}
-                hint={tagUsHint(shop.profile.name, shop.profile.socialLinks)}
+                hint={tagUsHint(shop.profile.name, shop.profile.socialLinks, props.deliveryFacts.buy1Get1)}
               />
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                 <label className="flex cursor-pointer items-center gap-2 py-1 text-sm font-semibold text-ink">

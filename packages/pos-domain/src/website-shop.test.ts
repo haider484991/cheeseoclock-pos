@@ -134,9 +134,9 @@ describe('the released defaults are the website today', () => {
     for (const d of [DEFAULT_SHOP_PROFILE, DEFAULT_SHOP_HOURS, DEFAULT_SHOP_WEBSITE, DEFAULT_WEBSITE_HOME]) expect(frozen(d)).toBe(true);
   });
 
-  it('the shop block is its own: the settings block’s keys and stamp are exactly as released', () => {
+  it('the shop block is its own: the settings block’s keys and stamp are exactly as released (the Buy 1 Get 1 deals joined it in v0.7.39)', () => {
     expect([...SHOP_PUBLISHED_KEYS]).toEqual(['shop.profile', 'shop.hours', 'shop.website', 'website.home']);
-    expect([...PUBLISHED_SETTING_KEYS]).toEqual(['delivery.zones', 'discounts.websitePickup', 'online.options']);
+    expect([...PUBLISHED_SETTING_KEYS]).toEqual(['delivery.zones', 'discounts.websitePickup', 'online.options', 'deals.buy1Get1']);
   });
 });
 
