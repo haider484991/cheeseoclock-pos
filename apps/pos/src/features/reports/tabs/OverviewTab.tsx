@@ -133,7 +133,8 @@ export function Summary({ report }: { report: Pick<ReportOverviewTab, 'kpis' | '
           change={k ? changeOf(k.taxCents, p?.taxCents) : undefined}
           goodWhen="neutral"
           was={p ? formatCents(p.taxCents) : undefined}
-          sub="Included in sales"
+          // The card-rate part (0052): what the SRB return wants apart from the rest.
+          sub={k?.cardRateTaxCents ? `Included in sales · ${formatCents(k.cardRateTaxCents)} of it at the card rate` : 'Included in sales'}
         />
       </div>
 

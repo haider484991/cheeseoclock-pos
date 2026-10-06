@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { STARTING_TAX_CATEGORIES, STARTING_TAX_RATE_BPS, taxRatePercentText } from '@cheeseoclock/shared-types';
-import { startingTaxRows, taxRateFieldStart } from './taxForm';
+import { cardRateFieldStart, rateBpsOf, startingTaxRows, taxRateFieldStart, taxRatesText } from './taxForm';
 
 const FEATURES = join(dirname(fileURLToPath(import.meta.url)), '..');
 const source = (path: string) => readFileSync(join(FEATURES, path), 'utf8');
@@ -44,6 +44,29 @@ describe('one starting tax rate', () => {
   it('the words say the rate they use', () => {
     expect(taxRatePercentText(1_500)).toBe('15%');
     expect(taxRatePercentText(1_250)).toBe('12.5%');
+  });
+
+  it('the card box (0052) starts empty — no card rate — unless the category has one; a box reads as basis points, empty as none', () => {
+    expect(cardRateFieldStart(null)).toBe('');
+    expect(cardRateFieldStart({ rateBps: 1_500 })).toBe('');
+    expect(cardRateFieldStart({ rateBps: 1_500, digitalRateBps: null })).toBe('');
+    expect(cardRateFieldStart({ rateBps: 1_500, digitalRateBps: 800 })).toBe('8');
+    expect(cardRateFieldStart({ rateBps: 1_500, digitalRateBps: 1_250 })).toBe('12.5');
+    expect(rateBpsOf('8')).toBe(800);
+    expect(rateBpsOf(' 12.5 ')).toBe(1_250);
+    expect(rateBpsOf('0')).toBe(0);
+    expect(rateBpsOf('')).toBeNull();
+    expect(rateBpsOf('abc')).toBeNull();
+    expect(rateBpsOf('120')).toBe(10_000);
+    expect(rateBpsOf('-3')).toBe(0);
+  });
+
+  it('the Tax list says both rates when they differ', () => {
+    expect(taxRatesText({ rateBps: 1_500 })).toBe('15%');
+    expect(taxRatesText({ rateBps: 1_500, digitalRateBps: null })).toBe('15%');
+    expect(taxRatesText({ rateBps: 1_500, digitalRateBps: 1_500 })).toBe('15%');
+    expect(taxRatesText({ rateBps: 1_500, digitalRateBps: 800 })).toBe('15% · card 8%');
+    expect(taxRatesText({ rateBps: 1_250, digitalRateBps: 0 })).toBe('12.5% · card 0%');
   });
 
   it('setup and the Tax tab both use it; neither types a rate of its own any more', () => {

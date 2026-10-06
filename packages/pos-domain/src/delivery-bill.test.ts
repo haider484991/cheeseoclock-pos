@@ -294,3 +294,46 @@ describe('deliveryBillOf: 2,000 made-up orders worked as the till works them', (
     expect(seen.oneLine).toBeGreaterThan(50);
   });
 });
+
+describe('deliveryBillOf with the card rate (0052)', () => {
+  const PLATE = { lineTotalCents: 100_000, menuItemName: 'Test Plate', taxRateBps: 1500, digitalRateBps: 800 };
+  const CHARGE_CARD = { ...CHARGE_15, digitalRateBps: 800 };
+
+  it('paid entirely by card: the whole tax on one line at the card rate, no line of its own for the charge', () => {
+    // Rs 1,000 plate + Rs 200 charge, both 8% by card: tax 96, CUSTOMER PAYS 1,296.
+    const bill = deliveryBillOf({
+      order: { mode: 'delivery', subtotalCents: 120_000, discountCents: 0, taxCents: 9_600, totalCents: 129_600, digitalNetCents: 120_000 },
+      items: [PLATE, CHARGE_CARD],
+      discounts: [],
+    });
+    expect(bill).toEqual<DeliveryBill>({
+      foodCents: 100_000,
+      deliveryChargeCents: 20_000,
+      foodTaxCents: 9_600,
+      foodTaxBps: 800,
+      deliveryTaxCents: null,
+      // The charge's own rate as stored; not printed (no line of its own).
+      deliveryTaxBps: 1500,
+      foodTotalCents: 109_600,
+      customerPaysCents: 129_600,
+    });
+  });
+
+  it('part by card, part in cash: one tax line with no one rate', () => {
+    const bill = deliveryBillOf({
+      order: { mode: 'delivery', subtotalCents: 120_000, discountCents: 0, taxCents: 13_800, totalCents: 133_800, digitalNetCents: 60_000 },
+      items: [PLATE, CHARGE_CARD],
+      discounts: [],
+    });
+    expect(bill).toMatchObject({ foodTaxCents: 13_800, foodTaxBps: null, deliveryTaxCents: null, customerPaysCents: 133_800 });
+  });
+
+  it('a cash sale of the same order reads exactly as before 0052: the charge taxed on its own line at 15%', () => {
+    const bill = deliveryBillOf({
+      order: { mode: 'delivery', subtotalCents: 120_000, discountCents: 0, taxCents: 18_000, totalCents: 138_000, digitalNetCents: 0 },
+      items: [PLATE, CHARGE_CARD],
+      discounts: [],
+    });
+    expect(bill).toMatchObject({ foodTaxCents: 15_000, foodTaxBps: 1500, deliveryTaxCents: 3_000, deliveryTaxBps: 1500, customerPaysCents: 138_000 });
+  });
+});

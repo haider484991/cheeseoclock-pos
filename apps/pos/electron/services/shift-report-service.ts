@@ -143,6 +143,10 @@ interface LineRow {
   quantity: number;
   lineTotal: number;
   rate: number;
+  /** The line's card rate (0052); null = none. */
+  cardRate: number | null;
+  /** The order's part before tax paid by card / wallet / bank (0052); 0 = none. */
+  cardNet: number | null;
 }
 
 interface PaymentRow {
@@ -226,8 +230,10 @@ function readLines(
     .prepare(
       `SELECT oi.order_id AS orderId, oi.menu_item_id AS menuItemId, oi.menu_item_name AS soldName,
               mi.name AS menuName, mi.category_id AS categoryId, c.name AS categoryName,
-              oi.quantity AS quantity, oi.line_total_cents AS lineTotal, oi.tax_rate_bps_snapshot AS rate
+              oi.quantity AS quantity, oi.line_total_cents AS lineTotal, oi.tax_rate_bps_snapshot AS rate,
+              oi.digital_rate_bps_snapshot AS cardRate, o.digital_net_cents AS cardNet
          FROM order_items oi
+         JOIN orders o ON o.id = oi.order_id
          LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
          LEFT JOIN categories c ON c.id = mi.category_id
         WHERE oi.order_id IN (SELECT value FROM json_each(@ids)) AND oi.deleted_at IS NULL
@@ -261,7 +267,10 @@ function readLines(
         categoryName !== null && r.categoryId !== null ? (rank.get(r.categoryId) ?? null) : null,
       quantity: Number(r.quantity),
       lineTotalCents: Number(r.lineTotal),
-      taxRateBps: Number(r.rate),
+      // A line of an order paid (in part) by card / wallet / bank at a card
+      // rate (0052) reads that rate: a shift with such sales beside cash ones
+      // has mixed rates, and its report says "Tax" with no one rate.
+      taxRateBps: Number(r.cardNet ?? 0) > 0 && r.cardRate !== null ? Number(r.cardRate) : Number(r.rate),
     });
   }
   return { lines, chargeCents };

@@ -153,7 +153,7 @@ live('migrations at boot (migrator.ts)', () => {
     const names = ran(db);
     expect(names).toEqual(migrationFiles());
     expect(names.map((n) => Number(n.slice(0, 4)))).toEqual(names.map((_, i) => i + 1));
-    expect(names.slice(-13)).toEqual([
+    expect(names.slice(-14)).toEqual([
       '0039_shift_close_notes.sql',
       '0040_foodpanda_deal_and_terms.sql',
       '0041_channel_terms_uplift_and_fee.sql',
@@ -167,11 +167,12 @@ live('migrations at boot (migrator.ts)', () => {
       '0049_outside_rider.sql',
       '0050_shift_counted_notes.sql',
       '0051_shift_close_report.sql',
+      '0052_card_rate.sql',
     ]);
     expect(h.snapshots).toEqual([]);
   });
 
-  it('a till on v0.7.22 (0001..0041) runs just 0042, 0043, 0044, 0045, 0046, 0047, 0048, 0049, 0050 then 0051, after a pre-migrate copy; its foodpanda rows come through untouched', async () => {
+  it('a till on v0.7.22 (0001..0041) runs just 0042, 0043, 0044, 0045, 0046, 0047, 0048, 0049, 0050, 0051 then 0052, after a pre-migrate copy; its foodpanda rows come through untouched', async () => {
     const { runMigrations } = await import('./migrator.js');
     h.snapshots.length = 0;
     const db = tillOnV0722();
@@ -202,6 +203,7 @@ live('migrations at boot (migrator.ts)', () => {
       '0049_outside_rider.sql',
       '0050_shift_counted_notes.sql',
       '0051_shift_close_report.sql',
+      '0052_card_rate.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
     // Their columns and the log's start are there…
@@ -217,12 +219,12 @@ live('migrations at boot (migrator.ts)', () => {
       terms: one(`SELECT * FROM order_channel_terms WHERE id = 't_fp'`),
     }).toEqual({
       ...before,
-      order: { ...before.order, deleted_by: null, delete_reason: null, delete_kind: null, delete_stock: null, came_by: null, sent_at: null, rider_keeps_cents: null },
+      order: { ...before.order, deleted_by: null, delete_reason: null, delete_kind: null, delete_stock: null, came_by: null, sent_at: null, rider_keeps_cents: null, digital_total_cents: null, digital_net_cents: 0, digital_tax_cents: 0 },
     });
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 10);
+    expect(ran(db)).toHaveLength(had.length + 11);
     expect(h.snapshots).toHaveLength(1);
 
     // The new code on the upgraded till: foodpanda's figures read the kept terms…
@@ -240,7 +242,7 @@ live('migrations at boot (migrator.ts)', () => {
     expect(getFoodpanda(db, ALL_TIME)).toBeNull();
   });
 
-  it('a till on v0.7.29 (0001..0044) runs just 0045, 0046, 0047, 0048, 0049, 0050 then 0051, after a pre-migrate copy: its menu rows are untouched, every item and category reads on the website, and the published menu is what it was', async () => {
+  it('a till on v0.7.29 (0001..0044) runs just 0045, 0046, 0047, 0048, 0049, 0050, 0051 then 0052, after a pre-migrate copy: its menu rows are untouched, every item and category reads on the website, and the published menu is what it was', async () => {
     const { runMigrations } = await import('./migrator.js');
     h.snapshots.length = 0;
     const db = openMigrated({ stopBefore: '0045' });
@@ -278,6 +280,7 @@ live('migrations at boot (migrator.ts)', () => {
       '0049_outside_rider.sql',
       '0050_shift_counted_notes.sql',
       '0051_shift_close_report.sql',
+      '0052_card_rate.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
     // Every row as it was, with the two new columns at "on the website" (and 0047's, empty: by its name).
@@ -300,11 +303,11 @@ live('migrations at boot (migrator.ts)', () => {
     ]);
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 7);
+    expect(ran(db)).toHaveLength(had.length + 8);
     expect(h.snapshots).toHaveLength(1);
   });
 
-  it('a till on v0.7.32 (0001..0045) runs just 0046, 0047, 0048, 0049, 0050 then 0051, after a pre-migrate copy: its website-order rows come through, the imported ones read confirmed and seen, a waiting attempt and a failed row do not, and the audit chain verifies', async () => {
+  it('a till on v0.7.32 (0001..0045) runs just 0046, 0047, 0048, 0049, 0050, 0051 then 0052, after a pre-migrate copy: its website-order rows come through, the imported ones read confirmed and seen, a waiting attempt and a failed row do not, and the audit chain verifies', async () => {
     const { runMigrations } = await import('./migrator.js');
     const { writeAudit } = await import('./repositories/audit-repo.js');
     const { verifyAuditChain } = await import('./audit-chain.js');
@@ -355,6 +358,7 @@ live('migrations at boot (migrator.ts)', () => {
       '0049_outside_rider.sql',
       '0050_shift_counted_notes.sql',
       '0051_shift_close_report.sql',
+      '0052_card_rate.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
     const added =['web_created_at', 'web_total_cents', 'acked_at', 'alert_seen_at', 'site_cancelled_at', 'cancel_noted_at'];
@@ -367,7 +371,7 @@ live('migrations at boot (migrator.ts)', () => {
     );
     expect(all(`SELECT web_order_id AS id, acked_at FROM web_order_imports WHERE acked_at IS NOT NULL ORDER BY web_order_id`).map((r) => r['id'])).toEqual(['w1', 'w2']);
     // Orders and the audit trail untouched (an order gains sent_at and rider_keeps_cents, empty), and the chain still verifies.
-    expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, sent_at: null, rider_keeps_cents: null })));
+    expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, sent_at: null, rider_keeps_cents: null, digital_total_cents: null, digital_net_cents: 0, digital_tax_cents: 0 })));
     expect(all(`SELECT * FROM audit_log ORDER BY rowid`)).toEqual(before.audit);
     const chainRows = all(
       `SELECT rowid, id, entity_type AS entityType, entity_id AS entityId, action, actor_user_id AS actorUserId,
@@ -382,11 +386,11 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 6);
+    expect(ran(db)).toHaveLength(had.length + 7);
     expect(h.snapshots).toHaveLength(1);
   });
 
-  it('a till on v0.7.33 (0001..0046) runs just 0047, 0048, 0049, 0050 then 0051, after a pre-migrate copy: its categories and order lines are untouched (no version, no updated_at, no sync or audit row), each category reads by its name, each line sold reads 0, and paid orders keep their stored totals', async () => {
+  it('a till on v0.7.33 (0001..0046) runs just 0047, 0048, 0049, 0050, 0051 then 0052, after a pre-migrate copy: its categories and order lines are untouched (no version, no updated_at, no sync or audit row), each category reads by its name, each line sold reads 0, and paid orders keep their stored totals', async () => {
     const { runMigrations } = await import('./migrator.js');
     const { writeAudit } = await import('./repositories/audit-repo.js');
     h.snapshots.length = 0;
@@ -444,13 +448,14 @@ live('migrations at boot (migrator.ts)', () => {
       '0049_outside_rider.sql',
       '0050_shift_counted_notes.sql',
       '0051_shift_close_report.sql',
+      '0052_card_rate.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
     // Every row as it was — the same version and updated_at — with the new column: empty on a category, 0 on a line
     // (and 0048's sent_at and 0049's rider_keeps_cents, empty on an order).
     expect(all(`SELECT * FROM categories ORDER BY id`)).toEqual(before.categories.map((r) => ({ ...r, no_discount: null })));
-    expect(all(`SELECT * FROM order_items ORDER BY id`)).toEqual(before.lines.map((r) => ({ ...r, no_discount: 0 })));
-    expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, sent_at: null, rider_keeps_cents: null })));
+    expect(all(`SELECT * FROM order_items ORDER BY id`)).toEqual(before.lines.map((r) => ({ ...r, no_discount: 0, digital_rate_bps_snapshot: null })));
+    expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, sent_at: null, rider_keeps_cents: null, digital_total_cents: null, digital_net_cents: 0, digital_tax_cents: 0 })));
     expect(all(`SELECT id, subtotal_cents, discount_cents, tax_cents, total_cents FROM orders`)).toEqual([
       { id: 'o_paid', subtotal_cents: 510_000, discount_cents: 51_000, tax_cents: 68_850, total_cents: 527_850 },
     ]);
@@ -466,11 +471,11 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 5);
+    expect(ran(db)).toHaveLength(had.length + 6);
     expect(h.snapshots).toHaveLength(1);
   });
 
-  it('a v0.7.33 database (0001..0046) with a closed shift and an order out for delivery runs 0047, 0048, 0049, 0050 then 0051 after a pre-migrate copy: the order reads as an own rider’s with no sentAt, the shift as it closed with no note count and no saved report, and the audit chain verifies', async () => {
+  it('a v0.7.33 database (0001..0046) with a closed shift and an order out for delivery runs 0047, 0048, 0049, 0050, 0051 then 0052 after a pre-migrate copy: the order reads as an own rider’s with no sentAt, the shift as it closed with no note count and no saved report, and the audit chain verifies', async () => {
     const { runMigrations } = await import('./migrator.js');
     const { writeAudit } = await import('./repositories/audit-repo.js');
     const { verifyAuditChain } = await import('./audit-chain.js');
@@ -532,6 +537,7 @@ live('migrations at boot (migrator.ts)', () => {
       '0049_outside_rider.sql',
       '0050_shift_counted_notes.sql',
       '0051_shift_close_report.sql',
+      '0052_card_rate.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
     // The copy was taken first: the database as v0.7.33 left it, before 0047 ran, with no note count or report column.
@@ -539,7 +545,7 @@ live('migrations at boot (migrator.ts)', () => {
     expect(h.copied[0]?.shiftColumns).not.toContain('counted_notes_json');
     // Every row as it was, with the new columns empty; the audit trail and the link's queue untouched.
     expect(all(`SELECT * FROM shifts ORDER BY id`)).toEqual(before.shifts.map((r) => ({ ...r, counted_notes_json: null, close_report_json: null })));
-    expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, sent_at: null, rider_keeps_cents: null })));
+    expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, sent_at: null, rider_keeps_cents: null, digital_total_cents: null, digital_net_cents: 0, digital_tax_cents: 0 })));
     expect(all(`SELECT * FROM cash_movements ORDER BY id`)).toEqual(before.movements.map((r) => ({ ...r, order_id: null })));
     expect(all(`SELECT * FROM audit_log ORDER BY rowid`)).toEqual(before.audit);
     expect(count('sync_queue')).toBe(before.sync);
@@ -592,11 +598,11 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 5);
+    expect(ran(db)).toHaveLength(had.length + 6);
     expect(h.snapshots).toHaveLength(1);
   });
 
-  it('a till with 0047 (0001..0047) runs just 0048, 0049, 0050 then 0051, after a pre-migrate copy: every order reads sent_at NULL (its clock falls back to when it was started), the same version and updated_at, and no sync or audit row is added', async () => {
+  it('a till with 0047 (0001..0047) runs just 0048, 0049, 0050, 0051 then 0052, after a pre-migrate copy: every order reads sent_at NULL (its clock falls back to when it was started), the same version and updated_at, and no sync or audit row is added', async () => {
     const { runMigrations } = await import('./migrator.js');
     const { writeAudit } = await import('./repositories/audit-repo.js');
     h.snapshots.length = 0;
@@ -623,10 +629,10 @@ live('migrations at boot (migrator.ts)', () => {
 
     await runMigrations(db);
 
-    expect(ran(db)).toEqual([...had, '0048_order_sent_at.sql', '0049_outside_rider.sql', '0050_shift_counted_notes.sql', '0051_shift_close_report.sql']);
+    expect(ran(db)).toEqual([...had, '0048_order_sent_at.sql', '0049_outside_rider.sql', '0050_shift_counted_notes.sql', '0051_shift_close_report.sql', '0052_card_rate.sql']);
     expect(h.snapshots).toHaveLength(1);
     // Every order as it was — the same version and updated_at — with sent_at empty (no backfill), and 0049's rider_keeps_cents.
-    expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, sent_at: null, rider_keeps_cents: null })));
+    expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, sent_at: null, rider_keeps_cents: null, digital_total_cents: null, digital_net_cents: 0, digital_tax_cents: 0 })));
     expect(all(`SELECT id, version, updated_at FROM orders ORDER BY id`)).toEqual([
       { id: 'o_cart', version: 1, updated_at: T0 },
       { id: 'o_kitchen', version: 3, updated_at: '2026-09-27T10:05:00.000Z' },
@@ -641,11 +647,11 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 4);
+    expect(ran(db)).toHaveLength(had.length + 5);
     expect(h.snapshots).toHaveLength(1);
   });
 
-  it('a till with 0048 (0001..0048) runs just 0049, 0050 then 0051, after a pre-migrate copy: orders and cash movements come through untouched with the new columns empty, no sync or audit row is added, and an order already out reads as one of the shop’s own riders', async () => {
+  it('a till with 0048 (0001..0048) runs just 0049, 0050, 0051 then 0052, after a pre-migrate copy: orders and cash movements come through untouched with the new columns empty, no sync or audit row is added, and an order already out reads as one of the shop’s own riders', async () => {
     const { runMigrations } = await import('./migrator.js');
     const { writeAudit } = await import('./repositories/audit-repo.js');
     const { isOutsideRiderOrder } = await import('@cheeseoclock/shared-types');
@@ -689,10 +695,10 @@ live('migrations at boot (migrator.ts)', () => {
 
     await runMigrations(db);
 
-    expect(ran(db)).toEqual([...had, '0049_outside_rider.sql', '0050_shift_counted_notes.sql', '0051_shift_close_report.sql']);
+    expect(ran(db)).toEqual([...had, '0049_outside_rider.sql', '0050_shift_counted_notes.sql', '0051_shift_close_report.sql', '0052_card_rate.sql']);
     expect(h.snapshots).toHaveLength(1);
     // Every row as it was — the same version and updated_at — with the new column empty (no backfill).
-    expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, rider_keeps_cents: null })));
+    expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, rider_keeps_cents: null, digital_total_cents: null, digital_net_cents: 0, digital_tax_cents: 0 })));
     expect(all(`SELECT * FROM cash_movements ORDER BY id`)).toEqual(before.movements.map((r) => ({ ...r, order_id: null })));
     // Nothing to send to the other till, nothing in the audit trail: the migration changed no business fact.
     expect({ sync: count('sync_queue'), audit: count('audit_log') }).toEqual({ sync: before.sync, audit: before.audit });
@@ -710,11 +716,11 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 3);
+    expect(ran(db)).toHaveLength(had.length + 4);
     expect(h.snapshots).toHaveLength(1);
   });
 
-  it('a till on v0.7.34 (0001..0049) runs just 0050 then 0051, after a pre-migrate copy: every shift reads counted_notes_json and close_report_json NULL (a closed one has no note count and no saved report, its figures as they were), no sync or audit row is added, and the shift still open closes counted by note', async () => {
+  it('a till on v0.7.34 (0001..0049) runs just 0050, 0051 then 0052, after a pre-migrate copy: every shift reads counted_notes_json and close_report_json NULL (a closed one has no note count and no saved report, its figures as they were), no sync or audit row is added, and the shift still open closes counted by note', async () => {
     const { runMigrations } = await import('./migrator.js');
     const { writeAudit } = await import('./repositories/audit-repo.js');
     h.snapshots.length = 0;
@@ -751,7 +757,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     await runMigrations(db);
 
-    expect(ran(db)).toEqual([...had, '0050_shift_counted_notes.sql', '0051_shift_close_report.sql']);
+    expect(ran(db)).toEqual([...had, '0050_shift_counted_notes.sql', '0051_shift_close_report.sql', '0052_card_rate.sql']);
     expect(h.snapshots).toHaveLength(1);
     // Every shift as it was — the same version and updated_at — with the new columns empty (no backfill), last, in that order.
     expect(all(`SELECT * FROM shifts ORDER BY id`)).toEqual(before.shifts.map((r) => ({ ...r, counted_notes_json: null, close_report_json: null })));
@@ -778,11 +784,11 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 2);
+    expect(ran(db)).toHaveLength(had.length + 3);
     expect(h.snapshots).toHaveLength(1);
   });
 
-  it('a v0.7.34 database (0001..0049) with a closed shift and its orders (a delivery an outside rider paid in cash, keeping his charge; a card takeaway) runs 0050 then 0051 after a pre-migrate copy: every row as it was, the shift reads no note count and no saved report, its figures add up as they did, and the audit chain verifies', async () => {
+  it('a v0.7.34 database (0001..0049) with a closed shift and its orders (a delivery an outside rider paid in cash, keeping his charge; a card takeaway) runs 0050, 0051 then 0052 after a pre-migrate copy: every row as it was, the shift reads no note count and no saved report, its figures add up as they did, and the audit chain verifies', async () => {
     const { runMigrations } = await import('./migrator.js');
     const { writeAudit } = await import('./repositories/audit-repo.js');
     const { verifyAuditChain } = await import('./audit-chain.js');
@@ -853,7 +859,7 @@ live('migrations at boot (migrator.ts)', () => {
     await runMigrations(db);
 
     // In order, after the pre-migrate copy — the database as v0.7.34 left it, before 0050 ran.
-    expect(ran(db)).toEqual([...had, '0050_shift_counted_notes.sql', '0051_shift_close_report.sql']);
+    expect(ran(db)).toEqual([...had, '0050_shift_counted_notes.sql', '0051_shift_close_report.sql', '0052_card_rate.sql']);
     expect(h.snapshots).toHaveLength(1);
     expect(h.copied).toEqual([{ lastRan: '0049_outside_rider.sql', shiftColumns: Object.keys(before.shifts[0] ?? {}) }]);
     // Every row as it was, the shift with the two new columns empty; the audit trail and the link's queue untouched.
@@ -864,7 +870,7 @@ live('migrations at boot (migrator.ts)', () => {
       movements: all(`SELECT * FROM cash_movements ORDER BY id`),
       audit: all(`SELECT * FROM audit_log ORDER BY rowid`),
       sync: count('sync_queue'),
-    }).toEqual({ orders: before.orders, payments: before.payments, movements: before.movements, audit: before.audit, sync: before.sync });
+    }).toEqual({ orders: before.orders.map((r) => ({ ...r, digital_total_cents: null, digital_net_cents: 0, digital_tax_cents: 0 })), payments: before.payments, movements: before.movements, audit: before.audit, sync: before.sync });
 
     // The orders read as v0.7.34 left them: the delivery an outside rider's, its clock and his charge kept.
     const { findOrder } = await import('./repositories/order-repo.js');
@@ -907,7 +913,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 2);
+    expect(ran(db)).toHaveLength(had.length + 3);
     expect(h.snapshots).toHaveLength(1);
   });
 });

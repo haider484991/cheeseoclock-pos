@@ -588,11 +588,13 @@ export interface IpcContract {
     response: ApiResult<TaxCategory[]>;
   };
   'menu:createTaxCategory': {
-    request: { name: string; rateBps: number };
+    /** `digitalRateBps`: the rate when paid by card / wallet / bank (0052); null / absent = none. */
+    request: { name: string; rateBps: number; digitalRateBps?: number | null };
     response: ApiResult<TaxCategory>;
   };
   'menu:updateTaxCategory': {
-    request: { id: string; name?: string; rateBps?: number };
+    /** `digitalRateBps`: absent = keep, null = no card rate any more. */
+    request: { id: string; name?: string; rateBps?: number; digitalRateBps?: number | null };
     response: ApiResult<TaxCategory>;
   };
   'menu:deleteTaxCategory': {

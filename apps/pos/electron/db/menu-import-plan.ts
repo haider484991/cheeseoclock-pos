@@ -228,7 +228,7 @@ export interface MenuImportOps {
   /** Tax category for new items and useImportTax updates… */
   taxCategoryId: string | null;
   /** …or, when the POS has none at the file's rate, the one to create first. */
-  createTaxCategory: { name: string; rateBps: number } | null;
+  createTaxCategory: { name: string; rateBps: number; digitalRateBps?: number | null } | null;
 }
 
 export interface MenuImportPlan {
@@ -1029,7 +1029,15 @@ export function planMenuImport(
   if (file.tax) {
     const atRate = live.taxCategories.filter((t) => t.rateBps === file.tax!.rateBps).sort(byUse);
     taxCategory = atRate.find((t) => normalizeName(t.name) === normalizeName(file.tax!.name)) ?? atRate[0] ?? null;
-    if (!taxCategory) createTaxCategory = { name: file.tax.name, rateBps: file.tax.rateBps };
+    // A category the file creates takes the file's card rate too (0052); one the
+    // till already has keeps its own rates (Menu → Tax is where those change).
+    if (!taxCategory) {
+      createTaxCategory = {
+        name: file.tax.name,
+        rateBps: file.tax.rateBps,
+        ...(typeof file.tax.digitalRateBps === 'number' ? { digitalRateBps: file.tax.digitalRateBps } : {}),
+      };
+    }
   } else {
     taxCategory = [...live.taxCategories].sort(byUse)[0] ?? null;
   }

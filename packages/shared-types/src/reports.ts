@@ -42,6 +42,8 @@ export interface ReportKpis {
   discountCents: number;
   discountedOrderCount: number;
   taxCents: number;
+  /** Of taxCents, the tax on the parts paid by card / wallet / bank at a card rate (0052); absent = none. */
+  cardRateTaxCents?: number;
   /** Σ stored total of the counted orders, as billed (menu − discount + tax). */
   billedCents: number;
   /** Money handed back on orders that still count (partial refunds). */

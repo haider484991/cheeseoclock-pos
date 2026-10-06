@@ -56,6 +56,8 @@ export function PrinterSettings() {
   const [width, setWidth] = useState<32 | 48>(48);
   const [drawerPin, setDrawerPin] = useState<DrawerSettings['pin']>(2);
   const [drawerPulse, setDrawerPulse] = useState<DrawerSettings['pulseMs']>(50);
+  // Which sales open the drawer (0052): every sale (the card slip goes in with the cash), or cash sales only.
+  const [drawerOpensOn, setDrawerOpensOn] = useState<'cash' | 'every_sale'>('every_sale');
 
   // Hydrate from the saved receipt printer only: the kitchen printer and the
   // printing rules on this tab share the query, and saving one of them must
@@ -71,6 +73,7 @@ export function PrinterSettings() {
     const d = drawerOf(savedCfg);
     setDrawerPin(d.pin);
     setDrawerPulse(d.pulseMs);
+    setDrawerOpensOn(d.opensOn);
   }, [savedCfg]);
 
   // Printers Windows knows about — only asked for while the USB option is open.
@@ -169,7 +172,7 @@ export function PrinterSettings() {
 
   /** The form as a printer config; null (with a toast unless quiet) when no USB printer is picked. */
   function buildConfig(quiet = false): PrinterConnectionConfig | null {
-    const drawer: DrawerSettings = { pin: drawerPin, pulseMs: drawerPulse };
+    const drawer: DrawerSettings = { pin: drawerPin, pulseMs: drawerPulse, opensOn: drawerOpensOn };
     if (uiTransport === 'mock') {
       return { transport: 'network', network: { host: 'mock', port: 9100 }, width, drawer };
     }
@@ -467,9 +470,33 @@ export function PrinterSettings() {
               </button>
             ))}
           </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {(
+              [
+                { id: 'every_sale', label: 'Opens on every sale', note: '(card slips go in too)' },
+                { id: 'cash', label: 'Cash sales only', note: '' },
+              ] as const
+            ).map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                aria-pressed={drawerOpensOn === o.id}
+                onClick={() => setDrawerOpensOn(o.id)}
+                className={cn(
+                  'rounded-lg border-2 px-4 py-2 font-semibold transition-colors',
+                  drawerOpensOn === o.id
+                    ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
+                    : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+                )}
+              >
+                {o.label} {o.note && <span className="text-stone-500">{o.note}</span>}
+              </button>
+            ))}
+          </div>
           <p className="mt-1 text-xs text-stone-500">
             The drawer plugs into the printer&rsquo;s drawer port (DK). Most drawers open on pin 2,
-            50 ms. A cash payment opens it straight away.
+            50 ms. A sale opens it straight away: every sale, so the card slip goes in with the cash,
+            or cash sales only. Refunds and payouts open it for cash only either way.
           </p>
         </div>
 

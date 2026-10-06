@@ -34,6 +34,8 @@ export const taxCategorySchema = z.object({
   id: uuidSchema,
   name: z.string().min(1).max(80),
   rateBps: bpsSchema,
+  /** The rate when paid by card / wallet / bank (0052); null / absent = the same as rateBps. */
+  digitalRateBps: bpsSchema.nullable().optional(),
 });
 
 export const modifierGroupSchema = z.object({

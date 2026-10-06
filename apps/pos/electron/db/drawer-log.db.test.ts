@@ -76,11 +76,15 @@ describe.skipIf(!DatabaseSync)('one row per drawer opening, in the same transact
     expect(t.opens().at(-1)).toMatchObject({ kind: 'float', amount: 0, shiftId: s2.id });
   });
 
-  it('a cash sale: the cash part only (split cash + card); card alone: no row', () => {
+  it('a cash sale: the cash part only (split cash + card); card alone: a row with no cash (0052, the drawer opens for the slip), none when the till opens on cash sales only', () => {
     t.r.openShift(t.db, { openingCashCents: 0 }, MANAGER);
     const before = t.opens().length;
-    const tender = (o: string, payments: Array<{ method: PaymentMethod; amountCents: number }>) =>
-      t.r.tenderOrder(t.db, { orderId: o, payments: payments.map((p) => ({ ...p, tenderedCents: p.method === 'cash' ? p.amountCents : null })) }, CASHIER);
+    const tender = (o: string, payments: Array<{ method: PaymentMethod; amountCents: number }>, drawerOpensOn: 'cash' | 'every_sale' | null = null) =>
+      t.r.tenderOrder(
+        t.db,
+        { orderId: o, payments: payments.map((p) => ({ ...p, tenderedCents: p.method === 'cash' ? p.amountCents : null })), drawerOpensOn },
+        CASHIER,
+      );
 
     const cash = t.ring();
     expect(tender(cash, [{ method: 'cash', amountCents: t.total(cash) }]).drawerOpenId).toBeTruthy();
@@ -89,13 +93,22 @@ describe.skipIf(!DatabaseSync)('one row per drawer opening, in the same transact
       { method: 'cash', amountCents: 50_000 },
       { method: 'card', amountCents: t.total(split) - 50_000 },
     ]);
+    // Settings → Printers unset (the default): every sale opens it, the card slip going in with the cash.
     const card = t.ring();
-    expect(tender(card, [{ method: 'card', amountCents: t.total(card) }]).drawerOpenId).toBeNull();
+    expect(tender(card, [{ method: 'card', amountCents: t.total(card) }]).drawerOpenId).toBeTruthy();
+    // Set to cash sales only: a card alone leaves it shut, as before 0052.
+    const cardShut = t.ring();
+    expect(tender(cardShut, [{ method: 'card', amountCents: t.total(cardShut) }], 'cash').drawerOpenId).toBeNull();
+    // Said so: every sale.
+    const cardSaid = t.ring();
+    expect(tender(cardSaid, [{ method: 'card', amountCents: t.total(cardSaid) }], 'every_sale').drawerOpenId).toBeTruthy();
 
     const sales = t.opens().slice(before);
     expect(sales).toEqual([
       expect.objectContaining({ kind: 'sale', amount: 120_000, orderId: cash, userId: CASHIER.userId, approver: null }),
       expect.objectContaining({ kind: 'sale', amount: 50_000, orderId: split }),
+      expect.objectContaining({ kind: 'sale', amount: null, orderId: card, reason: t.r.CARD_SALE_DRAWER_REASON, userId: CASHIER.userId }),
+      expect.objectContaining({ kind: 'sale', amount: null, orderId: cardSaid, reason: t.r.CARD_SALE_DRAWER_REASON }),
     ]);
     expect(splitDone.drawerOpenId).toBeTruthy();
   });
@@ -109,7 +122,7 @@ describe.skipIf(!DatabaseSync)('one row per drawer opening, in the same transact
     expect(t.opens()).toHaveLength(before);
   });
 
-  it('cash collected at the table and from the rider: a cash sale each; collected by card: none', () => {
+  it('cash collected at the table and from the rider: a cash sale each; collected by card: a row with no cash under the default, none when the till opens on cash sales only', () => {
     t.r.openShift(t.db, { openingCashCents: 0 }, MANAGER);
     const before = t.opens().length;
     const table = t.ring();
@@ -123,9 +136,20 @@ describe.skipIf(!DatabaseSync)('one row per drawer opening, in the same transact
     t.r.sendOrderToKitchen(t.db, byCard, CASHIER);
     t.r.markOrderPreparing(t.db, byCard, CASHIER);
     t.r.markOrderReady(t.db, byCard, CASHIER);
-    expect(t.r.markOrderServed(t.db, { orderId: byCard, payment: { method: 'card', amountCents: t.total(byCard), tenderedCents: null } }, CASHIER).drawerOpenId).toBeNull();
+    expect(
+      t.r.markOrderServed(t.db, { orderId: byCard, payment: { method: 'card', amountCents: t.total(byCard), tenderedCents: null }, drawerOpensOn: 'cash' }, CASHIER)
+        .drawerOpenId,
+    ).toBeNull();
+    const slip = t.ring();
+    t.r.sendOrderToKitchen(t.db, slip, CASHIER);
+    t.r.markOrderPreparing(t.db, slip, CASHIER);
+    t.r.markOrderReady(t.db, slip, CASHIER);
+    expect(t.r.markOrderServed(t.db, { orderId: slip, payment: { method: 'card', amountCents: t.total(slip), tenderedCents: null } }, CASHIER).drawerOpenId).toBeTruthy();
 
-    expect(t.opens().slice(before)).toEqual([expect.objectContaining({ kind: 'sale', amount: 120_000, orderId: table })]);
+    expect(t.opens().slice(before)).toEqual([
+      expect.objectContaining({ kind: 'sale', amount: 120_000, orderId: table }),
+      expect.objectContaining({ kind: 'sale', amount: null, orderId: slip, reason: t.r.CARD_SALE_DRAWER_REASON }),
+    ]);
   });
 
   it('a cash refund: negative, who pressed Refund and the manager who allowed it; a card refund: no row', () => {

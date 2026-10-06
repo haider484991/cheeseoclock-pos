@@ -6,7 +6,7 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { TaxCategory } from '@cheeseoclock/shared-types';
 import { STARTING_TAX_RATE_BPS, taxRatePercentText } from '@cheeseoclock/shared-types';
-import { taxRateFieldStart } from './taxForm';
+import { cardRateFieldStart, rateBpsOf, taxRateFieldStart, taxRatesText } from './taxForm';
 import { Plus, Edit, Trash2, X } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 
@@ -50,7 +50,8 @@ export function TaxTab() {
           {(q.data ?? []).map((t) => (
             <tr key={t.id} className="border-t border-stone-100 dark:border-stone-800">
               <td className="py-2 font-medium">{t.name}</td>
-              <td className="py-2 text-right font-mono">{(t.rateBps / 100).toFixed(2)}%</td>
+              {/* "15% · card 8%" when the category charges less by card / wallet / bank (0052). */}
+              <td className="py-2 text-right font-mono">{taxRatesText(t)}</td>
               <td className="py-2 text-right">
                 <button onClick={() => setEditing(t)} className="rounded p-1 text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800" aria-label="Edit">
                   <Edit className="h-4 w-4" />
@@ -102,13 +103,16 @@ function TaxDialog({
   const [name, setName] = useState(existing?.name ?? '');
   // Editing: the category's own rate, as it is. A new one starts at the till's starting rate.
   const [ratePercent, setRatePercent] = useState(taxRateFieldStart(existing));
+  // The rate when the bill is paid by card / wallet / bank (0052); empty = the same rate however it is paid.
+  const [cardPercent, setCardPercent] = useState(cardRateFieldStart(existing));
 
   const mut = useMutation({
     mutationFn: () => {
-      const bps = Math.round(parseFloat(ratePercent || '0') * 100);
+      const bps = rateBpsOf(ratePercent) ?? 0;
+      const digitalRateBps = rateBpsOf(cardPercent);
       return existing
-        ? ipc.menu.updateTaxCategory({ id: existing.id, name, rateBps: bps })
-        : ipc.menu.createTaxCategory({ name, rateBps: bps });
+        ? ipc.menu.updateTaxCategory({ id: existing.id, name, rateBps: bps, digitalRateBps })
+        : ipc.menu.createTaxCategory({ name, rateBps: bps, digitalRateBps });
     },
     onSuccess: () => {
       toast({ title: existing ? 'Updated' : 'Created', variant: 'success' });
@@ -160,6 +164,25 @@ function TaxDialog({
               />
               <div className="mt-1 text-xs text-stone-500">
                 Stored as basis points internally ({taxRatePercentText(STARTING_TAX_RATE_BPS)} = {STARTING_TAX_RATE_BPS} bps).
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">When paid by card, wallet or bank (%)</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                max="100"
+                value={cardPercent}
+                onChange={(e) => setCardPercent(e.target.value)}
+                placeholder="Same as the rate"
+                aria-label="Rate when paid by card, wallet or bank (%)"
+                className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
+              />
+              <div className="mt-1 text-xs text-stone-500">
+                Sindh charges a restaurant&rsquo;s bill a lower rate when it is paid by card, wallet or bank transfer.
+                Leave it empty to charge the same rate however the bill is paid. Pay works out a bill paid part by
+                card, part in cash: the card part at this rate, the cash part at the rate above.
               </div>
             </div>
           </div>

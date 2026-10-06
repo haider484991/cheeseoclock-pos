@@ -420,6 +420,7 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
       discountCents: 12000,
       discountedOrderCount: 2,
       taxCents: 44480,
+      cardRateTaxCents: 0,
       billedCents: 322480,
       partialRefundCents: 5000,
       partialRefundOrderCount: 1,

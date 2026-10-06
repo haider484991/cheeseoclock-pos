@@ -1063,15 +1063,18 @@ const REMOTE_TABLES: Record<string, RemoteTableHandler> = {
     tableName: 'tax_categories',
     upsert(db, p, c) {
       db.prepare(
-        `INSERT INTO tax_categories (id, name, rate_bps, created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO tax_categories (id, name, rate_bps, digital_rate_bps, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, rate_bps = excluded.rate_bps,
+           digital_rate_bps = excluded.digital_rate_bps,
            updated_at = excluded.updated_at, version = excluded.version,
            deleted_at = NULL`,
       ).run(
         c.entityId,
         p.name,
         p.rateBps,
+        // The card rate (0052); a till from before it sends none.
+        typeof p.digitalRateBps === 'number' ? p.digitalRateBps : null,
         p.createdAt ?? c.updatedAt,
         c.updatedAt,
         c.deviceId,

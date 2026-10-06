@@ -30,12 +30,16 @@ export const BRANDING_KEY = 'receipt.branding';
 
 const TransportSchema = z.enum(['usb', 'network', 'bluetooth', 'serial']);
 
-/** The cash drawer on the receipt printer: pin 2 or 5, a 50 or 100 ms pulse — nothing else. */
+/**
+ * The cash drawer on the receipt printer: pin 2 or 5, a 50 or 100 ms pulse,
+ * and which sales open it (0052: every sale, or cash only) — nothing else.
+ */
 export const DrawerSettingsSchema: z.ZodType<DrawerSettings> = z.object({
   pin: z.union([z.literal(2), z.literal(5)], { errorMap: () => ({ message: 'The drawer pin is 2 or 5' }) }),
   pulseMs: z.union([z.literal(50), z.literal(100)], {
     errorMap: () => ({ message: 'The drawer pulse is 50 or 100 ms' }),
   }),
+  opensOn: z.enum(['cash', 'every_sale'], { errorMap: () => ({ message: 'The drawer opens on every sale, or on cash sales only' }) }).optional(),
 });
 
 export const PrinterConnectionConfigSchema = z

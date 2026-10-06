@@ -301,7 +301,7 @@ describe('migrations: numbered in order, one file per number', () => {
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
-  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), then 0048 (when an order was sent), then 0049 (outside riders), then 0050 (the note count at close), then 0051 (the shift report at close), by name', () => {
+  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), then 0048 (when an order was sent), then 0049 (outside riders), then 0050 (the note count at close), then 0051 (the shift report at close), then 0052 (the card rate), by name', () => {
     const numbers = files.map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? NaN));
     expect(numbers).toEqual(numbers.map((_, i) => i + 1));
     // 0040 / 0041 were released in v0.7.22: the drawer log and the test-order
@@ -320,6 +320,7 @@ describe('migrations: numbered in order, one file per number', () => {
       '0049_outside_rider.sql',
       '0050_shift_counted_notes.sql',
       '0051_shift_close_report.sql',
+      '0052_card_rate.sql',
     ]);
   });
 
@@ -442,5 +443,23 @@ describe('migrations: numbered in order, one file per number', () => {
     expect(/\bBEGIN\b/i.test(raw)).toBe(false);
     // shifts replicates: the column travels in the shift's row image, no sync-core change.
     expect(PURE_LOCAL_TABLES.has('shifts')).toBe(false);
+  });
+
+  it('0052 only adds the card-rate columns: tax_categories.digital_rate_bps, order_items.digital_rate_bps_snapshot, orders.digital_total_cents (nullable) and orders.digital_net_cents / digital_tax_cents (0 by default); no CHECK, no backfill, no index', () => {
+    const raw = readFileSync(join(MIGRATIONS_DIR, '0052_card_rate.sql'), 'utf8');
+    const sql = stripComments(raw).trim();
+    expect(sql.replace(/\s+/g, ' ')).toBe(
+      'ALTER TABLE tax_categories ADD COLUMN digital_rate_bps INTEGER; ' +
+        'ALTER TABLE order_items ADD COLUMN digital_rate_bps_snapshot INTEGER; ' +
+        'ALTER TABLE orders ADD COLUMN digital_total_cents INTEGER; ' +
+        'ALTER TABLE orders ADD COLUMN digital_net_cents INTEGER NOT NULL DEFAULT 0; ' +
+        'ALTER TABLE orders ADD COLUMN digital_tax_cents INTEGER NOT NULL DEFAULT 0;',
+    );
+    expect(sql.match(/\bALTER TABLE\b/gi)).toHaveLength(5);
+    expect(/\bCHECK\b|\bUPDATE\b|\bINSERT\b|\bDELETE\b|\bDROP\b|\bCREATE\b/i.test(sql)).toBe(false);
+    // No BEGIN anywhere, comments included: the migrator runs it in its own transaction (migrator.ts managesOwnTransaction).
+    expect(/\bBEGIN\b/i.test(raw)).toBe(false);
+    // All three tables replicate: the columns travel in the row images, no sync-core change.
+    for (const t of ['tax_categories', 'order_items', 'orders']) expect(PURE_LOCAL_TABLES.has(t)).toBe(false);
   });
 });

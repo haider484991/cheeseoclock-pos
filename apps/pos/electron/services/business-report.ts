@@ -173,6 +173,8 @@ export interface SaleRow {
   /** How the order came in (orders.came_by, 0044); null = not asked, or before 0044. */
   cameBy?: string | null;
   tax: number;
+  /** The tax on the part paid by card / wallet / bank at a card rate (orders.digital_tax_cents, 0052); 0 = none. */
+  cardTax: number;
   total: number;
   refunded: number;
   riderId: string | null;
@@ -334,6 +336,7 @@ export function aggregateSales(
     | 'discountCents'
     | 'discountedOrderCount'
     | 'taxCents'
+    | 'cardRateTaxCents'
     | 'billedCents'
     | 'partialRefundCents'
     | 'partialRefundOrderCount'
@@ -354,6 +357,7 @@ export function aggregateSales(
     discountCents: 0,
     discountedOrderCount: 0,
     taxCents: 0,
+    cardRateTaxCents: 0,
     billedCents: 0,
     partialRefundCents: 0,
     partialRefundOrderCount: 0,
@@ -376,6 +380,7 @@ export function aggregateSales(
     totals.discountCents += r.discount;
     if (r.discount > 0) totals.discountedOrderCount += 1;
     totals.taxCents += r.tax;
+    totals.cardRateTaxCents += Number(r.cardTax ?? 0);
     totals.billedCents += r.total;
     totals.partialRefundCents += r.refunded;
     if (r.refunded > 0) totals.partialRefundOrderCount += 1;
@@ -558,6 +563,7 @@ function getSaleRows(db: AppDatabase, range: ReportRange): SaleRow[] {
     .prepare(
       `SELECT o.created_at AS createdAt, o.mode AS mode, o.source AS source, o.cashier_id AS cashierId,
               o.subtotal_cents AS subtotal, o.discount_cents AS discount, o.tax_cents AS tax,
+              o.digital_tax_cents AS cardTax,
               -- The latest live discount row describes the stored discount (as getDiscountLines reads it).
               CASE WHEN o.discount_cents > 0 THEN (
                 SELECT d.source FROM order_discounts d

@@ -91,6 +91,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
   const subtotalCents = order?.subtotalCents ?? 0;
   const discountCents = order?.discountCents ?? 0;
   const taxCents = order?.taxCents ?? 0;
+  const cardTotalCents = order?.digitalTotalCents ?? null;
   const itemCount = items.reduce((n, i) => n + i.quantity, 0);
   const shortNumber = order?.orderNumber.split('-').pop() ?? null;
   const discount = snapshot?.discounts[snapshot.discounts.length - 1] ?? null;
@@ -392,6 +393,13 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
             <dt>Total</dt>
             <dd>{formatCents(totalCents)}</dd>
           </div>
+          {/* The same bill by card / wallet / bank (0052): its lines at their card rates. Only when the order has one. */}
+          {cardTotalCents !== null && cardTotalCents !== totalCents && (
+            <div className="text-xs text-stone-500" data-testid="card-total">
+              <dt>By card</dt>
+              <dd>{formatCents(cardTotalCents)}</dd>
+            </div>
+          )}
         </dl>
 
         {heldBy ? (

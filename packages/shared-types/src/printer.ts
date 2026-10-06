@@ -36,9 +36,27 @@ export interface PrinterConnectionConfig {
 export interface DrawerSettings {
   pin: 2 | 5;
   pulseMs: 50 | 100;
+  /**
+   * Which sales open it: 'every_sale' — card, wallet and bank sales too, so
+   * the card slip goes in with the cash (the shop, 6 Oct 2026: "open the
+   * drawer anyway, card or cash, to store the receipt"); 'cash' — cash sales
+   * only, as every till did before 0052. Absent = every sale. Refunds and
+   * payouts open it for cash only, whatever this says.
+   */
+  opensOn?: DrawerOpensOn;
 }
 
+/** When a sale opens the drawer: see DrawerSettings.opensOn. */
+export type DrawerOpensOn = 'cash' | 'every_sale';
+
+export const DEFAULT_DRAWER_OPENS_ON: DrawerOpensOn = 'every_sale';
+
 export const DEFAULT_DRAWER_SETTINGS: DrawerSettings = { pin: 2, pulseMs: 50 };
+
+/** Whether a sale paid this way opens the drawer under the setting (absent = every sale). */
+export function saleOpensDrawer(opensOn: DrawerOpensOn | null | undefined, cashMoved: boolean): boolean {
+  return cashMoved || (opensOn ?? DEFAULT_DRAWER_OPENS_ON) === 'every_sale';
+}
 
 /**
  * `printer:failed` error codes for the cash drawer. NOT_OPENED: it did not

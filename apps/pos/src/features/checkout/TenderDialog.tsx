@@ -1,7 +1,7 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn, NumberPad } from '@cheeseoclock/ui';
-import { formatCents } from '@cheeseoclock/pos-domain';
+import { formatCents, splitTender } from '@cheeseoclock/pos-domain';
 import { FOODPANDA_ORDER_CODE_MAX } from '@cheeseoclock/shared-types';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { useCheckoutRules } from '../settings/shop-rules/useShopSetting';
@@ -35,19 +35,41 @@ const METHODS: Array<{
   { id: 'foodpanda', label: 'Foodpanda', icon: Smartphone, showTendered: false },
 ];
 
+/** The ways the card part of a split sale is paid: everything but cash and foodpanda. */
+const SPLIT_METHODS = METHODS.filter((m) => m.id !== 'cash' && m.id !== 'foodpanda');
+
 /**
  * Payment. Opens on Cash with "Exact" already chosen, so the usual sale is
  * Pay → Enter. Typing on the keyboard or the pad starts a cash amount (the
  * change shows as you type); a quick-note button fills in a round note.
  * Enter confirms from anywhere in the dialog except Cancel / Close.
+ *
+ * The card rate (0052): an order whose lines charge less by card, wallet or
+ * bank (Menu → Tax) carries its bill by card beside its total. Card, the
+ * wallets and Bank charge that bill; "Card + cash" takes a part on the card
+ * and works out the cash due from it — the card part at the card rate, the
+ * cash part at the cash rate (pos-domain splitTender, the rule the till
+ * applies). An order with no card rate pays its total however it is paid,
+ * exactly as before.
  */
 export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   const total = snapshot.order.totalCents;
   // A foodpanda order is paid through Foodpanda only (it used to default to Cash and inflate the
   // drawer's expected cash every night); every other order can't use that method.
   const isFoodpanda = snapshot.order.mode === 'foodpanda';
+  // The same bill by card / wallet / bank: its lines at their card rates — the
+  // total itself when the order has no card rate, or is foodpanda's.
+  const cardTotal = isFoodpanda ? total : (snapshot.order.digitalTotalCents ?? total);
+  const hasCardRate = cardTotal !== total;
+  const netCents = snapshot.order.subtotalCents - snapshot.order.discountCents;
   const methods = METHODS.filter((m) => (m.id === 'foodpanda') === isFoodpanda);
   const [method, setMethod] = useState<PaymentMethod>(isFoodpanda ? 'foodpanda' : 'cash');
+  // Card + cash: the card amount typed, the cash due worked out from it; the
+  // pad types into one of the two.
+  const [split, setSplit] = useState(false);
+  const [splitMethod, setSplitMethod] = useState<PaymentMethod>('card');
+  const [onCard, setOnCard] = useState('');
+  const [padField, setPadField] = useState<'card' | 'cash'>('card');
   const [tendered, setTendered] = useState('');
   // "Exact" tenders the bill to the paisa. The pad only types whole rupees, so
   // a Rs 1,234.50 bill could not be paid with exactly Rs 1,234.50 in cash.
@@ -69,19 +91,40 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   const busy = useCheckoutStore((s) => s.busy);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  const tenderedCents = exact ? total : parseTenderedCents(tendered);
-  const exactLabel = (total / 100).toFixed(total % 100 === 0 ? 0 : 2);
-  const quickRupees = quickCashRupees(total);
   const methodSpec = methods.find((m) => m.id === method) ?? methods[0]!;
+  const splitSpec = SPLIT_METHODS.find((m) => m.id === splitMethod) ?? SPLIT_METHODS[0]!;
+  const onCardCents = split ? parseTenderedCents(onCard) : 0;
+  // The bill as it is being settled: the split's card part at the card rate
+  // and its cash part at the cash rate — the one rule the till applies too.
+  const settlement = split ? splitTender({ totalCents: total, digitalTotalCents: hasCardRate ? cardTotal : null, netCents }, onCardCents) : null;
+  const splitProblem = settlement && !settlement.ok ? settlement.reason : null;
+  // What is collected in cash: the whole bill (Cash), or the cash part of a split.
+  const cashDue = split ? (settlement?.ok ? settlement.cashDueCents : 0) : methodSpec.showTendered ? total : 0;
+  const due =
+    split && settlement?.ok
+      ? { totalCents: settlement.totalCents, taxCents: settlement.taxCents }
+      : !split && !methodSpec.showTendered
+        ? { totalCents: cardTotal, taxCents: cardTotal - netCents }
+        : { totalCents: total, taxCents: snapshot.order.taxCents };
+  const collectsCash = split ? cashDue > 0 : methodSpec.showTendered;
+  const tenderedCents = exact ? cashDue : parseTenderedCents(tendered);
+  const exactLabel = (cashDue / 100).toFixed(cashDue % 100 === 0 ? 0 : 2);
+  const quickRupees = quickCashRupees(cashDue);
   // A 100%-discounted order has nothing to collect — no payment leg at all.
   const nothingToPay = total === 0;
-  // For cash: tendered must be >= total. For others: amount = total exactly.
-  const enough = nothingToPay || (methodSpec.showTendered ? tenderedCents >= total : true);
-  const changeCents = methodSpec.showTendered && tenderedCents >= total ? tenderedCents - total : 0;
-  const shortCents = methodSpec.showTendered && !enough ? total - tenderedCents : 0;
+  // For cash: tendered must be >= what is due in cash. For others: amount = the bill exactly.
+  const enough =
+    nothingToPay ||
+    (split ? splitProblem === null && (!collectsCash || tenderedCents >= cashDue) : methodSpec.showTendered ? tenderedCents >= total : true);
+  const changeCents = collectsCash && tenderedCents >= cashDue ? tenderedCents - cashDue : 0;
+  const shortCents = collectsCash && !enough && splitProblem === null ? cashDue - tenderedCents : 0;
 
   function typeAmount(next: string) {
     setError(null);
+    if (split && padField === 'card') {
+      setOnCard(next.replace(/^0+/, '').slice(0, 8));
+      return;
+    }
     if (exact) {
       // Typing after Exact starts a fresh amount; backspace clears it.
       setExact(false);
@@ -89,6 +132,15 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
       return;
     }
     setTendered(next.replace(/^0+/, '').slice(0, 8));
+  }
+
+  function startSplit() {
+    setSplit(true);
+    setPadField('card');
+    setOnCard('');
+    setTendered('');
+    setExact(total > 0);
+    setError(null);
   }
 
   async function submit() {
@@ -112,20 +164,25 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
       }
       tabletTotalCents = step.tabletTotalCents;
     }
+    // The legs: the card part and the cash due of a split (a part of Rs 0 is
+    // no leg), else the one method — Cash the total, the others the bill by card.
+    const legs = nothingToPay
+      ? []
+      : split
+        ? [
+            ...(onCardCents > 0 ? [{ method: splitMethod, amountCents: onCardCents, tenderedCents: null }] : []),
+            ...(cashDue > 0 ? [{ method: 'cash' as PaymentMethod, amountCents: cashDue, tenderedCents }] : []),
+          ]
+        : [
+            {
+              method,
+              amountCents: methodSpec.showTendered ? total : cardTotal,
+              tenderedCents: methodSpec.showTendered ? tenderedCents : null,
+              ...(isFoodpanda ? { referenceNo: fpCode.trim() || null } : {}),
+            },
+          ];
     try {
-      await tender(
-        nothingToPay
-          ? []
-          : [
-              {
-                method,
-                amountCents: total,
-                tenderedCents: methodSpec.showTendered ? tenderedCents : null,
-                ...(isFoodpanda ? { referenceNo: fpCode.trim() || null } : {}),
-              },
-            ],
-        isFoodpanda ? { tabletTotalCents } : undefined,
-      );
+      await tender(legs, isFoodpanda ? { tabletTotalCents } : undefined);
       onPaid();
     } catch (e) {
       setError(`Payment not taken: ${e instanceof Error ? e.message : 'Unknown error'}`);
@@ -143,8 +200,8 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
       void submit();
       return;
     }
-    if (!methodSpec.showTendered) return;
-    const shown = exact ? exactLabel : tendered;
+    if (!split && !methodSpec.showTendered) return;
+    const shown = split && padField === 'card' ? onCard : exact ? exactLabel : tendered;
     if (/^\d$/.test(e.key)) {
       e.preventDefault();
       typeAmount(shown + e.key);
@@ -153,6 +210,9 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
       typeAmount(shown.slice(0, -1));
     }
   }
+
+  const chosen = 'border-amber-500 bg-amber-50 dark:bg-amber-950';
+  const unchosen = 'border-stone-200 hover:border-stone-300 dark:border-stone-700';
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
@@ -172,7 +232,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
         >
           <header className="flex items-center justify-between border-b border-stone-200 px-5 py-3 dark:border-stone-800">
             <Dialog.Title className="text-xl font-bold">
-              Payment <span className="ml-2 font-mono text-stone-500">{formatCents(total)}</span>
+              Payment <span className="ml-2 font-mono text-stone-500">{formatCents(due.totalCents)}</span>
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
@@ -196,9 +256,10 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                     <button
                       key={m.id}
                       type="button"
-                      aria-pressed={method === m.id}
+                      aria-pressed={!split && method === m.id}
                       onClick={() => {
                         setMethod(m.id);
+                        setSplit(false);
                         setError(null);
                         if (!m.showTendered) {
                           setTendered('');
@@ -209,9 +270,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                       }}
                       className={cn(
                         'flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-lg border-2 p-2 transition-colors',
-                        method === m.id
-                          ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
-                          : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+                        !split && method === m.id ? chosen : unchosen,
                       )}
                     >
                       <Icon className="h-6 w-6" />
@@ -219,6 +278,24 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                     </button>
                   );
                 })}
+                {!isFoodpanda && !nothingToPay && (
+                  <button
+                    type="button"
+                    aria-pressed={split}
+                    onClick={startSplit}
+                    className={cn(
+                      'flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-lg border-2 p-2 transition-colors',
+                      split ? chosen : unchosen,
+                    )}
+                  >
+                    <span className="flex items-center gap-1">
+                      <CreditCard className="h-5 w-5" />
+                      <span className="text-xs">+</span>
+                      <Banknote className="h-5 w-5" />
+                    </span>
+                    <span className="text-sm font-semibold">Card + cash</span>
+                  </button>
+                )}
               </div>
 
               <div className="mt-4 rounded-lg bg-stone-100 p-4 dark:bg-stone-800">
@@ -249,18 +326,135 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                   )}
                   <div className="flex justify-between">
                     <dt>Tax</dt>
-                    <dd className="font-mono">{formatCents(snapshot.order.taxCents)}</dd>
+                    <dd className="font-mono">{formatCents(due.taxCents)}</dd>
                   </div>
                   <div className="flex justify-between border-t border-stone-300 pt-1 text-lg font-bold dark:border-stone-600">
                     <dt>Total</dt>
-                    <dd className="font-mono">{formatCents(total)}</dd>
+                    <dd className="font-mono">{formatCents(due.totalCents)}</dd>
                   </div>
+                  {hasCardRate && (
+                    // The two bills, so the cashier can tell the customer before they choose.
+                    <div className="flex justify-between text-xs text-stone-500" data-testid="two-bills">
+                      <dt>By card {formatCents(cardTotal)}</dt>
+                      <dd className="font-mono">in cash {formatCents(total)}</dd>
+                    </div>
+                  )}
                 </dl>
               </div>
             </div>
 
             <div>
-              {methodSpec.showTendered && !nothingToPay ? (
+              {split ? (
+                <>
+                  <div className="mb-2 text-xs uppercase tracking-wider text-stone-500">Part by card, part in cash</div>
+                  <div className="mb-2 grid grid-cols-4 gap-1">
+                    {SPLIT_METHODS.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        aria-pressed={splitMethod === m.id}
+                        onClick={() => {
+                          setSplitMethod(m.id);
+                          setError(null);
+                        }}
+                        className={cn('h-9 rounded-lg border-2 px-1 text-xs font-semibold', splitMethod === m.id ? chosen : unchosen)}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      aria-pressed={padField === 'card'}
+                      onClick={() => setPadField('card')}
+                      className={cn('rounded-lg border-2 p-3 text-left', padField === 'card' ? chosen : unchosen)}
+                    >
+                      <div className="text-xs uppercase tracking-wider text-stone-500">On {splitSpec.label}</div>
+                      <div className="font-mono text-2xl font-bold" data-testid="on-card">
+                        {onCard ? `Rs ${parseInt(onCard, 10).toLocaleString('en-PK')}` : '—'}
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={padField === 'cash'}
+                      onClick={() => setPadField('cash')}
+                      disabled={!collectsCash}
+                      className={cn('rounded-lg border-2 p-3 text-left disabled:opacity-60', padField === 'cash' ? chosen : unchosen)}
+                    >
+                      <div className="text-xs uppercase tracking-wider text-stone-500">Cash due</div>
+                      <div className="font-mono text-2xl font-bold" data-testid="cash-due">
+                        {formatCents(cashDue)}
+                      </div>
+                    </button>
+                  </div>
+                  {splitProblem && (
+                    <p role="alert" className="mt-2 text-sm font-semibold text-red-700 dark:text-red-300">
+                      {splitProblem}
+                    </p>
+                  )}
+                  {collectsCash && (
+                    <>
+                      <div className="mb-2 mt-3 text-xs uppercase tracking-wider text-stone-500">Cash given</div>
+                      <div className="mb-3 grid grid-cols-5 gap-2">
+                        <button
+                          type="button"
+                          aria-pressed={exact}
+                          onClick={() => {
+                            setPadField('cash');
+                            setExact(true);
+                            setTendered('');
+                            setError(null);
+                          }}
+                          className={cn('h-12 rounded-lg border-2 px-2 text-sm font-semibold', exact ? chosen : unchosen)}
+                        >
+                          Exact
+                        </button>
+                        {quickRupees.map((r) => (
+                          <button
+                            key={r}
+                            type="button"
+                            aria-pressed={!exact && tendered === String(r)}
+                            onClick={() => {
+                              setPadField('cash');
+                              setExact(false);
+                              setTendered(String(r));
+                              setError(null);
+                            }}
+                            className={cn('h-12 rounded-lg border-2 px-2 font-mono text-sm font-semibold', !exact && tendered === String(r) ? chosen : unchosen)}
+                          >
+                            {r.toLocaleString('en-PK')}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  <div className={collectsCash ? '' : 'mt-3'}>
+                    <NumberPad
+                      value={padField === 'card' ? onCard : exact ? exactLabel : tendered}
+                      onChange={typeAmount}
+                      maxLength={8}
+                      onSubmit={() => void submit()}
+                    />
+                  </div>
+                  {collectsCash && (
+                    <div
+                      className={cn('mt-3 rounded-lg p-3 text-center', enough ? 'bg-emerald-50 dark:bg-emerald-950' : 'bg-red-50 dark:bg-red-950')}
+                      aria-live="polite"
+                    >
+                      <div
+                        className={cn(
+                          'text-xs uppercase tracking-wider',
+                          enough ? 'text-emerald-700 dark:text-emerald-300' : 'text-red-700 dark:text-red-300',
+                        )}
+                      >
+                        {enough ? 'Change' : 'Short by'}
+                      </div>
+                      <div className="font-mono text-3xl font-bold">{formatCents(enough ? changeCents : shortCents)}</div>
+                    </div>
+                  )}
+                </>
+              ) : methodSpec.showTendered && !nothingToPay ? (
                 <>
                   <div className="mb-2 text-xs uppercase tracking-wider text-stone-500">Cash given</div>
                   <div className="mb-3 grid grid-cols-5 gap-2">
@@ -272,12 +466,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                         setTendered('');
                         setError(null);
                       }}
-                      className={cn(
-                        'h-12 rounded-lg border-2 px-2 text-sm font-semibold',
-                        exact
-                          ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
-                          : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
-                      )}
+                      className={cn('h-12 rounded-lg border-2 px-2 text-sm font-semibold', exact ? chosen : unchosen)}
                     >
                       Exact
                     </button>
@@ -291,12 +480,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                           setTendered(String(r));
                           setError(null);
                         }}
-                        className={cn(
-                          'h-12 rounded-lg border-2 px-2 font-mono text-sm font-semibold',
-                          !exact && tendered === String(r)
-                            ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
-                            : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
-                        )}
+                        className={cn('h-12 rounded-lg border-2 px-2 font-mono text-sm font-semibold', !exact && tendered === String(r) ? chosen : unchosen)}
                       >
                         {r.toLocaleString('en-PK')}
                       </button>
@@ -327,7 +511,10 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                     <div className="mb-2 text-sm text-stone-500">
                       {nothingToPay ? 'Nothing to collect' : `Charge to ${methodSpec.label}`}
                     </div>
-                    <div className="font-mono text-4xl font-bold">{formatCents(total)}</div>
+                    <div className="font-mono text-4xl font-bold">{formatCents(cardTotal)}</div>
+                    {hasCardRate && !nothingToPay && (
+                      <div className="mt-2 text-xs text-stone-500">Tax at the card rate · {formatCents(total)} in cash</div>
+                    )}
                   </div>
                   {isFoodpanda && (
                     <div className="mt-4 space-y-3">
@@ -388,7 +575,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                 ? 'Processing…'
                 : nothingToPay
                   ? 'Nothing to pay — complete order'
-                  : methodSpec.showTendered && changeCents > 0
+                  : collectsCash && changeCents > 0
                     ? `Confirm · change ${formatCents(changeCents)}`
                     : 'Confirm payment'}
             </Button>

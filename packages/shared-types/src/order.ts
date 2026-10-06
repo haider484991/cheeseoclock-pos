@@ -64,6 +64,22 @@ export interface Order {
   discountCents: Cents;
   taxCents: Cents;
   totalCents: Cents;
+  /**
+   * The bill if paid entirely by card, wallet or bank transfer
+   * (orders.digital_total_cents, migration 0052): the same lines and
+   * discount shares, taxed at their card rates, stored with the other
+   * totals. Absent / null = no card rate on this order: the total is the
+   * total. Pay reads it through pos-domain splitTender.
+   */
+  digitalTotalCents?: Cents | null;
+  /**
+   * Written by the sale (0052): the part of the bill before tax that was
+   * paid by card / wallet / bank, and the tax on that part (pos-domain
+   * splitTender) — what Reports split the tax by. Absent / 0 on a cash
+   * sale and on every order from before 0052.
+   */
+  digitalNetCents?: Cents;
+  digitalTaxCents?: Cents;
   createdAt: string;
   /**
    * When the order first left open (orders.sent_at, migration 0048): Send to
@@ -227,6 +243,12 @@ export interface OrderSnapshot {
       prepStation: 'kitchen' | 'bar' | 'cold';
       /** Tax rate snapshotted on the line at order time (basis points). */
       taxRateBps?: number;
+      /**
+       * The line's rate when the bill is paid by card / wallet / bank
+       * (order_items.digital_rate_bps_snapshot, 0052), frozen with taxRateBps.
+       * Absent / null = none: the line is taxed at taxRateBps however it is paid.
+       */
+      digitalRateBps?: number | null;
       modifiers: OrderItemModifier[];
     }
   >;

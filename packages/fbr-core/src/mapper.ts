@@ -77,8 +77,15 @@ export function mapOrderToFbrPayload(
     // blended order-average rate (16% pizza + 13% drink = "15.61%") is
     // rejected outright. Fall back to the order-average only for legacy
     // snapshots that predate the field.
+    // Paid entirely by card / wallet / bank (0052): each line at its card
+    // rate, the rate the till taxed it at. A bill paid part by card, part in
+    // cash has no one rate per line: its invoice carries the cash rates (the
+    // reference list has no blended rate), with the stored tax beside them.
+    const allByCard =
+      typeof order.digitalNetCents === 'number' && order.digitalNetCents > 0 && order.digitalNetCents >= subtotal - discount;
     const lineRateBps =
-      line.taxRateBps ?? Math.round((order.taxCents / Math.max(1, subtotal - discount)) * 10_000);
+      (allByCard ? (line.digitalRateBps ?? line.taxRateBps) : line.taxRateBps) ??
+      Math.round((order.taxCents / Math.max(1, subtotal - discount)) * 10_000);
     const lineTaxCents = Math.round((netCents * lineRateBps) / 10_000);
 
     return {

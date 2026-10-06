@@ -705,10 +705,11 @@ function appendSaleBody(
   } else {
     b.line('Subtotal', money(order.subtotalCents));
     appendDiscountLines(b, snapshot);
-    b.line(taxLabel(snapshot), money(order.taxCents));
+    for (const [label, cents] of taxLinesOf(snapshot)) b.line(label, money(cents));
     appendTotalsRule(b, dup, width);
     b.bold(true).doubleHeight(true).line('TOTAL', `Rs ${money(order.totalCents)}`);
     b.bold(false).doubleHeight(false);
+    appendByCardLine(b, snapshot);
   }
   // What an outside rider keeps and hands in: the shop's copy only.
   if (shopCopy) appendOutsideRiderLines(b, snapshot, width);
@@ -828,6 +829,20 @@ function appendDeliveryTotals(
   appendTotalsRule(b, dup, width);
   b.bold(true).doubleHeight(true).line('CUSTOMER PAYS', `Rs ${money(bill.customerPaysCents)}`);
   b.bold(false).doubleHeight(false);
+  appendByCardLine(b, snapshot);
+}
+
+/**
+ * An unpaid bill whose lines charge less by card / wallet / bank (0052: the
+ * order's bill by card beside its total): that bill under the total, so the
+ * customer can choose how to pay. Nothing on a paid receipt, or on an order
+ * with no card rate.
+ */
+function appendByCardLine(b: EscPosBuilder, snapshot: OrderSnapshot): void {
+  const { order } = snapshot;
+  const byCard = order.digitalTotalCents;
+  if (order.paidAt !== null || typeof byCard !== 'number' || byCard === order.totalCents) return;
+  b.line('By card / wallet', `Rs ${money(byCard)}`);
 }
 
 /** PAID - CASH, PART REFUNDED, or REFUNDED IN FULL — and what the rider collects. */
@@ -1186,14 +1201,49 @@ function ruleWith(char: string, label: string, width: number): string {
   return `${char.repeat(left)}${label}${char.repeat(right)}`.slice(0, width);
 }
 
+/** The one rate of these lines in basis points; null when they differ, or it is missing or 0. */
+function oneRateOf(rates: ReadonlyArray<number | null | undefined>): number | null {
+  const set = new Set(rates);
+  if (set.size !== 1) return null;
+  const [bps] = [...set];
+  return typeof bps === 'number' && Number.isInteger(bps) && bps > 0 ? bps : null;
+}
+
+/** "16", "12.5": a rate in basis points as the tax lines print it. */
+function pctText(bps: number): string {
+  return bps % 100 === 0 ? String(bps / 100) : (bps / 100).toFixed(2).replace(/0$/, '');
+}
+
 /** "Tax (16%)" when every line carries the same rate, otherwise "Tax". */
 function taxLabel(snapshot: OrderSnapshot): string {
-  const rates = new Set(snapshot.items.map((it) => it.taxRateBps));
-  if (rates.size !== 1) return 'Tax';
-  const [bps] = [...rates];
-  if (bps === undefined || !Number.isInteger(bps) || bps <= 0) return 'Tax';
-  const pct = bps % 100 === 0 ? String(bps / 100) : (bps / 100).toFixed(2).replace(/0$/, '');
-  return `Tax (${pct}%)`;
+  const bps = oneRateOf(snapshot.items.map((it) => it.taxRateBps));
+  return bps === null ? 'Tax' : `Tax (${pctText(bps)}%)`;
+}
+
+/**
+ * The tax line(s) of a bill (0052). As ever, one "Tax (15%)" line; a bill
+ * paid entirely by card / wallet / bank "Tax (8%)" at its card rate; one paid
+ * part by card, part in cash two lines — "Tax 15% (cash part)" and "Tax 8%
+ * (card part)" — so each rate's tax reads off the paper, as the SRB return
+ * wants it. The amounts are the stored figures (digitalTaxCents is the card
+ * part's), never worked out again.
+ */
+function taxLinesOf(snapshot: OrderSnapshot): Array<[string, number]> {
+  const { order } = snapshot;
+  const cardNet = order.digitalNetCents ?? 0;
+  const cardTax = order.digitalTaxCents ?? 0;
+  if (cardNet <= 0 && cardTax <= 0) return [[taxLabel(snapshot), order.taxCents]];
+  const cardRate = oneRateOf(snapshot.items.map((it) => it.digitalRateBps ?? it.taxRateBps));
+  const cashTax = order.taxCents - cardTax;
+  if (cardNet >= order.subtotalCents - order.discountCents || cashTax <= 0) {
+    return [[cardRate === null ? 'Tax' : `Tax (${pctText(cardRate)}%)`, order.taxCents]];
+  }
+  const cashRate = oneRateOf(snapshot.items.map((it) => it.taxRateBps));
+  const part = (bps: number | null, who: string) => (bps === null ? `Tax (${who} part)` : `Tax ${pctText(bps)}% (${who} part)`);
+  return [
+    [part(cashRate, 'cash'), cashTax],
+    [part(cardRate, 'card'), cardTax],
+  ];
 }
 
 /** "CASH", "CARD + CASH": the methods money came in by, biggest first. */

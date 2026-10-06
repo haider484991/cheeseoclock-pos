@@ -518,11 +518,15 @@ export function deliveryBillOf(s: {
     readonly discountCents: number;
     readonly taxCents: number;
     readonly totalCents: number;
+    /** The part before tax paid by card / wallet / bank (0052); absent / 0 = none. */
+    readonly digitalNetCents?: number | null;
   };
   readonly items: ReadonlyArray<{
     readonly menuItemName?: string | null;
     readonly lineTotalCents: number;
     readonly taxRateBps?: number;
+    /** The line's card rate (0052); absent / null = none. */
+    readonly digitalRateBps?: number | null;
   }>;
   readonly discounts: ReadonlyArray<{ readonly alsoOffDeliveryCharge?: boolean }>;
 }): DeliveryBill | null {
@@ -535,8 +539,15 @@ export function deliveryBillOf(s: {
   const chargeLines = s.items.filter((l) => isDeliveryChargeLine(l));
   const foodLines = s.items.filter((l) => !isDeliveryChargeLine(l));
   const tookDiscount = order.discountCents > 0 && s.discounts[s.discounts.length - 1]?.alsoOffDeliveryCharge !== false;
+  // Paid, in part or in full, by card / wallet / bank (0052): the tax is no
+  // longer each line at its own rate, so the whole of it prints on one line
+  // — at the card rate when the whole bill went by card, with no rate when
+  // it went part and part.
+  const cardNet = order.digitalNetCents ?? 0;
+  const byCard = cardNet > 0;
+  const allByCard = byCard && cardNet >= order.subtotalCents - order.discountCents;
   const split =
-    !tookDiscount && chargeLines.every((l) => l.taxRateBps !== undefined && Number.isInteger(l.taxRateBps));
+    !byCard && !tookDiscount && chargeLines.every((l) => l.taxRateBps !== undefined && Number.isInteger(l.taxRateBps));
   let deliveryTaxCents: number | null = null;
   if (split) {
     deliveryTaxCents = 0;
@@ -547,7 +558,11 @@ export function deliveryBillOf(s: {
     foodCents: order.subtotalCents - charge,
     deliveryChargeCents: charge,
     foodTaxCents: order.taxCents - (deliveryTaxCents ?? 0),
-    foodTaxBps: oneTaxRate(split ? foodLines : s.items),
+    foodTaxBps: byCard
+      ? allByCard
+        ? oneTaxRate(s.items.map((l) => ({ taxRateBps: l.digitalRateBps ?? l.taxRateBps })))
+        : null
+      : oneTaxRate(split ? foodLines : s.items),
     deliveryTaxCents,
     deliveryTaxBps: oneTaxRate(chargeLines),
     foodTotalCents: order.totalCents - charge,

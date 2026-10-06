@@ -112,6 +112,7 @@ import { mapOrderToFbrPayload, mapRefundToFbrDebitNote } from '@cheeseoclock/fbr
 import { getFbrConfig, toSellerInfo } from '../../services/fbr-config.js';
 import { enqueueFbrSubmission, getFbrRowByOrder } from '../../db/repositories/fbr-queue-repo.js';
 import { fbrWorker } from '../../services/fbr-worker.js';
+import { getReceiptPrinterConfig } from '../../services/printer-config.js';
 import { decrementForOrder } from '../../db/repositories/stock-movement-repo.js';
 import { getOrderStockStatus } from '../../db/repositories/order-stock-repo.js';
 import { kitchenTicketsNotPrinted } from '../../db/repositories/print-queue-repo.js';
@@ -726,7 +727,8 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       // (a foodpanda order has no cash leg: no row, and the drawer stays shut).
       drawerOpenId = tenderOrder(
         ctx.db,
-        { orderId: payload.orderId, payments: payload.payments, foodpanda: fp.data },
+        // drawerOpensOn: Settings → Printers, which sales open the drawer (0052).
+        { orderId: payload.orderId, payments: payload.payments, foodpanda: fp.data, drawerOpensOn: getReceiptPrinterConfig(ctx.db)?.drawer?.opensOn ?? null },
         { userId: s.id, deviceId: ctx.deviceId },
       ).drawerOpenId;
     } catch (e) {
@@ -1016,7 +1018,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     try {
       drawerOpenId = markOrderServed(
         ctx.db,
-        { orderId: payload.orderId, payment: payload.payment },
+        { orderId: payload.orderId, payment: payload.payment, drawerOpensOn: getReceiptPrinterConfig(ctx.db)?.drawer?.opensOn ?? null },
         { userId: s.id, deviceId: ctx.deviceId },
       ).drawerOpenId;
     } catch (e) {
@@ -1069,6 +1071,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
           payment: payload.payment,
           riderKeepsCents: payload.riderKeepsCents,
           ...(payload.refusedItem === true ? { refusedItem: true } : {}),
+          drawerOpensOn: getReceiptPrinterConfig(ctx.db)?.drawer?.opensOn ?? null,
         },
         { userId: s.id, deviceId: ctx.deviceId },
       ).drawerOpenId;

@@ -52,6 +52,8 @@ import {
   declinedOfferRule,
   taxAfterDiscount,
   tillDiscountRule,
+  digitalCentsOf,
+  splitTender,
   tradingDayOfInstant,
   validateOrderForTender,
   validateVoid,
@@ -119,7 +121,7 @@ import type {
   OrderHistoryPage,
   OrderHistoryRow,
 } from '@cheeseoclock/shared-types';
-import { orderChoiceGroups } from '@cheeseoclock/shared-types';
+import { orderChoiceGroups, saleOpensDrawer, type DrawerOpensOn } from '@cheeseoclock/shared-types';
 
 interface OrderRow {
   id: string;
@@ -162,6 +164,11 @@ interface OrderRow {
   sent_at?: string | null;
   /** What an outside rider keeps, frozen at Send out (0049); null = own rider, not out, or before 0.7.34. */
   rider_keeps_cents?: number | null;
+  /** The bill by card / wallet / bank (0052); null = no card rate on the order. */
+  digital_total_cents?: number | null;
+  /** The part before tax paid by card / wallet / bank, and the tax on it (0052); 0 = none. */
+  digital_net_cents?: number | null;
+  digital_tax_cents?: number | null;
 }
 
 const ORDER_CAME_BY: readonly string[] = ['walk_in', 'phone', 'whatsapp', 'website', 'foodpanda'];
@@ -203,6 +210,12 @@ function rowToOrder(row: OrderRow): Order {
     discountCents: row.discount_cents as Order['discountCents'],
     taxCents: row.tax_cents as Order['taxCents'],
     totalCents: row.total_cents as Order['totalCents'],
+    // The bill by card / wallet / bank (0052), only on an order with a card
+    // rate; and, once paid, what of it went at the card rate. An order from
+    // before 0052, or without a card rate, reads exactly as before.
+    ...(typeof row.digital_total_cents === 'number' ? { digitalTotalCents: row.digital_total_cents as Order['totalCents'] } : {}),
+    ...(row.digital_net_cents ? { digitalNetCents: row.digital_net_cents as Order['totalCents'] } : {}),
+    ...(row.digital_tax_cents ? { digitalTaxCents: row.digital_tax_cents as Order['totalCents'] } : {}),
     createdAt: row.created_at,
     // When it was sent (0048), only once it was: an order never sent, or one
     // from before 0.7.34, reads exactly as before (every reader falls back to
@@ -246,7 +259,8 @@ const ORDER_SELECT = `
   customer_name_snapshot, customer_phone_snapshot, delivery_address_snapshot, delivery_notes,
   assigned_rider_id, dispatched_at, delivered_at,
   created_at, updated_at, device_id, version,
-  deleted_at, deleted_by, delete_reason, delete_kind, delete_stock, came_by, sent_at, rider_keeps_cents
+  deleted_at, deleted_by, delete_reason, delete_kind, delete_stock, came_by, sent_at, rider_keeps_cents,
+  digital_total_cents, digital_net_cents, digital_tax_cents
 `;
 
 /**
@@ -1995,9 +2009,11 @@ export function addOrderItem(
         categoryNeverDiscounted({ name: itemRow.category_name ?? '', noDiscount: noDiscountOf(itemRow.category_no_discount) }));
 
     const taxRow = db
-      .prepare(`SELECT rate_bps FROM tax_categories WHERE id = ? AND deleted_at IS NULL`)
-      .get(itemRow.tax_category_id) as { rate_bps: number } | undefined;
+      .prepare(`SELECT rate_bps, digital_rate_bps FROM tax_categories WHERE id = ? AND deleted_at IS NULL`)
+      .get(itemRow.tax_category_id) as { rate_bps: number; digital_rate_bps: number | null } | undefined;
     const rateBps = taxRow?.rate_bps ?? 0;
+    // The category's card rate (0052), frozen on the line like its rate; null = none.
+    const digitalRateBps = taxRow?.digital_rate_bps ?? null;
 
     const unitPrice = input.unitPriceOverrideCents ?? itemRow.base_price_cents;
 
@@ -2051,9 +2067,9 @@ export function addOrderItem(
       `INSERT INTO order_items
          (id, order_id, menu_item_id, menu_item_name, combo_id, parent_order_item_id,
           quantity, unit_price_cents, line_total_cents, tax_category_id, tax_rate_bps_snapshot,
-          prep_station_snapshot, notes, kitchen_status, no_discount,
+          digital_rate_bps_snapshot, prep_station_snapshot, notes, kitchen_status, no_discount,
           created_at, updated_at, device_id, version)
-       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 1)`,
+       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 1)`,
     ).run(
       itemId,
       input.orderId,
@@ -2065,6 +2081,7 @@ export function addOrderItem(
       lineTotal,
       itemRow.tax_category_id,
       rateBps,
+      digitalRateBps,
       itemRow.prep_station,
       input.notes ?? null,
       noDiscount ? 1 : 0,
@@ -2428,20 +2445,48 @@ export interface ApplyDiscountOptions extends OrderEditing {
 function discountLinesOf(
   db: AppDatabase,
   orderId: string,
-): Array<{ lineTotalCents: number; menuItemName: string; taxRateBps: number; noDiscount: boolean }> {
+): Array<{ lineTotalCents: number; menuItemName: string; taxRateBps: number; noDiscount: boolean; digitalRateBps: number | null }> {
   const rows = db
     .prepare(
-      `SELECT line_total_cents, menu_item_name, tax_rate_bps_snapshot, no_discount
+      `SELECT line_total_cents, menu_item_name, tax_rate_bps_snapshot, digital_rate_bps_snapshot, no_discount
          FROM order_items WHERE order_id = ? AND deleted_at IS NULL
         ORDER BY created_at, id`,
     )
-    .all(orderId) as Array<{ line_total_cents: number; menu_item_name: string; tax_rate_bps_snapshot: number; no_discount: number }>;
+    .all(orderId) as Array<{
+    line_total_cents: number;
+    menu_item_name: string;
+    tax_rate_bps_snapshot: number;
+    digital_rate_bps_snapshot: number | null;
+    no_discount: number;
+  }>;
   return rows.map((r) => ({
     lineTotalCents: r.line_total_cents,
     menuItemName: r.menu_item_name,
     taxRateBps: r.tax_rate_bps_snapshot,
     noDiscount: r.no_discount === 1,
+    // The line's card rate (0052); null = none.
+    digitalRateBps: r.digital_rate_bps_snapshot ?? null,
   }));
+}
+
+/**
+ * The bill if paid entirely by card / wallet / bank (orders.digital_total_cents,
+ * 0052): subtotal less discount, plus each line's tax at its card rate on what
+ * is left of it — the discount shared exactly as for the stored tax
+ * (taxAfterDiscount), so the two bills differ only by the rates. Null when no
+ * line carries a card rate different from its rate: then the total is the
+ * total however the customer pays, as before 0052.
+ */
+function cardTotalOf(
+  lines: ReadonlyArray<{ lineTotalCents: number; menuItemName: string; taxRateBps: number; noDiscount: boolean; digitalRateBps: number | null }>,
+  subtotal: number,
+  discount: number,
+  scope: DiscountScope,
+): number | null {
+  if (!lines.some((l) => l.digitalRateBps !== null && l.digitalRateBps !== l.taxRateBps)) return null;
+  const atCardRates = lines.map((l) => ({ ...l, taxRateBps: l.digitalRateBps ?? l.taxRateBps }));
+  const tax = subtotal > 0 ? taxAfterDiscount(atCardRates, discount, scope).taxCents : 0;
+  return subtotal - discount + tax;
 }
 
 export function applyDiscount(
@@ -2860,22 +2905,25 @@ function recomputeOrderTotals(
   // preview, the FBR mapper and the website's estimate split it the same
   // way. Lines in insertion order so they all agree.
   const tax = subtotal > 0 ? taxAfterDiscount(lines, discount, scope).taxCents : 0;
+  // The same bill paid by card / wallet / bank (0052): the same shares, each
+  // line at its card rate. Null when no line has one: the total is the total.
+  const digitalTotal = cardTotalOf(lines, subtotal, discount, scope);
 
   const total = subtotal - discount + tax;
   const now = nowIso();
 
   db.prepare(
     `UPDATE orders SET
-       subtotal_cents = ?, discount_cents = ?, tax_cents = ?, total_cents = ?,
+       subtotal_cents = ?, discount_cents = ?, tax_cents = ?, total_cents = ?, digital_total_cents = ?,
        updated_at = ?, version = version + 1
      WHERE id = ?`,
-  ).run(subtotal, discount, tax, total, now, orderId);
+  ).run(subtotal, discount, tax, total, digitalTotal, now, orderId);
 
   enqueueSync(db, {
     entityType: 'orders',
     entityId: orderId,
     op: 'upsert',
-    payload: { id: orderId, subtotalCents: subtotal, discountCents: discount, taxCents: tax, totalCents: total },
+    payload: { id: orderId, subtotalCents: subtotal, discountCents: discount, taxCents: tax, totalCents: total, digitalTotalCents: digitalTotal },
   });
   // Note: no audit_log for total recomputes — they're a side-effect, not a user action
   void actor; // (reserved for future per-recompute audit if needed)
@@ -2910,15 +2958,101 @@ function recordCashSale(
   orderId: string,
   payments: ReadonlyArray<{ method: PaymentMethod; amountCents: number }>,
   actor: Actor & { userId: string },
+  opensOn: DrawerOpensOn | null | undefined = null,
 ): string | null {
   const cash = payments.filter((p) => p.method === 'cash').reduce((n, p) => n + p.amountCents, 0);
-  if (cash <= 0) return null;
-  return recordDrawerOpen(db, { kind: 'sale', orderId, amountCents: cash }, actor).id;
+  if (cash > 0) return recordDrawerOpen(db, { kind: 'sale', orderId, amountCents: cash }, actor).id;
+  // A card / wallet / bank sale (0052): the drawer opens for the slip when the
+  // till is set to open on every sale (Settings → Printers; the default) — on
+  // record as a sale that moved no cash. Never for foodpanda's money.
+  if (digitalCentsOf(payments) > 0 && saleOpensDrawer(opensOn, false)) {
+    return recordDrawerOpen(db, { kind: 'sale', orderId, amountCents: null, reason: CARD_SALE_DRAWER_REASON }, actor).id;
+  }
+  return null;
+}
+
+/** Why the drawer opened on a card / wallet / bank sale (the drawer log). */
+export const CARD_SALE_DRAWER_REASON = 'Card sale: the slip goes in the drawer';
+
+/** The bill as the customer's legs settle it (cardRateSettlement). */
+interface SettledBill {
+  totalCents: number;
+  taxCents: number;
+  digitalNetCents: number;
+  digitalTaxCents: number;
+}
+
+/**
+ * The bill as these legs settle it when the order carries a card rate (0052;
+ * pos-domain splitTender): the card / wallet / bank part at the card rates,
+ * the cash part at the cash rates. Null when the order has no card rate, or
+ * is foodpanda's: the stored total stands and the caller checks the legs
+ * against it as before 0052. Legs that do not fit are refused in plain words.
+ */
+function cardRateSettlement(
+  order: Order,
+  payments: ReadonlyArray<{ method: PaymentMethod; amountCents: number }>,
+): SettledBill | null {
+  if (order.mode === 'foodpanda' || typeof order.digitalTotalCents !== 'number') return null;
+  const sum = payments.reduce((s, p) => s + p.amountCents, 0);
+  const digital = digitalCentsOf(payments);
+  const split = splitTender(
+    { totalCents: order.totalCents, digitalTotalCents: order.digitalTotalCents, netCents: order.subtotalCents - order.discountCents },
+    digital,
+  );
+  if (!split.ok) throw new Error(split.reason);
+  const cash = sum - digital;
+  if (cash !== split.cashDueCents) {
+    const rs = (cents: number) => (cents / 100).toLocaleString('en-PK', { maximumFractionDigits: 2 });
+    if (digital === 0) throw new Error(`Payments (Rs ${sum / 100}) must equal the order total (Rs ${order.totalCents / 100})`);
+    if (cash === 0) {
+      throw new Error(
+        `Rs ${rs(digital)} on the card leaves Rs ${rs(split.cashDueCents)} to pay in cash (the bill by card is Rs ${rs(order.digitalTotalCents)})`,
+      );
+    }
+    throw new Error(`With Rs ${rs(digital)} on the card the cash part is Rs ${rs(split.cashDueCents)}, not Rs ${rs(cash)}`);
+  }
+  return { totalCents: split.totalCents, taxCents: split.taxCents, digitalNetCents: split.digitalNetCents, digitalTaxCents: split.digitalTaxCents };
+}
+
+/**
+ * Writes the settled bill on the order (inside the caller's transaction) and
+ * returns the order as it now reads. Nothing is written when the legs settle
+ * it exactly as stored (an all-cash sale): the row stays byte for byte as it
+ * was, as before 0052.
+ */
+function writeSettledTotals(db: AppDatabase, order: Order, settled: SettledBill, now: string): Order {
+  if (
+    settled.totalCents === order.totalCents &&
+    settled.taxCents === order.taxCents &&
+    settled.digitalNetCents === (order.digitalNetCents ?? 0) &&
+    settled.digitalTaxCents === (order.digitalTaxCents ?? 0)
+  ) {
+    return order;
+  }
+  db.prepare(
+    `UPDATE orders SET tax_cents = ?, total_cents = ?, digital_net_cents = ?, digital_tax_cents = ?,
+                       updated_at = ?, version = version + 1
+      WHERE id = ?`,
+  ).run(settled.taxCents, settled.totalCents, settled.digitalNetCents, settled.digitalTaxCents, now, order.id);
+  return {
+    ...order,
+    taxCents: settled.taxCents as Order['taxCents'],
+    totalCents: settled.totalCents as Order['totalCents'],
+    ...(settled.digitalNetCents ? { digitalNetCents: settled.digitalNetCents as Order['totalCents'] } : {}),
+    ...(settled.digitalTaxCents ? { digitalTaxCents: settled.digitalTaxCents as Order['totalCents'] } : {}),
+  };
 }
 
 export function tenderOrder(
   db: AppDatabase,
-  input: { orderId: string; payments: TenderInputItem[]; foodpanda?: FoodpandaTenderCheck | null },
+  input: {
+    orderId: string;
+    payments: TenderInputItem[];
+    foodpanda?: FoodpandaTenderCheck | null;
+    /** Settings → Printers: which sales open the drawer (0052); absent = every sale. */
+    drawerOpensOn?: DrawerOpensOn | null;
+  },
   actor: Actor & { userId: string },
 ): OrderWithDrawer {
   let result!: OrderWithDrawer;
@@ -2955,7 +3089,11 @@ export function tenderOrder(
     // payments array is valid and inserts no payment rows (payments has a
     // CHECK (amount_cents != 0)). The order is still stamped paid below.
     const nothingToPay = order.totalCents === 0 && input.payments.length === 0;
-    if (!nothingToPay) {
+    // The bill as these legs settle it (0052): with a card rate on the order
+    // the card part is taxed at it (pos-domain splitTender) and the legs must
+    // fit that; without one the stored total stands, checked below as before.
+    const settled = nothingToPay ? null : cardRateSettlement(order, input.payments);
+    if (!nothingToPay && settled === null) {
       // The payments ARE the sale: they must add up to the bill exactly. More
       // than the bill was accepted (a Rs 5,000 card charge on a Rs 2,000 order
       // went into the books as Rs 5,000 of sales). Cash change lives in
@@ -3039,6 +3177,9 @@ export function tenderOrder(
     // `paid` straight from tender used to make prepaid deliveries vanish from
     // the board with no way to assign a rider.
     const nextStatus: OrderStatus = 'sent_to_kitchen';
+    // The bill as settled (0052): the card part's tax at the card rate,
+    // written before the order is stamped paid so its images carry it.
+    const settledOrder = settled ? writeSettledTotals(db, order, settled, now) : order;
     // Paid and sent in one step (Pay now, foodpanda's pay-and-send): sent now
     // too (0048), stamped once like Send to kitchen.
     db.prepare(
@@ -3046,7 +3187,7 @@ export function tenderOrder(
         WHERE id = ?`,
     ).run(nextStatus, now, now, now, input.orderId);
 
-    const finalized = { ...order, status: nextStatus, paidAt: now, sentAt: order.sentAt ?? now };
+    const finalized = { ...settledOrder, status: nextStatus, paidAt: now, sentAt: order.sentAt ?? now };
     enqueueSync(db, {
       entityType: 'orders',
       entityId: input.orderId,
@@ -3065,9 +3206,10 @@ export function tenderOrder(
     // A foodpanda order's economics, frozen now: next month's terms never rewrite it.
     if (order.mode === 'foodpanda') writeFoodpandaTerms(db, order, tabletTotalCents, actor);
 
-    // Cash in the drawer: its open on record with the sale (the cash part).
-    // foodpanda pays foodpanda, never the drawer: no cash leg, no row, no pulse.
-    const drawerOpenId = recordCashSale(db, input.orderId, payments, actor);
+    // Cash in the drawer: its open on record with the sale (the cash part); a
+    // card sale's when the till opens on every sale (0052). foodpanda pays
+    // foodpanda, never the drawer: no cash leg, no row, no pulse.
+    const drawerOpenId = recordCashSale(db, input.orderId, payments, actor, input.drawerOpensOn);
     result = { ...finalized, drawerOpenId };
   });
   tx();
@@ -3716,7 +3858,7 @@ export function getOrderSnapshot(
     .prepare(
       `SELECT oi.id, oi.order_id, oi.menu_item_id, oi.menu_item_name, oi.combo_id,
               oi.parent_order_item_id, oi.quantity, oi.unit_price_cents, oi.line_total_cents,
-              oi.tax_category_id, oi.tax_rate_bps_snapshot, oi.prep_station_snapshot,
+              oi.tax_category_id, oi.tax_rate_bps_snapshot, oi.digital_rate_bps_snapshot, oi.prep_station_snapshot,
               oi.notes, oi.kitchen_status, oi.no_discount, oi.created_at, oi.updated_at, oi.device_id, oi.version,
               c.name AS category_name
          FROM order_items oi
@@ -3736,6 +3878,7 @@ export function getOrderSnapshot(
     line_total_cents: number;
     tax_category_id: string;
     tax_rate_bps_snapshot: number | null;
+    digital_rate_bps_snapshot: number | null;
     prep_station_snapshot: PrepStation;
     notes: string | null;
     kitchen_status: OrderItem['kitchenStatus'];
@@ -3787,6 +3930,8 @@ export function getOrderSnapshot(
     lineTotalCents: r.line_total_cents as OrderItem['lineTotalCents'],
     taxCategoryId: r.tax_category_id as OrderItem['taxCategoryId'],
     taxRateBps: r.tax_rate_bps_snapshot ?? 0,
+    // The line's card rate (0052), only when it has one: every other line reads exactly as before.
+    ...(typeof r.digital_rate_bps_snapshot === 'number' ? { digitalRateBps: r.digital_rate_bps_snapshot } : {}),
     notes: r.notes,
     kitchenStatus: r.kitchen_status,
     // The line's own snapshot (0047), never worked out again from the category it is in today.
@@ -4561,6 +4706,8 @@ export function markOrderServed(
       tenderedCents?: number | null;
       referenceNo?: string | null;
     };
+    /** Settings → Printers: which sales open the drawer (0052); absent = every sale. */
+    drawerOpensOn?: DrawerOpensOn | null;
   },
   actor: Actor & { userId: string },
 ): OrderWithDrawer {
@@ -4593,7 +4740,10 @@ export function markOrderServed(
       // "Nothing to pay — complete order" does for a cart.
       const nothingToPay = p.amountCents === 0 && order.totalCents === 0;
       if (p.amountCents <= 0 && !nothingToPay) throw new Error('Payment amount must be positive');
-      if (p.amountCents !== order.totalCents) {
+      // With a card rate on the order (0052) the one leg settles the bill at
+      // its rate (pos-domain splitTender); else it must be the stored total.
+      const settled = nothingToPay ? null : cardRateSettlement(order, [p]);
+      if (settled === null && p.amountCents !== order.totalCents) {
         throw new Error(
           `Payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${
             order.totalCents / 100
@@ -4603,6 +4753,7 @@ export function markOrderServed(
       if (p.method === 'cash' && p.tenderedCents != null && p.tenderedCents < p.amountCents) {
         throw new Error('Cash tendered cannot be less than the cash amount');
       }
+      if (settled) writeSettledTotals(db, order, settled, now);
       if (!nothingToPay) {
         const pid = uuidv7();
         db.prepare(
@@ -4666,8 +4817,8 @@ export function markOrderServed(
       before: order,
       after,
     });
-    // Cash collected at the table / counter: a cash sale's drawer open.
-    const drawerOpenId = input.payment ? recordCashSale(db, input.orderId, [input.payment], actor) : null;
+    // Cash collected at the table / counter: a cash sale's drawer open (a card sale's when the till opens on every sale).
+    const drawerOpenId = input.payment ? recordCashSale(db, input.orderId, [input.payment], actor, input.drawerOpensOn) : null;
     result = { ...after, drawerOpenId };
   });
   tx();
@@ -5136,6 +5287,8 @@ export function markOrderDelivered(
     riderKeepsCents?: number | null;
     /** "Customer refused an item": its part refund is owed (outside rider's Delivered + Pay only). */
     refusedItem?: boolean;
+    /** Settings → Printers: which sales open the drawer (0052); absent = every sale. */
+    drawerOpensOn?: DrawerOpensOn | null;
   },
   actor: Actor & { userId: string },
 ): OrderWithDrawer {
@@ -5194,7 +5347,10 @@ export function markOrderDelivered(
       // Nothing to pay (a 100% discount): delivered and closed with no payment row.
       const nothingToPay = p.amountCents === 0 && order.totalCents === 0;
       if (p.amountCents <= 0 && !nothingToPay) throw new Error('Payment amount must be positive');
-      if (p.amountCents !== order.totalCents) {
+      // With a card rate on the order (0052) the one leg settles the bill at
+      // its rate (pos-domain splitTender); else it must be the stored total.
+      const settled = nothingToPay ? null : cardRateSettlement(order, [p]);
+      if (settled === null && p.amountCents !== order.totalCents) {
         throw new Error(
           `COD payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${
             order.totalCents / 100
@@ -5204,6 +5360,7 @@ export function markOrderDelivered(
       if (p.method === 'cash' && p.tenderedCents != null && p.tenderedCents < p.amountCents) {
         throw new Error('Cash tendered cannot be less than the cash amount');
       }
+      if (settled) writeSettledTotals(db, order, settled, now);
       if (!nothingToPay) {
         const pid = uuidv7();
         db.prepare(
@@ -5274,11 +5431,12 @@ export function markOrderDelivered(
       after: refusedItem ? { ...after, [REFUSED_ITEM_AUDIT_KEY]: true } : after,
     });
     // Cash on delivery brought back by the rider: a cash sale's drawer open
-    // (an outside rider's was written when he settled).
+    // (an outside rider's was written when he settled; a card sale's when the
+    // till opens on every sale).
     const drawerOpenId = outside
       ? outsideDrawerOpenId
       : input.payment
-        ? recordCashSale(db, input.orderId, [input.payment], actor)
+        ? recordCashSale(db, input.orderId, [input.payment], actor, input.drawerOpensOn)
         : null;
     result = { ...after, drawerOpenId };
   });

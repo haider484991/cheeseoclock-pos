@@ -62,7 +62,8 @@ describe('quickCashRupees', () => {
 
 describe('one rule on both screens', () => {
   it('Pay and the board both call quickCashRupees; the board has no rule of its own', () => {
-    expect(source('checkout/TenderDialog.tsx')).toMatch(/quickCashRupees\(total\)/);
+    // Pay's quick notes are for what is collected in cash: the total, or the cash part of a split sale (0052).
+    expect(source('checkout/TenderDialog.tsx')).toMatch(/quickCashRupees\(cashDue\)/);
     const board = source('orders/MarkDeliveredDialog.tsx');
     expect(board).toMatch(/import \{ quickCashRupees \} from '\.\.\/checkout\/tenderAmounts';/);
     expect(board).toMatch(/quickCashRupees\(order\.totalCents\)/);

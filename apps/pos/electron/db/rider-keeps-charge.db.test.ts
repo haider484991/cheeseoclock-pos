@@ -895,12 +895,20 @@ live("(5) one of the shop's own riders: exactly as v0.7.33", () => {
       'drawer_opens:drawer_sale',
     ]);
     expect(getShiftSummary(shop.db, shop.shiftId)).toMatchObject({ riderChargesCents: 0, expectedCashCents: FLOAT + o.total });
-    // A card is his to take, as before.
+    // A card is his to take, as before. Since 0052 the drawer opens for the
+    // slip too (Settings → Printers, every sale: the default); set to cash
+    // sales only, a card at the door leaves it shut as it always did.
     const card = await out(shop, { own: true });
     at('20:30');
-    expect(r.markOrderDelivered(shop.db, { orderId: card.id, payment: { method: 'card', amountCents: card.total } }, CASHIER)).toMatchObject({
+    expect(r.markOrderDelivered(shop.db, { orderId: card.id, payment: { method: 'card', amountCents: card.total }, drawerOpensOn: 'cash' }, CASHIER)).toMatchObject({
       status: 'paid',
       drawerOpenId: null,
+    });
+    const slip = await out(shop, { own: true });
+    at('20:30');
+    expect(r.markOrderDelivered(shop.db, { orderId: slip.id, payment: { method: 'card', amountCents: slip.total } }, CASHIER)).toMatchObject({
+      status: 'paid',
+      drawerOpenId: expect.any(String),
     });
   });
 

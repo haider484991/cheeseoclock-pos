@@ -217,6 +217,18 @@ export interface TaxCategory {
   id: UUID;
   name: string;
   rateBps: Bps;
+  /**
+   * The rate when the bill is paid by card, wallet or bank transfer
+   * (tax_categories.digital_rate_bps, migration 0052): Sindh charges a
+   * restaurant's bill a lower rate paid that way. Null / absent = the same
+   * as rateBps (no card rate). Read it through taxRateByPayment.
+   */
+  digitalRateBps?: Bps | null;
+}
+
+/** The rate a tax category charges a bill paid by card / wallet / bank: its card rate, else its rate. */
+export function taxRateByPayment(t: { rateBps: number; digitalRateBps?: number | null }, digital: boolean): number {
+  return digital && typeof t.digitalRateBps === 'number' ? t.digitalRateBps : t.rateBps;
 }
 
 /**

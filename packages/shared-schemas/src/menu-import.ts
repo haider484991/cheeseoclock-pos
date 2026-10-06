@@ -151,7 +151,12 @@ export const menuImportFileSchema = z
      * this rate, created if the POS has none. Null = leave tax as it is.
      */
     tax: z
-      .object({ name: z.string().trim().min(1).max(80), rateBps: bpsSchema })
+      .object({
+        name: z.string().trim().min(1).max(80),
+        rateBps: bpsSchema,
+        /** The rate when paid by card / wallet / bank (0052); absent = none (a file from before it). */
+        digitalRateBps: bpsSchema.nullable().optional(),
+      })
       .nullable()
       .default(null),
     categories: z.array(menuImportCategorySchema).max(100),
