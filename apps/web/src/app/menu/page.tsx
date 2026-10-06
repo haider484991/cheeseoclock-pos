@@ -55,6 +55,8 @@ export default async function MenuPage() {
   const accepting = store.acceptingOrders;
   const pickupAvailable = store.pickupAvailable;
   const pickupDiscountPercent = store.pickupDiscountPercent;
+  // v0.7.37: the owner's % off a delivery's food (0 = none, as before).
+  const deliveryDiscountPercent = store.deliveryDiscountPercent;
   // Where the owner delivers and what it costs: the settings block that came
   // with this menu, else the built-in areas (as before any block).
   const block = parseStoredSettings(menu?.settings ?? null);
@@ -78,6 +80,7 @@ export default async function MenuPage() {
             acceptingOrders={accepting}
             pickupAvailable={pickupAvailable}
             pickupDiscountPercent={pickupDiscountPercent}
+            deliveryDiscountPercent={deliveryDiscountPercent}
             deliveryFacts={deliveryFacts}
             closedNotice={closedNotice}
             shop={shop}

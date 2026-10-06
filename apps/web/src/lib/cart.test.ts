@@ -227,4 +227,17 @@ describe('whatsappOrderText', () => {
     expect(text).toContain('(before tax)');
     expect(text).not.toContain('Address');
   });
+
+  it('adds the map pin (a delivery’s only) and the social handle at the end (5 Oct 2026); without them, exactly as before', () => {
+    const map = 'https://maps.google.com/?q=24.808354,67.068452';
+    const base = { fulfilment: 'delivery' as const, areaName: 'DHA Phase 6', name: 'Ahmed', address: 'House 12' };
+    const plain = whatsappOrderText(cart, base);
+    expect(whatsappOrderText(cart, { ...base, pinUrl: null, social: '  ' })).toBe(plain);
+    expect(whatsappOrderText(cart, { ...base, pinUrl: map, social: ' @ahmed_k ' })).toBe(
+      `${plain}\nLocation: ${map}\nInstagram/Facebook: @ahmed_k`,
+    );
+    const pickup = whatsappOrderText(cart, { fulfilment: 'pickup', pinUrl: map, social: '@ahmed_k' });
+    expect(pickup).not.toContain('Location:');
+    expect(pickup.endsWith('Instagram/Facebook: @ahmed_k')).toBe(true);
+  });
 });

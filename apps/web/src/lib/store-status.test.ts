@@ -105,3 +105,32 @@ describe('pick-up from the owner’s settings block', () => {
     expect(evaluateStatus({ ...beat, settings_pickup: { offered: true, percent: 12.5 } }, NOW).pickupDiscountPercent).toBe(15);
   });
 });
+
+describe('the website % off a delivery’s food (v0.7.37, WEBSITE DELIVERY DISCOUNT)', () => {
+  const beat = { accepting_orders: true, updated_at: ago(5_000), pickup: true, pickup_discount_pct: 10, delivery_discount: true };
+  const on = { offered: true, percent: 10, alsoDelivery: true };
+
+  it('only when the owner’s block says so AND the listening till bills it AND the shop is open', () => {
+    expect(evaluateStatus({ ...beat, settings_pickup: on }, NOW).deliveryDiscountPercent).toBe(10);
+    // Pick-up switched off does not switch the delivery % off: they are separate choices.
+    expect(evaluateStatus({ ...beat, settings_pickup: { ...on, offered: false } }, NOW)).toMatchObject({
+      pickupAvailable: false,
+      deliveryDiscountPercent: 10,
+    });
+    expect(evaluateStatus({ ...beat, settings_pickup: { offered: true, percent: 10 } }, NOW).deliveryDiscountPercent).toBe(0);
+    expect(evaluateStatus({ ...beat, delivery_discount: false, settings_pickup: on }, NOW).deliveryDiscountPercent).toBe(0);
+    expect(evaluateStatus({ ...beat, delivery_discount: null, settings_pickup: on }, NOW).deliveryDiscountPercent).toBe(0);
+    expect(evaluateStatus({ ...beat, accepting_orders: false, settings_pickup: on }, NOW).deliveryDiscountPercent).toBe(0);
+    expect(evaluateStatus({ ...beat, updated_at: ago(HEARTBEAT_STALE_MS + 1_000), settings_pickup: on }, NOW).deliveryDiscountPercent).toBe(0);
+    // No block at all (the heartbeat alone never turns it on).
+    expect(evaluateStatus(beat, NOW).deliveryDiscountPercent).toBe(0);
+    expect(evaluateStatus(null, NOW).deliveryDiscountPercent).toBe(0);
+  });
+
+  it('the block reader keeps alsoDelivery only as an exact true', () => {
+    expect(blockPickupOf(on)).toEqual(on);
+    expect(blockPickupOf({ ...on, alsoDelivery: 'yes' })).toEqual({ offered: true, percent: 10 });
+    expect(blockPickupOf({ ...on, alsoDelivery: false })).toEqual({ offered: true, percent: 10 });
+    expect(evaluateStatus({ ...beat, settings_pickup: { ...on, alsoDelivery: 1 } }, NOW).deliveryDiscountPercent).toBe(0);
+  });
+});

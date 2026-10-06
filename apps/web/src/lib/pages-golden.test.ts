@@ -391,16 +391,18 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
 
   it('the golden copy is the one taken from v0.7.30 (a few of its facts, spelled out)', () => {
     const homeHtml = golden.html[golden.pages['a']!['/']!]!;
-    expect(homeHtml).toContain('Open daily · 12 noon – 1 am');
+    expect(homeHtml).toContain('Open daily · 1 pm – 1 am');
     // The greeting in every order link (the HTML writes its apostrophes as &#x27;).
     expect(homeHtml).toContain('https://wa.me/923009367865?text=Hi%20Cheese%20O&#x27;Clock!%20I&#x27;d%20like%20to%20place%20an%20order%3A%20');
-    expect(homeHtml).toContain('"openingHoursSpecification":[{"@type":"OpeningHoursSpecification","dayOfWeek":["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"],"opens":"12:00","closes":"01:00"}]');
+    expect(homeHtml).toContain('"openingHoursSpecification":[{"@type":"OpeningHoursSpecification","dayOfWeek":["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"],"opens":"13:00","closes":"01:00"}]');
     expect(homeHtml).toContain('"paymentAccepted":"Cash on Delivery"');
-    expect(homeHtml).not.toContain('sameAs');
+    // The shop's Instagram and Facebook (owner, 5 Oct 2026: "add social media"): JSON-LD and the footer name them.
+    expect(homeHtml).toContain('"sameAs":["https://www.instagram.com/cheeseoclock_/","https://www.facebook.com/cheeseoclock.karachi"]');
+    expect(homeHtml).toContain('Instagram →');
     expect((golden.metadata['a']!['layout'] as Metadata)['description']).toBe(
-      'Signature pizzas, crispy chicken burgers and fries delivered across DHA Phases 1–8 and Clifton. Cash on delivery, open daily 12 noon – 1 am. Order online or on WhatsApp.',
+      'Signature pizzas, crispy chicken burgers and fries delivered across DHA Phases 1–8 and Clifton. Cash on delivery, open daily 1 pm – 1 am. Order online or on WhatsApp.',
     );
-    expect(JSON.stringify(golden.images['a']!['/opengraph-image'])).toContain('12 NOON – 1 AM');
+    expect(JSON.stringify(golden.images['a']!['/opengraph-image'])).toContain('1 PM – 1 AM');
     expect((golden.routes['a'] as { manifest: { short_name: string } }).manifest.short_name).toBe("Cheese O'Clock");
     // The /menu page in each state: no database → the WhatsApp fallback; a menu → the ordering app, open and closed.
     expect(golden.html[golden.pages['a']!['/menu']!]).toContain('Menu coming right up');

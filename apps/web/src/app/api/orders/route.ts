@@ -8,6 +8,7 @@ import {
   outsideZoneMessage,
   zonePausedMessage,
 } from '@/lib/delivery-facts';
+import { composeNotes, cleanSocial, parsePin } from '@/lib/checkout-extras';
 import { feeItemIdsOf, zoneFeeItemFor } from '@/lib/delivery-zones';
 import { formatCents, normalizePhone } from '@/lib/format';
 import { menuWithoutDrinkBrand } from '@/lib/menu-view';
@@ -103,6 +104,14 @@ const PlaceOrderSchema = z
     /** An area id (the settings block's, else the compiled list's). Required for a delivery: no zone, no delivery. */
     zoneId: z.string().trim().max(40).optional(),
     notes: z.string().trim().max(500, 'Please keep the notes under 500 characters.').optional(),
+    /**
+     * Two optional extras (5 Oct 2026, lib/checkout-extras): where a delivery customer pinned themselves
+     * ({ lat, lng, accuracyM }) and their Instagram / Facebook handle for the Tag-us offer. They ride in the
+     * order's notes (a map link, "Social: …") and are read leniently — whatever is not one is dropped, never
+     * a reason to refuse an order.
+     */
+    locationPin: z.unknown().optional(),
+    social: z.unknown().optional(),
     items: z
       .array(OrderItemSchema)
       .min(1, 'Your order is empty.')
@@ -384,8 +393,10 @@ export async function POST(req: Request): Promise<Response> {
       // gets the order, with the fee spelled out for the cashier. A free area
       // has no charge line.
       const feeItem = zoneFeeItemFor(menu, zone);
+      // The charge never takes a share of the website's delivery % (WEBSITE DELIVERY DISCOUNT, v0.7.37):
+      // noDiscount on its PRICED line only — its stored line stays as before (the till knows it by name).
       if (feeItem) {
-        priced.push({ lineTotalCents: feeItem.basePriceCents, taxRateBps: feeItem.taxRateBps });
+        priced.push({ lineTotalCents: feeItem.basePriceCents, taxRateBps: feeItem.taxRateBps, noDiscount: true });
         lines.push({
           posItemId: feeItem.posItemId,
           name: feeItem.name,
@@ -395,16 +406,23 @@ export async function POST(req: Request): Promise<Response> {
           notes: null,
         });
       } else {
-        priced.push({ lineTotalCents: zone.feeCents, taxRateBps: 0 });
+        priced.push({ lineTotalCents: zone.feeCents, taxRateBps: 0, noDiscount: true });
         const reminder = `Delivery ${zone.name} ${formatCents(zone.feeCents)} — add the delivery charge by hand`;
         orderNotes = orderNotes ? `${reminder}. ${orderNotes}` : reminder;
       }
     }
-    // The till caps order notes at 500 and prefixes "[web] " — stay under it
-    // or the import fails validation and retries until it gives up.
-    if (orderNotes && orderNotes.length > 490) orderNotes = orderNotes.slice(0, 490);
+    // The pin (a delivery's only) and the social handle go first, then the customer's own words. The till
+    // caps order notes at 500 and prefixes "[web] " — composeNotes stays under it (ORDER_NOTES_MAX 490) or the
+    // import fails validation and retries until it gives up; the customer's words are what gives way.
+    orderNotes = composeNotes({
+      pin: pickup ? null : parsePin(input.locationPin),
+      social: cleanSocial(input.social),
+      notes: orderNotes,
+    });
 
-    const totals = priceOrder(priced, pickup ? store.pickupDiscountPercent : 0);
+    // A pick-up's %, or (v0.7.37) the owner's % off a delivery's food — 0 unless the stored block
+    // asks for it and the listening till bills it (store-status deliveryDiscountPercent).
+    const totals = priceOrder(priced, pickup ? store.pickupDiscountPercent : store.deliveryDiscountPercent);
 
     const id = input.clientOrderId ?? uuidv7();
     const inserted = (await sql()`

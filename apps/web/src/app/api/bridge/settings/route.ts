@@ -65,6 +65,8 @@ export async function PUT(req: Request): Promise<Response> {
       websiteMessages: true,
       // This website keeps the items' noDiscount and prices pick-ups without them (an older one strips it).
       noDiscountItems: true,
+      // This website keeps pickup.alsoDelivery and takes the % off a delivery's food (v0.7.37).
+      deliveryDiscount: true,
     };
     return Response.json({ ok: true, data });
   } catch (e) {

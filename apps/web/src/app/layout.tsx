@@ -10,9 +10,12 @@ import {
   SITE_TITLE_TEMPLATE,
 } from '@/lib/page-copy';
 import { JsonLd, restaurantNode, webSiteNode, SITE_URL } from '@/lib/seo';
+import { MetaPixel } from '@/components/MetaPixel';
 import { ShopContactProvider } from '@/components/ordering/ShopContext';
+import { META_PIXEL_ID } from '@/lib/meta-pixel';
 import { shopContactOf } from '@/lib/shop-facts';
 import { getCopyFacts, getShopFacts } from '@/lib/site-facts';
+import { Analytics } from '@vercel/analytics/next';
 import './globals.css';
 
 // The printed menu's type: Anton headlines, Barlow Condensed labels, Barlow body.
@@ -84,6 +87,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en" className={`${display.variable} ${cond.variable} ${sans.variable}`}>
       <body className="font-sans">
+        {/*
+          The Meta Pixel (lib/meta-pixel), only when NEXT_PUBLIC_META_PIXEL_ID is set: with it unset
+          nothing is mounted and every page is as before. First in the body, so its snippet has run
+          before the page's own effects send their events.
+        */}
+        {META_PIXEL_ID !== null && <MetaPixel />}
         {/* The error screen (app/error.tsx, in the browser) gets the owner's name and numbers from here. */}
         <ShopContactProvider contact={shopContactOf(shop)}>{children}</ShopContactProvider>
         {/* Film grain over everything — subtle, pointer-transparent. */}
@@ -92,6 +101,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           className="bg-noise pointer-events-none fixed inset-0 z-[90] opacity-[0.05] mix-blend-overlay"
         />
         <JsonLd nodes={[restaurantNode(shop), webSiteNode(shop)]} />
+        {/* Vercel Web Analytics: visits and page views on the Vercel dashboard. Cookieless; the script only loads on Vercel. */}
+        <Analytics />
       </body>
     </html>
   );

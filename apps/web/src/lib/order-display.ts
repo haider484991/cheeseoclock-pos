@@ -1,5 +1,5 @@
 import type { WebOrderItem } from '@cheeseoclock/shared-types';
-import { NOT_ON_VALUE_DEALS, isLeaveOutChoice, webOrderPickupPercent } from '@cheeseoclock/shared-types';
+import { NOT_ON_VALUE_DEALS, isLeaveOutChoice, webOrderDeliveryPercent, webOrderPickupPercent } from '@cheeseoclock/shared-types';
 import type { SavedLine } from './cart';
 import { isDeliveryChargeItem } from './delivery-zones';
 import { formatCents } from './format';
@@ -74,15 +74,25 @@ export function orderMoney(order: {
  * that discount ÷ subtotal gives), and the totals row, which then says the
  * deals were left out. An order with no flagged line reads as before
  * (discount ÷ subtotal).
+ *
+ * A DELIVERY with a discount (WEBSITE DELIVERY DISCOUNT, v0.7.37) reads its
+ * % on the food it was worked on (shared-types webOrderDeliveryPercent: the
+ * delivery charge and the value deals took no share) and says "off food".
  */
 export function pickupDiscountWords(order: {
   items: readonly WebOrderItem[];
   subtotalCents: number;
   discountCents?: number;
+  fulfilment?: string | null;
 }): { pct: number; row: string } {
-  const pct = webOrderPickupPercent({ ...order, fulfilment: 'pickup' }) ?? 0;
   const leftOut = order.items.some((i) => i.noDiscount === true);
-  return { pct, row: `Pick-up ${pct}% off${leftOut ? ` (${NOT_ON_VALUE_DEALS})` : ''}` };
+  const deals = leftOut ? ` (${NOT_ON_VALUE_DEALS})` : '';
+  if (order.fulfilment === 'delivery') {
+    const pct = webOrderDeliveryPercent({ ...order, fulfilment: 'delivery' });
+    return { pct, row: `Online ${pct}% off food${deals}` };
+  }
+  const pct = webOrderPickupPercent({ ...order, fulfilment: 'pickup' }) ?? 0;
+  return { pct, row: `Pick-up ${pct}% off${deals}` };
 }
 
 /** A placed item's choices, leave-outs apart — the same split the cart shows. */

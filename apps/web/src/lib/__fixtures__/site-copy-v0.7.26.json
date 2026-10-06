@@ -11,7 +11,7 @@
       ],
       "intro": [
         "Phase 6 is home turf. Our kitchen is at Shop 3, Ground Floor, 41-C, Sehar Lane No. 3, Rahat Commercial Area, DHA Phase 6, so Phase 6 is the shortest ride we make. Every order is fired when it comes in, boxed straight from the oven and sent out hot.",
-        "From the Bukhari Commercial lanes to the houses off Khayaban-e-Shahbaz, delivery anywhere in Phase 6 is Rs 200. Late study session, family dinner or a midnight craving — we are open every day from 12 noon until 1 am."
+        "From the Bukhari Commercial lanes to the houses off Khayaban-e-Shahbaz, delivery anywhere in Phase 6 is Rs 200. Late study session, family dinner or a midnight craving — we are open every day from 1 pm until 1 am."
       ],
       "landmarks": [
         "Rahat Commercial",
@@ -47,7 +47,7 @@
         },
         {
           "q": "How late can I order in Phase 6?",
-          "a": "We take orders every day from 12 noon until 1 am — on the website, or on WhatsApp at 0300 9367865 or 0331 2188295."
+          "a": "We take orders every day from 1 pm until 1 am — on the website, or on WhatsApp at 0300 9367865 or 0331 2188295."
         },
         {
           "q": "How do I pay?",
@@ -277,7 +277,7 @@
         },
         {
           "q": "Do you deliver to offices in 9th Commercial?",
-          "a": "Yes — lunch and dinner, from 12 noon. Put the office name and floor in the order notes, and keep your phone close for the rider’s call."
+          "a": "Yes — lunch and dinner, from 1 pm. Put the office name and floor in the order notes, and keep your phone close for the rider’s call."
         },
         {
           "q": "Is WhatsApp ordering available for Phase 4?",
@@ -590,7 +590,7 @@
             "Saturday",
             "Sunday"
           ],
-          "opens": "12:00",
+          "opens": "13:00",
           "closes": "01:00"
         }
       ],
@@ -641,7 +641,11 @@
         "deliveryMethod": [
           "http://purl.org/goodrelations/v1#DeliveryModeOwnFleet"
         ]
-      }
+      },
+      "sameAs": [
+        "https://www.instagram.com/cheeseoclock_/",
+        "https://www.facebook.com/cheeseoclock.karachi"
+      ]
     },
     "website": {
       "@type": "WebSite",

@@ -1,4 +1,4 @@
-import { PICKUP_DISCOUNT_PERCENT, webOrderPickupPercent } from '@cheeseoclock/shared-types';
+import { PICKUP_DISCOUNT_PERCENT, webOrderDeliveryPercent, webOrderPickupPercent } from '@cheeseoclock/shared-types';
 
 /**
  * The website cancels an order it has not seen confirmed this long after the
@@ -48,4 +48,19 @@ export function pickupPercentOf(web: {
   items?: ReadonlyArray<{ unitPriceCents: number; quantity: number; noDiscount?: boolean }>;
 }): number {
   return webOrderPickupPercent(web) ?? PICKUP_DISCOUNT_PERCENT;
+}
+
+/**
+ * The website delivery % (v0.7.37, WEBSITE DELIVERY DISCOUNT) the customer
+ * was shown, read back from the order: the discount ÷ the food it was worked
+ * on (shared-types webOrderDeliveryPercent). 0 for a pick-up and for every
+ * delivery that carries no discount (all of them before v0.7.37) — those
+ * import exactly as before.
+ */
+export function deliveryPercentOf(web: {
+  fulfilment?: string;
+  discountCents?: number;
+  items?: ReadonlyArray<{ name: string; unitPriceCents: number; quantity: number; noDiscount?: boolean }>;
+}): number {
+  return webOrderDeliveryPercent(web);
 }

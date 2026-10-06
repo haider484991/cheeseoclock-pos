@@ -10,6 +10,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_DELIVERY_ZONES,
+  webOrderDeliveryPercent,
   webOrderPickupPercent,
   type PublishedMenu,
   type PublishedMenuItem,
@@ -590,3 +591,203 @@ describe('POST /api/orders — value deals take no pick-up discount (v0.7.34, NO
     expect(JSON.stringify((await stored(d.json.data!.orderId)).items)).not.toContain('noDiscount');
   });
 });
+
+describe('POST /api/orders — the website % off a delivery’s food (v0.7.37, WEBSITE DELIVERY DISCOUNT)', () => {
+  /** menu(true) with a made-up Value Deals section, Big Two marked as a v0.7.34+ till publishes it. */
+  function dealsMenu(): PublishedMenu {
+    const m = menu(true);
+    m.categories.splice(2, 0, {
+      posCategoryId: 'c-deals',
+      name: 'Value Deals',
+      displayOrder: 5,
+      items: [item('big-two', 'Big Two', 3600, { noDiscount: true })],
+    });
+    return m;
+  }
+  /** The till's block by its own code: today's areas, 10%, "also on delivery orders" as given; `version` orders the Saves. */
+  function tillBlock(m: PublishedMenu, alsoDelivery: boolean, version = 1): PublishedSettings {
+    return buildSettingsBlock({
+      zones: DEFAULT_DELIVERY_ZONES.zones.map((z) => ({ ...z, aliases: [...z.aliases], hints: [...z.hints] })),
+      pickup: { offered: true, percent: 10, alsoDelivery },
+      stamps: [{ version, updatedAt: `2026-10-04T10:0${version}:00.000Z` }],
+      menuItems: m.categories.flatMap((c) =>
+        c.items.map((i) => ({ id: i.posItemId, name: i.name, basePriceCents: i.basePriceCents })),
+      ),
+      deviceId: 'till-1',
+    });
+  }
+  /** A till's Publish, then a Save of the website offer (the block alone), through the bridge. */
+  async function setUp(alsoDelivery: boolean, version = 1) {
+    const m = dealsMenu();
+    const pub = await bridgeMenu.PUT(bridge('/api/bridge/menu', { method: 'PUT', body: m }));
+    expect(pub.status).toBe(200);
+    const save = await bridgeSettings.PUT(
+      bridge('/api/bridge/settings', { method: 'PUT', body: { settings: tillBlock(m, alsoDelivery, version), feeItems: [] } }),
+    );
+    expect(save.status).toBe(200);
+    return ((await save.json()) as { data: Record<string, unknown> }).data;
+  }
+  async function shownPct(): Promise<unknown> {
+    const json = (await (await storeStatus.GET()).json()) as { data: { deliveryDiscountPercent?: unknown } };
+    return json.data.deliveryDiscountPercent;
+  }
+  const line = (posItemId: string) => ({ posItemId, quantity: 1, modifierIds: [] });
+  const todayLine = (posItemId: string, name: string, unitPriceCents: number) => ({
+    posItemId,
+    name,
+    quantity: 1,
+    unitPriceCents,
+    modifiers: [],
+    notes: null,
+  });
+  const itemsSent = () => db.orderInsert.find((v) => typeof v === 'string' && v.startsWith('[{"posItemId"'));
+
+  it('off until the owner ticks it AND the listening till bills it: a delivery pays full price, as today', async () => {
+    // The box unticked: no key in the block, nothing off — even from a till that could bill it.
+    await heartbeat(['pickup', 'delivery_discount']);
+    expect(await setUp(false)).toMatchObject({ settings: 'stored', deliveryDiscount: true });
+    expect(await shownPct()).toBe(0);
+    let r = await place({ zoneId: 'dha-6', items: [line('fajita-l')] });
+    expect(r.json.data).toMatchObject({ subtotalCents: 220_000, discountCents: 0, taxCents: 33_000, totalCents: 253_000 });
+    // Ticked, but the listening till is older (no 'delivery_discount'): it would bill full price, so nothing off.
+    await heartbeat(['pickup']);
+    await setUp(true, 2);
+    expect(await shownPct()).toBe(0);
+    r = await place({ zoneId: 'dha-6', items: [line('fajita-l')] });
+    expect(r.json.data).toMatchObject({ discountCents: 0, totalCents: 253_000 });
+    // The shop closed: nothing shown either.
+    await bridgeStatus.PUT(
+      bridge('/api/bridge/status', { method: 'PUT', body: { acceptingOrders: false, deviceId: 'till-1', features: ['pickup', 'delivery_discount'] } }),
+    );
+    expect(await shownPct()).toBe(0);
+  });
+
+  it('on: Big Two + a pizza to DHA Phase 6 — 10% off the pizza only, never Big Two or the Rs 200 charge; the till reads 10%', async () => {
+    await heartbeat(['pickup', 'delivery_discount']);
+    await setUp(true);
+    expect(await shownPct()).toBe(10);
+    const r = await place({ zoneId: 'dha-6', items: [line('big-two'), line('fajita-l')] });
+    expect(r.status).toBe(200);
+    // Rs 200 off the Rs 2,000 pizza; Big Two (Rs 3,600) and the charge (Rs 200) taxed in full; the pizza on Rs 1,800.
+    expect(r.json.data).toMatchObject({
+      fulfilment: 'delivery',
+      subtotalCents: 580_000,
+      discountCents: 20_000,
+      taxCents: 54_000 + 27_000 + 3_000,
+      totalCents: 644_000,
+    });
+    // The stored lines are today's: the flag only on Big Two, never on the charge (the till knows it by name).
+    expect(itemsSent()).toBe(
+      JSON.stringify([
+        { ...todayLine('big-two', 'Big Two', 360_000), noDiscount: true },
+        todayLine('fajita-l', 'Fajita Pizza — Large', 200_000),
+        todayLine('del-200', 'Delivery Charge (Rs 200)', 20_000),
+      ]),
+    );
+    const res = await bridgeOrders.GET(bridge('/api/bridge/orders'));
+    const json = (await res.json()) as {
+      data: Array<{ id: string; fulfilment: string; discountCents: number; items: WebOrderItem[] }>;
+    };
+    const toTill = json.data.find((o) => o.id === r.json.data!.orderId)!;
+    expect(toTill.discountCents).toBe(20_000);
+    expect(webOrderDeliveryPercent(toTill)).toBe(10);
+    // The pick-up reader still says 0 for a delivery (an older till never discounts it).
+    expect(webOrderPickupPercent({ ...toTill, subtotalCents: 580_000 })).toBe(0);
+  });
+
+  it('a delivery of value deals only takes nothing off; the minimum is still the food before any discount', async () => {
+    await heartbeat(['pickup', 'delivery_discount']);
+    await setUp(true);
+    const r = await place({ zoneId: 'clifton-1', items: [line('big-two')] });
+    expect(r.json.data).toMatchObject({ subtotalCents: 385_000, discountCents: 0 });
+  });
+
+  it('a pick-up is unchanged: its own 10%, no charge', async () => {
+    await heartbeat(['pickup', 'delivery_discount']);
+    await setUp(true);
+    const r = await place({ fulfilment: 'pickup', addressLine: undefined, items: [line('big-two'), line('fajita-l')] });
+    expect(r.json.data).toMatchObject({ subtotalCents: 560_000, discountCents: 20_000, totalCents: 621_000 });
+  });
+
+  it('a v0.7.36 till beating in turns it off again (the heartbeat row is the last till’s)', async () => {
+    await heartbeat(['pickup', 'delivery_discount']);
+    await setUp(true);
+    expect(await shownPct()).toBe(10);
+    await heartbeat(['pickup']);
+    expect(await shownPct()).toBe(0);
+    const r = await place({ zoneId: 'dha-6', items: [line('fajita-l')] });
+    expect(r.json.data).toMatchObject({ discountCents: 0 });
+  });
+});
+
+// Last in the file on purpose: the bridge's order pull returns 25 rows, so orders placed here must not come
+// before the tests above that look their own order up in it.
+describe('POST /api/orders — location pin and social handle (5 Oct 2026)', () => {
+  const PIN = { lat: 24.80835364, lng: 67.06845187, accuracyM: 24.6 };
+  const PIN_LINE = 'Map pin: https://maps.google.com/?q=24.808354,67.068452 (about 25 m)';
+
+  it('a delivery with a pin and a handle: both lead the notes, the customer’s words follow; the totals are untouched', async () => {
+    const plain = await place({ zoneId: 'dha-6' });
+    const r = await place({ zoneId: 'dha-6', locationPin: PIN, social: '  @ahmed_k ', notes: 'Ring twice' });
+    expect(r.status).toBe(200);
+    const row = await stored(r.json.data!.orderId);
+    expect(row.notes).toBe(`${PIN_LINE}. Social: @ahmed_k. Ring twice`);
+    expect(row.total_cents).toBe((await stored(plain.json.data!.orderId)).total_cents);
+  });
+
+  it('a pin alone, a handle alone, and neither (notes stay null, as before)', async () => {
+    const pinOnly = await place({ zoneId: 'dha-6', locationPin: PIN });
+    expect((await stored(pinOnly.json.data!.orderId)).notes).toBe(PIN_LINE);
+    const socialOnly = await place({ zoneId: 'dha-6', social: '@ahmed_k' });
+    expect((await stored(socialOnly.json.data!.orderId)).notes).toBe('Social: @ahmed_k');
+    const neither = await place({ zoneId: 'dha-6' });
+    expect((await stored(neither.json.data!.orderId)).notes).toBeNull();
+  });
+
+  it('with the till lacking charge items, the cashier’s reminder stays with the customer’s words, after the pin', async () => {
+    await publish(menu(false));
+    const r = await place({ zoneId: 'emaar', locationPin: PIN, notes: 'Ring twice' });
+    const row = await stored(r.json.data!.orderId);
+    expect(row.notes).toBe(`${PIN_LINE}. Delivery Emaar Crescent Bay (DHA) Rs 250 — add the delivery charge by hand. Ring twice`);
+  });
+
+  it('never a reason to refuse: a pin or a handle that does not read is dropped and the order goes through', async () => {
+    for (const bad of [
+      { locationPin: 'here', social: 42 },
+      { locationPin: { lat: 'x', lng: 67 }, social: { a: 1 } },
+      { locationPin: { lat: 95, lng: 67 }, social: '@' },
+      { locationPin: { lat: 0, lng: 0 }, social: '   ' },
+      { locationPin: null, social: null },
+    ]) {
+      const r = await place({ zoneId: 'dha-6', ...bad });
+      expect(r.status, JSON.stringify(bad)).toBe(200);
+      expect((await stored(r.json.data!.orderId)).notes, JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it('a handle is cleaned: control characters and angle brackets out, at most 80 characters', async () => {
+    const r = await place({ zoneId: 'dha-6', social: '@a\nhmed <b>' + 'z'.repeat(200) });
+    const notes = (await stored(r.json.data!.orderId)).notes!;
+    expect(notes.startsWith('Social: @a hmed b zzz')).toBe(true);
+    expect(notes).not.toMatch(/[<>\n]/);
+    expect(notes.length).toBeLessThanOrEqual('Social: '.length + 80);
+  });
+
+  it('a long note gives way, the pin and the handle never do; the whole stays under the till’s cap', async () => {
+    await publish(menu(false));
+    const r = await place({ zoneId: 'dha-1', locationPin: PIN, social: '@ahmed_k', notes: 'x'.repeat(500) });
+    const notes = (await stored(r.json.data!.orderId)).notes!;
+    expect(notes.length).toBeLessThanOrEqual(490);
+    expect(notes.startsWith(`${PIN_LINE}. Social: @ahmed_k. `)).toBe(true);
+  });
+
+  it('a pick-up has no address to pin: the pin is dropped, the handle is kept', async () => {
+    await heartbeat(['pickup']);
+    const r = await place({ fulfilment: 'pickup', addressLine: undefined, locationPin: PIN, social: '@ahmed_k', notes: 'Collecting at 9' });
+    expect(r.status).toBe(200);
+    const row = await stored(r.json.data!.orderId);
+    expect(row.notes).toBe('Social: @ahmed_k. Collecting at 9');
+    expect(row.notes).not.toMatch(/maps\.google/);
+  });
+});
+

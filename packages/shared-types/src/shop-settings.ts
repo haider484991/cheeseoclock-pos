@@ -686,12 +686,19 @@ export interface DeliveryZones {
  * off they get. It reaches the website in the settings block of the menu
  * publish, not the heartbeat (both tills beat into one row: a lagging till
  * would flip the % every beat). The till bills the % the web order carries.
+ *
+ * Format 2 (v0.7.37, owner 2026-10-04: "10 percent auto discount on the
+ * website") adds `alsoDelivery`: the same % also comes off the FOOD of a
+ * website delivery — never the delivery charge, never a value deal. A
+ * format-1 value reads it as false (today: deliveries pay full price).
  */
 export interface WebsitePickup {
   v: number;
   offered: boolean;
   /** A whole %, 0–50. */
   percent: number;
+  /** The % also comes off a website DELIVERY's food (not its charge, not value deals). */
+  alsoDelivery: boolean;
 }
 
 /**
@@ -766,7 +773,8 @@ export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Obj
   'menu.importPolicy': 1,
   'discounts.offers': 1,
   'orders.reasons': 1,
-  'discounts.websitePickup': 1,
+  // 2 since v0.7.37: `alsoDelivery` (a format-1 value reads it as false).
+  'discounts.websitePickup': 2,
   'delivery.zones': 1,
   // 2 since v0.7.30: the website's messages and delivery minimum (a format-1 value reads them at their defaults).
   'online.options': 2,
@@ -959,11 +967,12 @@ export const DEFAULT_ORDER_REASONS: Readonly<OrderReasons> = Object.freeze({
   cashOut: Object.freeze([] as string[]) as string[],
 }) as Readonly<OrderReasons>;
 
-/** Today: offered, 10% off (the printed menu's "10% OFF · order online & pick up"). */
+/** Today: offered, 10% off (the printed menu's "10% OFF · order online & pick up"); deliveries pay full price. */
 export const DEFAULT_WEBSITE_PICKUP: Readonly<WebsitePickup> = Object.freeze({
-  v: 1,
+  v: 2,
   offered: true,
   percent: PICKUP_DISCOUNT_PERCENT,
+  alsoDelivery: false,
 });
 
 /**

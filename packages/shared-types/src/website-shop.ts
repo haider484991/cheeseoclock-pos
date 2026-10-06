@@ -206,7 +206,7 @@ export const HOME_ITEM_NAME_MAX = 120;
 
 const phone = (display: string, e164: string): ShopPhone => Object.freeze({ display, e164 });
 
-/** Today's name, tagline, numbers, address and price range (apps/web lib/business.ts before B4); no social profiles yet. */
+/** Today's name, tagline, numbers, address, social profiles and price range (apps/web lib/business.ts before B4). */
 export const DEFAULT_SHOP_PROFILE: Readonly<ShopProfile> = Object.freeze({
   v: 1,
   name: "Cheese O'Clock",
@@ -222,14 +222,20 @@ export const DEFAULT_SHOP_PROFILE: Readonly<ShopProfile> = Object.freeze({
     areaLine: 'Rahat Commercial Area, DHA Phase 6, Karachi',
     postalCode: '75500',
   }) as ShopAddress,
-  socialLinks: Object.freeze([] as string[]) as string[],
+  // The shop's own profiles (owner, 5 Oct 2026: "add social media"; the poster and the posts print them):
+  // the footer links them and JSON-LD names them (sameAs). Not the look-alike cheeseoclock.pk accounts.
+  socialLinks: Object.freeze(['https://www.instagram.com/cheeseoclock_/', 'https://www.facebook.com/cheeseoclock.karachi']) as string[],
   priceRange: 'PKR 400–2,500',
 }) as Readonly<ShopProfile>;
 
-/** Every day, 12 noon to 1 am (owner, 25 Sep 2026). */
+/**
+ * Every day, 1 pm to 1 am (owner, 5 Oct 2026: "update the website timing to 1 to 1 am"; it was 12 noon to 1 am
+ * from 25 Sep). Only the website's and the till's fallback: the hours the owner saves in the till
+ * (Settings → Shop & logo → "Website: shop details") are published with the menu and win over this.
+ */
 export const DEFAULT_SHOP_HOURS: Readonly<ShopHours> = Object.freeze({
   v: 1,
-  opens: '12:00',
+  opens: '13:00',
   closes: '01:00',
   days: Object.freeze([...SHOP_DAYS]) as ShopDay[],
 }) as Readonly<ShopHours>;

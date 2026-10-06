@@ -408,6 +408,50 @@ export interface PublishedMenu {
 // menu with no marks.
 
 // ---------------------------------------------------------------------------
+// v0.7.37 — WEBSITE DELIVERY DISCOUNT (owner, 2026-10-04: "10 percent auto
+// discount added on website"; "deals and value deals will not get
+// percentage off"). The contract between the till and the website.
+// ---------------------------------------------------------------------------
+//
+// THE SETTING. 'discounts.websitePickup' format 2 adds `alsoDelivery`
+// (Settings → Money & discounts → the website offer card): the same % also
+// comes off a website DELIVERY's food. Never the delivery charge, never a
+// line marked no discount (value deals). Off by default (today).
+//
+// THE BLOCK. The settings block's `pickup` carries `alsoDelivery: true`
+// only when it is on; a block without it = deliveries pay full price.
+//
+// THE HEARTBEAT. A till of v0.7.37 lists 'delivery_discount' in `features`.
+//
+// THE WEBSITE (v0.7.37):
+//   - keeps `pickup.alsoDelivery` (publishedPickupSchema) and answers
+//     `deliveryDiscount: true` from both PUT routes;
+//   - takes the block's % off a delivery ONLY when the stored block says
+//     alsoDelivery AND the listening till's heartbeat lists
+//     'delivery_discount' (an older till would bill full price) AND the
+//     shop is accepting; the store status says it as
+//     `deliveryDiscountPercent` (0 = none);
+//   - prices it with priceOrder over the food lines: marked lines and the
+//     delivery charge (its line, or the fee priced without one) take no
+//     share; the stored items stay as today (the charge line is recognised
+//     by name, never marked);
+//   - the delivery minimum is still checked on the food before any discount.
+//
+// THE TILL (v0.7.37):
+//   - reads the % back with webOrderDeliveryPercent(web) (discount ÷ the
+//     unmarked, non-charge lines) and applies it at import as a website
+//     discount whose frozen rule leaves the delivery charge alone
+//     (websiteDiscountRule(…, { alsoOffDeliveryCharge: false })) and follows
+//     the website's marks when the order carries any (as a pick-up does);
+//   - a delivery carrying no discount (every order before) imports as today.
+//
+// DEPLOY ORDER. The website first (a push to main deploys it), then the
+// tills. Until a till of v0.7.37 announces 'delivery_discount' AND its owner
+// ticks the box (a Save publishes the block), the website is exactly as
+// today. Both tills should update the same day: the heartbeat row is the
+// last till's, so a v0.7.36 till beating in turns the delivery % off again.
+
+// ---------------------------------------------------------------------------
 // THE SHOP BLOCK (sweep B2 + B4, after v0.7.30) — the shop's name, numbers,
 // address and social links, its opening hours, its website words and the
 // home page's lineup, from Settings → Shop & logo → "Website: shop details
@@ -700,6 +744,12 @@ export interface PublishedPickup {
   offered: boolean;
   /** A whole % off a pick-up, 0–50. */
   percent: number;
+  /**
+   * v0.7.37 (WEBSITE DELIVERY DISCOUNT): the same % also comes off a
+   * delivery's FOOD. Sent ONLY as `true`; absent = deliveries pay full price
+   * (every block before v0.7.37, and a till with the box unticked).
+   */
+  alsoDelivery?: boolean;
 }
 
 export interface PublishedSettings {
@@ -788,6 +838,13 @@ export interface PublishMenuResult extends WebsiteShopAnswer {
    * still answering 'stored'.
    */
   noDiscountItems?: boolean;
+  /**
+   * true from a website of v0.7.37 on (both PUT routes): it keeps the
+   * block's `pickup.alsoDelivery` and takes the % off a delivery's food
+   * (WEBSITE DELIVERY DISCOUNT). Absent = an older website, which strips the
+   * key while still answering 'stored'.
+   */
+  deliveryDiscount?: boolean;
 }
 
 /** A fee item the block's areas need, as the till's menu has it, with the category it sits in (PUT /api/bridge/settings). */
@@ -927,8 +984,11 @@ export interface WebOrderItem {
   notes: string | null;
   /**
    * Set by the website SERVER from the stored menu item on every order, never
-   * from the browser; sent only as `true`. On a pick-up, the website gave this
-   * line no share of the pick-up %. See "NO DISCOUNT ON VALUE DEALS".
+   * from the browser; sent only as `true`. On a discounted order (a pick-up,
+   * or since v0.7.37 a delivery), the website gave this line no share of the
+   * %. See "NO DISCOUNT ON VALUE DEALS". A delivery-charge line is never
+   * marked: it is recognised by its name (isDeliveryChargeName) and never
+   * takes a share either (WEBSITE DELIVERY DISCOUNT).
    */
   noDiscount?: boolean;
 }
@@ -989,11 +1049,42 @@ export function webOrderPickupPercent(o: {
 }
 
 /**
+ * The website delivery % the customer was shown, read back from the order
+ * the site sent (WEBSITE DELIVERY DISCOUNT, v0.7.37): the discount ÷ the
+ * food it was worked on — every line except those marked `noDiscount` and
+ * the delivery-charge lines (by name). Worked from the lines, not the
+ * subtotal, so a charge the website could not put on a line (its area's fee
+ * item missing) is never in the base. 0 for a pick-up, for a delivery with
+ * no discount (every order from a website before v0.7.37), and when nothing
+ * could take one. Kept to 0–50%.
+ */
+export function webOrderDeliveryPercent(o: {
+  fulfilment?: string;
+  discountCents?: number;
+  items?: ReadonlyArray<{ name: string; unitPriceCents: number; quantity: number; noDiscount?: boolean }>;
+}): number {
+  if (o.fulfilment === 'pickup') return 0;
+  if (typeof o.discountCents !== 'number' || !(o.discountCents > 0)) return 0;
+  let base = 0;
+  for (const line of o.items ?? []) {
+    if (line.noDiscount === true || /^delivery charge/i.test(line.name.trim())) continue;
+    base += line.unitPriceCents * line.quantity;
+  }
+  if (!(base > 0)) return 0;
+  const pct = Math.round((o.discountCents * 100) / base);
+  // 50 = WEBSITE_PICKUP_MAX_PERCENT (see webOrderPickupPercent).
+  return Math.max(0, Math.min(50, pct));
+}
+
+/**
  * Capabilities a till announces in its heartbeat (PUT /api/bridge/status).
  * The site only offers pickup while the listening till says it can import
  * pickup orders — an older POS would book them as deliveries at full price.
+ * 'delivery_discount' (v0.7.37): the till bills the website's % on a
+ * delivery's food; the site only takes it off a delivery while the listening
+ * till says so — an older POS would bill the delivery at full price.
  */
-export type TillFeature = 'pickup';
+export type TillFeature = 'pickup' | 'delivery_discount';
 
 /**
  * Why a till has stopped the website taking orders by itself. It is kept

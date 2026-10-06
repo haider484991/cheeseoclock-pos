@@ -368,7 +368,7 @@ live('the settings block of the menu publish', () => {
     settingsRepo.setBusinessSetting(
       db as AppDatabase,
       'discounts.websitePickup',
-      { v: 1, offered: true, percent: 15 },
+      { v: 2, offered: true, percent: 15, alsoDelivery: false },
       OWNER,
     );
     await bridge().maybePublishSettings();
@@ -380,7 +380,7 @@ live('the settings block of the menu publish', () => {
     // The other till's Save arrives through the link (its row image: a higher version, its own time).
     db.prepare(
       `UPDATE business_settings SET version = version + 1, updated_at = ?, value_json = ? WHERE key = 'discounts.websitePickup'`,
-    ).run('2026-09-28T10:00:00.000Z', JSON.stringify({ v: 1, offered: false, percent: 15 }));
+    ).run('2026-09-28T10:00:00.000Z', JSON.stringify({ v: 2, offered: false, percent: 15, alsoDelivery: false }));
     // The word to the bridge (website-settings-events): published a moment later.
     const { websiteSettingsChanged } = await import('./website-settings-events.js');
     websiteSettingsChanged();
@@ -394,7 +394,7 @@ live('the settings block of the menu publish', () => {
 
   it('the sync worker tells the bridge when a change pulled from the other till is a setting: the block goes alone a moment later', async () => {
     const db = await till();
-    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 1, offered: true, percent: 10 }, OWNER);
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 2, offered: true, percent: 10, alsoDelivery: false }, OWNER);
     await bridge().maybePublishSettings();
     expect(settingsPuts()).toHaveLength(1);
     // The other till's Save of the pick-up offer, as the link pulls it (a newer version of the same row).
@@ -409,7 +409,7 @@ live('the settings block of the menu publish', () => {
         [ROW_IMAGE_KEY]: 1,
         id,
         key: 'discounts.websitePickup',
-        valueJson: JSON.stringify({ v: 1, offered: true, percent: 20 }),
+        valueJson: JSON.stringify({ v: 2, offered: true, percent: 20, alsoDelivery: false }),
         updatedByUserId: 'u_owner',
         createdAt: '2026-01-01T00:00:00.000Z',
         updatedAt: at,
@@ -458,7 +458,7 @@ live('the settings block of the menu publish', () => {
     settingsRepo.setBusinessSetting(
       db as AppDatabase,
       'discounts.websitePickup',
-      { v: 1, offered: true, percent: 12 },
+      { v: 2, offered: true, percent: 12, alsoDelivery: false },
       OWNER,
     );
     await bridge().maybePublishSettings();
@@ -576,7 +576,7 @@ live('the settings block of the menu publish', () => {
     settingsRepo.setBusinessSetting(
       db as AppDatabase,
       'discounts.websitePickup',
-      { v: 1, offered: false, percent: 25 },
+      { v: 2, offered: false, percent: 25, alsoDelivery: false },
       OWNER,
     );
     const beats = sent.filter((s) => s.path === '/api/bridge/status' && s.method === 'PUT');
@@ -606,7 +606,7 @@ live('the settings block reaches the website, and stays right, when the tills an
   it('two area lists saved offline at the same versions: the list the tills settle on goes to the website, although its version sum and newest time are the same', async () => {
     const db = await till();
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
-    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 1, offered: true, percent: 10 }, OWNER);
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 2, offered: true, percent: 10, alsoDelivery: false }, OWNER);
     // This till: areas at 10:00, pick-up at 10:05 (both version 1).
     syncedRow(db, 'delivery.zones', { updatedAt: '2026-09-28T10:00:00.000Z' });
     syncedRow(db, 'discounts.websitePickup', { updatedAt: '2026-09-28T10:05:00.000Z' });
@@ -689,7 +689,7 @@ live('the settings block reaches the website, and stays right, when the tills an
     expect(publishStatus()).toMatchObject({ state: 'refused', message: expect.stringMatching(/clock/) });
     // A new Save: a new stamp, sent (and here taken).
     answerSettings = storedAnswer;
-    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 1, offered: true, percent: 12 }, OWNER);
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 2, offered: true, percent: 12, alsoDelivery: false }, OWNER);
     await bridge().maybePublishSettings();
     expect(settingsPuts()).toHaveLength(2);
     expect(publishStatus()).toMatchObject({ state: 'published' });
@@ -744,7 +744,7 @@ live('the settings block reaches the website, and stays right, when the tills an
     const first = bridge().maybePublishSettings();
     await vi.waitFor(() => expect(settingsPuts()).toHaveLength(1));
     // The second Save's word arrives while the first is on its way.
-    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 1, offered: true, percent: 15 }, OWNER);
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 2, offered: true, percent: 15, alsoDelivery: false }, OWNER);
     await bridge().maybePublishSettings();
     menuGate = null;
     release();
@@ -757,7 +757,7 @@ live('the settings block reaches the website, and stays right, when the tills an
   it('a carried setting saved by a newer version of the app: no block goes from this till (its defaults would replace the right one); Publish still sends the menu', async () => {
     const db = await till();
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
-    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 1, offered: true, percent: 12 }, OWNER);
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 2, offered: true, percent: 12, alsoDelivery: false }, OWNER);
     // The other till, on a newer version, saved the pick-up offer in a newer format.
     syncedRow(db, 'discounts.websitePickup', { version: 2, value: { v: 9, offered: true, percent: 20, days: ['fri'] } });
     await bridge().maybePublishSettings();
@@ -881,6 +881,38 @@ live('a website older than the tills (its deploy failed or was rolled back): the
     const r = await bridge().publishMenu();
     expect(r).not.toHaveProperty('olderWebsite');
     expect(menus().at(-1)!.settings).toMatchObject({ announcement: messages.announcement });
+    expect(publishStatus()).toMatchObject({ state: 'published' });
+  });
+
+  it('v0.7.37: a Save with “Also on delivery orders” — the block carries it; a website older than v0.7.37 (no deliveryDiscount) is told to update; an updated one says nothing; unticked, the block is today’s', async () => {
+    const db = await till();
+    await bridge().publishMenu();
+    // storedAnswer is a website of v0.7.30–v0.7.36: it keeps the messages but says nothing of deliveryDiscount.
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 2, offered: true, percent: 10, alsoDelivery: true }, OWNER);
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(1);
+    const block = settingsPuts()[0]!.settings;
+    expect(block.pickup).toEqual({ offered: true, percent: 10, alsoDelivery: true });
+    expect(publishedSettingsSchema.safeParse(block).success).toBe(true);
+    expect(publishStatus()).toMatchObject({ state: 'unsupported', message: bridgeMod.OLDER_WEBSITE_NO_DELIVERY_DISCOUNT });
+    // …and nothing more by itself.
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(1);
+    // The website updated: the owner's Publish carries it, the website says it takes it, nothing is said.
+    const withDelivery = (body: Row) => {
+      const a = storedAnswer(body);
+      return { status: a.status, json: { ok: true, data: { ...(a.json as { data: Row }).data, deliveryDiscount: true } } };
+    };
+    answerMenu = withDelivery;
+    answerSettings = withDelivery;
+    await bridge().publishMenu();
+    expect(menus().at(-1)!.settings!.pickup).toEqual({ offered: true, percent: 10, alsoDelivery: true });
+    expect(publishStatus()).toMatchObject({ state: 'published' });
+    // Unticked: the pick-up is byte-for-byte today's (no key), and the website is not told to update.
+    answerSettings = storedAnswer;
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 2, offered: true, percent: 10, alsoDelivery: false }, OWNER);
+    await bridge().maybePublishSettings();
+    expect(JSON.stringify(settingsPuts().at(-1)!.settings.pickup)).toBe('{"offered":true,"percent":10}');
     expect(publishStatus()).toMatchObject({ state: 'published' });
   });
 

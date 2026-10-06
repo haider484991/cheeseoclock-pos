@@ -4,6 +4,7 @@ import { useId, useRef, useState } from 'react';
 import { NOT_ON_VALUE_DEALS } from '@cheeseoclock/shared-types';
 import { BUSINESS } from '@/lib/business';
 import { whatsappOrderText } from '@/lib/cart';
+import { SOCIAL_MAX, pinUrl, type LocationPin } from '@/lib/checkout-extras';
 import {
   problemFromServer,
   validateCheckout,
@@ -22,9 +23,11 @@ import {
 } from '@/lib/device-memory';
 import { formatCents } from '@/lib/format';
 import { isPickupOnly } from '@/lib/menu-view';
+import { tagUsHint } from '@/lib/offers';
 import { CHECKOUT_PAY_DELIVERY, CHECKOUT_PAY_PICKUP } from '@/lib/page-copy';
 import { shopHoursInSentence, whatsappUrlWith } from '@/lib/shop-facts';
 import { CartLineRow, ClearCartButton, FulfilmentToggle, MinimumNote, Totals, type CartProps } from './cart-ui';
+import { LocationPinField } from './LocationPinField';
 import { CloseButton, Sheet } from './Sheet';
 import { useShopFacts } from './ShopContext';
 
@@ -32,6 +35,8 @@ export interface PlacedOrder {
   orderId: string;
   /** As the customer typed it; the tracking page matches it server-side. */
   phone: string;
+  /** What the server priced the order at, paisa (api/orders: totalCents, tax and delivery in it): the Meta Pixel's Purchase value. */
+  totalCents?: number;
 }
 
 /**
@@ -63,6 +68,10 @@ export function CheckoutSheet(
   const [phone, setPhone] = useState(saved?.phone ?? '');
   const [address, setAddress] = useState(saved?.address ?? '');
   const [notes, setNotes] = useState('');
+  // Since 5 Oct 2026 (lib/checkout-extras): where a delivery customer pinned themselves, and their Instagram / Facebook
+  // handle for the Tag-us offer. Both optional, both ride in the order's notes, neither is remembered on the phone.
+  const [pin, setPin] = useState<LocationPin | null>(null);
+  const [social, setSocial] = useState('');
   const [remember, setRemember] = useState(true);
   const [hasSaved, setHasSaved] = useState(saved !== null);
   const [submitting, setSubmitting] = useState(false);
@@ -142,8 +151,9 @@ export function CheckoutSheet(
           customerName: name.trim(),
           customerPhone: phone.trim(),
           fulfilment: props.fulfilment,
-          ...(pickup ? {} : { addressLine: address.trim(), zoneId: props.zone?.id }),
+          ...(pickup ? {} : { addressLine: address.trim(), zoneId: props.zone?.id, ...(pin ? { locationPin: pin } : {}) }),
           notes: notes.trim() || undefined,
+          ...(social.trim() ? { social: social.trim() } : {}),
           items: props.cart.map((l) => ({
             posItemId: l.item.posItemId,
             quantity: l.quantity,
@@ -152,7 +162,7 @@ export function CheckoutSheet(
           })),
         }),
       });
-      type Reply = OrderErrorBody & { ok?: boolean; data?: { orderId: string } };
+      type Reply = OrderErrorBody & { ok?: boolean; data?: { orderId: string; totalCents?: number } };
       let json: Reply | null = null;
       try {
         json = (await res.json()) as Reply;
@@ -173,7 +183,7 @@ export function CheckoutSheet(
         removeStored(STORAGE_KEYS.details);
       }
       // Stays "Placing…" while the tracking page loads.
-      props.onPlaced({ orderId: json.data.orderId, phone: phone.trim() });
+      props.onPlaced({ orderId: json.data.orderId, phone: phone.trim(), totalCents: json.data.totalCents });
     } catch {
       inFlight.current = false;
       setSubmitting(false);
@@ -191,6 +201,8 @@ export function CheckoutSheet(
     name,
     address,
     shopName: shop.profile.name,
+    pinUrl: !pickup && pin ? pinUrl(pin) : null,
+    social,
   });
   const payFacts = { ...props.deliveryFacts, shop };
 
@@ -204,7 +216,9 @@ export function CheckoutSheet(
               ? 'Online ordering is closed right now'
               : pickup
                 ? `Pick-up · ${props.pickupPct}% off${props.dealInCart ? `, ${NOT_ON_VALUE_DEALS}` : ''} · pay at the counter`
-                : 'Cash on delivery · pay the rider'}
+                : (props.deliveryPct ?? 0) > 0
+                  ? `${props.deliveryPct}% off food${props.dealInCart ? `, ${NOT_ON_VALUE_DEALS}` : ''} · cash on delivery`
+                  : 'Cash on delivery · pay the rider'}
           </p>
         </div>
         <CloseButton onClose={props.onClose} label="Close — keep browsing" />
@@ -353,12 +367,22 @@ export function CheckoutSheet(
                   error={fieldError('address')}
                 />
               )}
+              {!pickup && <LocationPinField pin={pin} onPin={setPin} />}
               <TextField
                 label={pickup ? 'Notes for the counter (optional)' : 'Directions for the rider (optional)'}
                 value={notes}
                 onChange={setNotes}
                 placeholder={pickup ? 'I’ll be there at 9 pm' : 'Near the park, ring the bell twice'}
                 maxLength={400}
+              />
+              <TextField
+                label="Your Instagram or Facebook (optional)"
+                value={social}
+                onChange={setSocial}
+                placeholder="@yourname"
+                autoComplete="off"
+                maxLength={SOCIAL_MAX}
+                hint={tagUsHint(shop.profile.name, shop.profile.socialLinks)}
               />
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                 <label className="flex cursor-pointer items-center gap-2 py-1 text-sm font-semibold text-ink">

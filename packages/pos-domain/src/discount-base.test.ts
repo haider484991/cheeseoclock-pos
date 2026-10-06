@@ -424,6 +424,14 @@ describe('value deals never get a discount', () => {
     expect(JSON.stringify(tillDiscountRule(false, false))).toBe('{"kind":"discount_base","v":1,"alsoOffDeliveryCharge":false,"from":"till"}');
     expect(JSON.stringify(tillDiscountRule(true, false))).toBe('{"kind":"discount_base","v":1,"alsoOffDeliveryCharge":true,"from":"till"}');
     expect(JSON.stringify(websiteDiscountRule(false))).toBe('{"kind":"discount_base","v":1,"alsoOffDeliveryCharge":true,"from":"website"}');
+    // v0.7.37: a website DELIVERY's % is on the food only — a rule every till since 0.7.26 reads.
+    const delivery = websiteDiscountRule(true, { alsoOffDeliveryCharge: false });
+    expect(JSON.stringify(delivery)).toBe(
+      '{"kind":"discount_base","v":1,"alsoOffDeliveryCharge":false,"from":"website","skipsNoDiscountLines":true}',
+    );
+    expect(parseDiscountBaseRule(JSON.stringify(delivery))).toEqual(delivery);
+    expect(discountRuleScope(JSON.stringify(delivery))).toEqual({ alsoOffDeliveryCharge: false, skipsNoDiscountLines: true });
+    expect(websiteDiscountRule(false, {})).toEqual(websiteDiscountRule(false));
     expect('skipsNoDiscountLines' in tillDiscountRule(false, false)).toBe(false);
     for (const rule of [tillDiscountRule(false, true), tillDiscountRule(true, true), websiteDiscountRule(true)]) {
       expect(rule.skipsNoDiscountLines).toBe(true);

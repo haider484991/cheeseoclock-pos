@@ -206,7 +206,7 @@
                    "type": "li",
                    "key": null,
                    "props": {
-                    "children": "12 noon – 1 am daily",
+                    "children": "1 pm – 1 am daily",
                     "className": "rounded-full border border-cream/15 px-3 py-1.5"
                    }
                   },
@@ -248,7 +248,7 @@
         "items": [
          "HYGIENICALLY MADE. DELICIOUSLY UNFORGETTABLE.",
          "WE DELIVER ALL OVER DHA & CLIFTON",
-         "OPEN 12 NOON – 1 AM",
+         "OPEN 1 PM – 1 AM",
          "CASH ON DELIVERY",
          "FIVE SIGNATURE PIZZAS",
          "IT'S ALWAYS CHEESE O'CLOCK"
@@ -1632,7 +1632,7 @@
                     ", ",
                     "Karachi",
                     " · ",
-                    "Open daily · 12 noon – 1 am"
+                    "Open daily · 1 pm – 1 am"
                    ],
                    "className": "mt-3 text-center text-sm not-italic text-ink/65"
                   }
@@ -1825,14 +1825,14 @@
                "children": [
                 {
                  "type": "div",
-                 "key": "12 noon – 1 am",
+                 "key": "1 pm – 1 am",
                  "props": {
                   "children": [
                    {
                     "type": "div",
                     "key": null,
                     "props": {
-                     "children": "12 noon – 1 am",
+                     "children": "1 pm – 1 am",
                      "className": "font-display text-4xl uppercase tracking-wide text-cheese"
                     }
                    },
@@ -2013,7 +2013,7 @@
                     "type": "p",
                     "key": null,
                     "props": {
-                     "children": "Every day from 12 noon to 1 am.",
+                     "children": "Every day from 1 pm to 1 am.",
                      "className": "px-5 pb-5 leading-relaxed text-cream/65"
                     }
                    }
@@ -2245,7 +2245,7 @@
             "key": null,
             "props": {
              "children": [
-              "Open daily · 12 noon – 1 am",
+              "Open daily · 1 pm – 1 am",
               " · Cash on delivery across DHA & Clifton"
              ],
              "className": "font-cond text-base font-bold uppercase tracking-wide text-ink/70"

@@ -24,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_DELIVERY_ZONES,
   NOT_ON_VALUE_DEALS,
+  webOrderDeliveryPercent,
   type DeliveryZoneSetting,
   type PublishedMenu,
   type PublishedSettings,
@@ -539,5 +540,54 @@ describe('the tracking page’s pick-up % (OrderTracker, lib/order-display picku
     expect(src).toContain('<dt>{discountRow}</dt>');
     expect(src).toContain("Pick-up{pct > 0 ? ` · ${pct}% off` : ''} · pay at the counter");
     expect(src).not.toMatch(/\/\s*order\.subtotalCents/);
+  });
+});
+
+describe('the tracking page’s delivery % (v0.7.37, WEBSITE DELIVERY DISCOUNT)', () => {
+  const ln = (name: string, rs: number, flagged = false): WebOrderItem => ({
+    posItemId: `t-${name}`,
+    name,
+    quantity: 1,
+    unitPriceCents: rs * 100,
+    modifiers: [],
+    notes: null,
+    ...(flagged ? { noDiscount: true } : {}),
+  });
+
+  it('Rs 200 off a delivery of a Rs 2,000 pizza + Big Two + a Rs 200 charge reads 10% off the food, deals left out', () => {
+    const order = {
+      fulfilment: 'delivery',
+      items: [ln('Big Two', 3600, true), ln('Fajita Pizza — Large', 2000), ln('Delivery Charge (Rs 200)', 200)],
+      subtotalCents: 580_000,
+      discountCents: 20_000,
+    };
+    expect(pickupDiscountWords(order)).toEqual({ pct: 10, row: 'Online 10% off food (not on value deals)' });
+  });
+
+  it('the charge is never in the base: Rs 220 off Rs 2,200 of food with a Rs 250 charge is 10%, not 9%', () => {
+    const order = {
+      fulfilment: 'delivery',
+      items: [ln('Cheesy Star — Large', 2200), ln('Delivery Charge (Rs 250)', 250)],
+      subtotalCents: 245_000,
+      discountCents: 22_000,
+    };
+    expect(pickupDiscountWords(order)).toEqual({ pct: 10, row: 'Online 10% off food' });
+    expect(webOrderDeliveryPercent(order)).toBe(10);
+    // …and when the website priced the charge without a line (its item missing), the lines alone are the base.
+    expect(webOrderDeliveryPercent({ ...order, items: [ln('Cheesy Star — Large', 2200)] })).toBe(10);
+  });
+
+  it('a delivery with no discount (every order before v0.7.37) reads 0; a pick-up never reads the delivery way', () => {
+    expect(webOrderDeliveryPercent({ fulfilment: 'delivery', items: [ln('Fries', 300)], discountCents: 0 })).toBe(0);
+    expect(webOrderDeliveryPercent({ fulfilment: 'delivery', items: [ln('Fries', 300)] })).toBe(0);
+    expect(webOrderDeliveryPercent({ fulfilment: 'pickup', items: [ln('Fries', 300)], discountCents: 3_000 })).toBe(0);
+    // Deals only: nothing could take a share.
+    expect(webOrderDeliveryPercent({ fulfilment: 'delivery', items: [ln('Big Two', 3600, true)], discountCents: 100 })).toBe(0);
+    // Kept to 0–50%.
+    expect(webOrderDeliveryPercent({ fulfilment: 'delivery', items: [ln('Fries', 300)], discountCents: 30_000 })).toBe(50);
+    // A pick-up's words are today's.
+    expect(pickupDiscountWords({ fulfilment: 'pickup', items: [ln('Fajita Pizza — Large', 4100)], subtotalCents: 410_000, discountCents: 41_000 }).row).toBe(
+      'Pick-up 10% off',
+    );
   });
 });

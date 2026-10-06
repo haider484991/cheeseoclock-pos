@@ -71,6 +71,14 @@ export interface StoreStatus {
    * heartbeat, and the legacy 10% from a till that never said (v0.7.0).
    */
   pickupDiscountPercent: number;
+  /**
+   * The % off a DELIVERY's food (WEBSITE DELIVERY DISCOUNT, v0.7.37); 0 =
+   * deliveries pay full price. The block's % only while the stored block
+   * says `alsoDelivery` AND the listening till announced 'delivery_discount'
+   * (it bills it at import; an older till would not) AND the shop is taking
+   * orders.
+   */
+  deliveryDiscountPercent: number;
 }
 
 export const CLOSED: StoreStatus = {
@@ -80,6 +88,7 @@ export const CLOSED: StoreStatus = {
   stale: true,
   pickupAvailable: false,
   pickupDiscountPercent: PICKUP_DISCOUNT_PERCENT,
+  deliveryDiscountPercent: 0,
 };
 
 /**
@@ -97,10 +106,11 @@ export function blockPickupOf(raw: unknown): PublishedPickup | null {
     }
   }
   if (!v || typeof v !== 'object') return null;
-  const { offered, percent } = v as { offered?: unknown; percent?: unknown };
+  const { offered, percent, alsoDelivery } = v as { offered?: unknown; percent?: unknown; alsoDelivery?: unknown };
   if (typeof offered !== 'boolean' || typeof percent !== 'number') return null;
   if (!Number.isInteger(percent) || percent < 0 || percent > WEBSITE_PICKUP_MAX_PERCENT) return null;
-  return { offered, percent };
+  // Only an exact true turns the delivery % on (a block before v0.7.37 has no key: deliveries pay full price).
+  return alsoDelivery === true ? { offered, percent, alsoDelivery: true } : { offered, percent };
 }
 
 /**
@@ -114,6 +124,8 @@ export function evaluateStatus(
     updated_at: string | Date;
     pickup?: boolean | null;
     pickup_discount_pct?: number | null;
+    /** The listening till bills the website's delivery % (heartbeat 'delivery_discount', v0.7.37). */
+    delivery_discount?: boolean | null;
     settings_pickup?: unknown;
   } | null,
   now: number = Date.now(),
@@ -135,6 +147,9 @@ export function evaluateStatus(
     stale,
     pickupAvailable: posAccepting && !stale && row.pickup === true && (block ? block.offered : true),
     pickupDiscountPercent: block ? block.percent : (row.pickup_discount_pct ?? LEGACY_PICKUP_DISCOUNT_PERCENT),
+    // Never without the owner's block saying so, nor while the listening till could not bill it.
+    deliveryDiscountPercent:
+      posAccepting && !stale && row.delivery_discount === true && block?.alsoDelivery === true ? block.percent : 0,
   };
 }
 
@@ -163,6 +178,10 @@ function ensureStatusTable(): Promise<void> {
       await sql()`
         ALTER TABLE store_status ADD COLUMN IF NOT EXISTS pickup_discount_pct INT
       `;
+      // The till bills the website's delivery % (heartbeat 'delivery_discount', v0.7.37).
+      await sql()`
+        ALTER TABLE store_status ADD COLUMN IF NOT EXISTS delivery_discount BOOLEAN NOT NULL DEFAULT false
+      `;
     })().catch((e) => {
       // Let the next call retry rather than caching the failure forever.
       tableReady = null;
@@ -186,6 +205,7 @@ export async function getStoreStatus(): Promise<StoreStatus> {
       stale: false,
       pickupAvailable,
       pickupDiscountPercent: PICKUP_DISCOUNT_PERCENT,
+      deliveryDiscountPercent: open && process.env['DEV_DELIVERY_DISCOUNT'] === '1' ? PICKUP_DISCOUNT_PERCENT : 0,
     };
   }
   try {
@@ -193,7 +213,7 @@ export async function getStoreStatus(): Promise<StoreStatus> {
     // One read with the stored settings block's pick-up offer, so the two
     // can't disagree (fail-closed: if it can't be read, the shop is closed).
     const rows = (await sql()`
-      SELECT s.accepting_orders, s.updated_at, s.pickup, s.pickup_discount_pct,
+      SELECT s.accepting_orders, s.updated_at, s.pickup, s.pickup_discount_pct, s.delivery_discount,
              (SELECT m.menu_json -> 'settings' -> 'pickup' FROM site_menu m WHERE m.id = 1) AS settings_pickup
         FROM store_status s
        WHERE s.id = 1
@@ -202,6 +222,7 @@ export async function getStoreStatus(): Promise<StoreStatus> {
       updated_at: string | Date;
       pickup: boolean;
       pickup_discount_pct: number | null;
+      delivery_discount: boolean;
       settings_pickup: unknown;
     }>;
     return evaluateStatus(rows[0] ?? null);
@@ -219,18 +240,22 @@ export async function setStoreStatus(input: {
   pickup?: boolean;
   /** The pickup discount it applies; omitted by v0.7.0 tills. */
   pickupDiscountPercent?: number | null;
+  /** The till bills the website's delivery % (its heartbeat lists 'delivery_discount', v0.7.37). */
+  deliveryDiscount?: boolean;
 }): Promise<StoreStatus> {
   await ensureStatusTable();
   const pickup = input.pickup === true;
+  const deliveryDiscount = input.deliveryDiscount === true;
   const pct = input.pickupDiscountPercent ?? null;
   await sql()`
-    INSERT INTO store_status (id, accepting_orders, device_id, pickup, pickup_discount_pct, updated_at)
-    VALUES (1, ${input.acceptingOrders}, ${input.deviceId ?? null}, ${pickup}, ${pct}, now())
+    INSERT INTO store_status (id, accepting_orders, device_id, pickup, pickup_discount_pct, delivery_discount, updated_at)
+    VALUES (1, ${input.acceptingOrders}, ${input.deviceId ?? null}, ${pickup}, ${pct}, ${deliveryDiscount}, now())
     ON CONFLICT (id) DO UPDATE
       SET accepting_orders    = EXCLUDED.accepting_orders,
           device_id           = EXCLUDED.device_id,
           pickup              = EXCLUDED.pickup,
           pickup_discount_pct = EXCLUDED.pickup_discount_pct,
+          delivery_discount   = EXCLUDED.delivery_discount,
           updated_at          = now()
   `;
   return {
@@ -240,5 +265,7 @@ export async function setStoreStatus(input: {
     stale: false,
     pickupAvailable: input.acceptingOrders && pickup,
     pickupDiscountPercent: pct ?? LEGACY_PICKUP_DISCOUNT_PERCENT,
+    // The heartbeat alone (no block here, as for the % above): the GET and the checkout read the block.
+    deliveryDiscountPercent: 0,
   };
 }

@@ -113,7 +113,7 @@ describe('/menu as served', () => {
   it('the header’s hours chip names the days when the shop is not open every day, as the home page’s chip does; every day, the hours alone as before', () => {
     const chip = (html: string) => /<li class="rounded-full border border-cream\/20 px-3\.5 py-1\.5">([^<]*)<\/li>/.exec(html)?.[1];
     // Today's (open every day): the hours alone, exactly as v0.7.30 printed them.
-    expect(chip(app())).toBe('12 noon – 1 am');
+    expect(chip(app())).toBe('1 pm – 1 am');
     // The owner's made-up hours, closed on Mondays: the days follow, in the home chip's words.
     const tueToSun = { ...DEFAULT_SHOP_FACTS, source: 'settings' as const, hours: { opens: '11:00', closes: '23:00', days: ['tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as ['tue', 'wed', 'thu', 'fri', 'sat', 'sun'] } };
     expect(chip(app({ shop: tueToSun }))).toBe('11 am – 11 pm · Tue–Sun');
@@ -216,11 +216,14 @@ describe('the cart’s totals: a value deal takes no share of the pick-up % (v0.
   it('the page prices its cart with them and hands the deal words their flags (read from the source)', () => {
     const src = readFileSync(fileURLToPath(new URL('../components/OrderingApp.tsx', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
     expect(src).toContain('const priced: PricedLine[] = cartPricedLines(cart);');
-    expect(src).toContain('const totals = priceOrder(priced, pickup ? pickupPct : 0);');
+    // v0.7.37: a delivery prices with the owner's % off its food (0 = none); its fee line takes no share.
+    expect(src).toContain('const discountPct = pickup ? pickupPct : deliveryPct;');
+    expect(src).toContain('const totals = priceOrder(priced, discountPct);');
+    expect(src).toContain('priced.push({ lineTotalCents: deliveryFee, taxRateBps: feeItem?.taxRateBps ?? 0, noDiscount: true });');
     expect(src).toContain('const notOnDeals = useMemo(() => menuHasNoDiscountItems(menu), [menu]);');
     expect(src).toContain('const { dealInCart, onlyDeals } = cartDeals(cart);');
     expect(src).toMatch(/minDeliveryOrderCents: deliveryFacts\.minDeliveryOrderCents,\n\s+notOnDeals,\n\s+dealInCart,\n\s+onlyDeals,\n\s+\};/);
-    expect(src).toMatch(/<MenuHeader\n\s+canPickup=\{canPickup\}\n\s+pickupPct=\{pickupPct\}\n\s+notOnDeals=\{notOnDeals\}/);
+    expect(src).toMatch(/<MenuHeader\n\s+canPickup=\{canPickup\}\n\s+pickupPct=\{pickupPct\}\n\s+deliveryPct=\{deliveryPct\}\n\s+notOnDeals=\{notOnDeals\}/);
   });
 });
 

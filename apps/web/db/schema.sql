@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS store_status (
 ALTER TABLE store_status ADD COLUMN IF NOT EXISTS pickup BOOLEAN NOT NULL DEFAULT false;
 -- …and the pickup discount percent it applies (null = a v0.7.0 till: 10%).
 ALTER TABLE store_status ADD COLUMN IF NOT EXISTS pickup_discount_pct INT;
+-- …and that it bills the website's delivery % at import (heartbeat 'delivery_discount', v0.7.37).
+ALTER TABLE store_status ADD COLUMN IF NOT EXISTS delivery_discount BOOLEAN NOT NULL DEFAULT false;
 
 -- Orders placed on the website. The POS bridge polls status='new', imports
 -- each into the local SQLite (source='web'), acks with the POS order number,

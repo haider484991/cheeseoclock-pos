@@ -907,10 +907,19 @@ const websitePickupShape = {
     .int({ message: 'The pick-up discount is a whole %' })
     .min(0, { message: "The pick-up discount can't be below 0%" })
     .max(WEBSITE_PICKUP_MAX_PERCENT, { message: `The pick-up discount is at most ${WEBSITE_PICKUP_MAX_PERCENT}%` }),
+  alsoDelivery: z.boolean({
+    errorMap: () => ({ message: 'Say whether the website discount also comes off delivery orders: yes or no' }),
+  }),
 };
-/** 'discounts.websitePickup' as this version writes it. */
+/** 'discounts.websitePickup' as this version writes it (format 2: `alsoDelivery` too). */
 export const websitePickupSchema = z.object({ v: writesFormat('discounts.websitePickup'), ...websitePickupShape }).strict();
-const websitePickupReadSchema = z.object({ v: readsFormat, ...websitePickupShape });
+/** Read: a format-1 value (before v0.7.37) has no `alsoDelivery` — deliveries paid full price, so false. */
+const websitePickupReadSchema = z.object({
+  v: readsFormat,
+  offered: websitePickupShape.offered,
+  percent: websitePickupShape.percent,
+  alsoDelivery: websitePickupShape.alsoDelivery.default(false).catch(false),
+});
 
 // 'online.options' format 2 (v0.7.30): the website's messages and delivery minimum joined
 // `autoPublishMenu`. Their words' rules are the settings block's own (web-settings.ts), so
