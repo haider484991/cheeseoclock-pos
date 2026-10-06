@@ -7,7 +7,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_DELIVERY_ZONES,
   webOrderDeliveryPercent,
@@ -791,3 +791,83 @@ describe('POST /api/orders — location pin and social handle (5 Oct 2026)', () 
   });
 });
 
+
+describe('POST /api/orders — Buy 1 Get 1 deals (owner, 7 Oct 2026)', () => {
+  /** The menu with a Buy 1 Get 1 deal the till published (never discounted: its category says deals). */
+  function dealMenu(): PublishedMenu {
+    const m = menu(true);
+    m.categories.push({
+      posCategoryId: 'c-b1g1',
+      name: 'Buy 1 Get 1 Deals',
+      displayOrder: 0,
+      items: [item('b1g1-lm', 'Large + Free Medium', 2000, { noDiscount: true })],
+    });
+    return m;
+  }
+  /**
+   * A day in January 2026 at this time on the Karachi clock (UTC+5): in the past of any run, so the till's heartbeat
+   * (stamped with the real clock) is never stale — a beat from "the future" still counts as live (lib/store-status).
+   */
+  const karachi = (hour: number, minute: number) => new Date(Date.UTC(2026, 0, 15, hour - 5, minute));
+  const at = (hour: number, minute: number) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(karachi(hour, minute));
+  };
+  const DEAL = { zoneId: 'dha-6', items: [{ posItemId: 'b1g1-lm', quantity: 1, modifierIds: [] }] };
+
+  beforeEach(async () => {
+    await publish(dealMenu());
+    // The flood limiter counts orders newer than 15 minutes before the (faked, January) clock: every order the
+    // tests above placed today. None of them matters here.
+    await db.pg.query('DELETE FROM web_orders', []);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('takes a deal from 1 PM to 7 PM with the customer’s Instagram or Facebook name, which leads the notes', async () => {
+    at(13, 0);
+    const r = await place({ ...DEAL, social: '@ahmed_k', notes: 'Ring twice' });
+    expect(r.status).toBe(200);
+    const row = await stored(r.json.data!.orderId);
+    expect(row.notes).toBe('Buy 1 Get 1: check the post by @ahmed_k. Ring twice');
+    expect(row.items.map((i) => [i.posItemId, i.unitPriceCents, i.noDiscount ?? false])).toEqual([
+      ['b1g1-lm', 200_000, true],
+      ['del-200', 20_000, false],
+    ]);
+    at(18, 59);
+    expect((await place({ ...DEAL, social: '@ahmed_k' })).status).toBe(200);
+  });
+
+  it('refuses a deal before 1 PM and from 7 PM, pointing the customer at the cart', async () => {
+    for (const [hour, minute] of [
+      [12, 59],
+      [19, 0],
+      [23, 30],
+    ] as const) {
+      at(hour, minute);
+      const r = await place({ ...DEAL, social: '@ahmed_k' });
+      expect(r.status, `${hour}:${minute}`).toBe(409);
+      expect(r.json.error).toBe('buy1get1_closed');
+      expect(r.json.message).toBe('Buy 1 Get 1 deals are sold every day from 1 PM to 7 PM. Remove the deal to order now.');
+    }
+  });
+
+  it('refuses a deal without the customer’s name (a stray "@" is no name)', async () => {
+    at(15, 0);
+    for (const social of [undefined, '', '   ', '@']) {
+      const r = await place({ ...DEAL, ...(social === undefined ? {} : { social }) });
+      expect(r.status, String(social)).toBe(400);
+      expect(r.json.error).toBe('buy1get1_social');
+    }
+  });
+
+  it('leaves every other order alone, at any hour, with or without a name', async () => {
+    at(23, 30);
+    const r = await place({ zoneId: 'dha-6' });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect((await stored(r.json.data!.orderId)).notes).toBeNull();
+    const social = await place({ zoneId: 'dha-6', social: '@ahmed_k' });
+    expect((await stored(social.json.data!.orderId)).notes).toBe('Social: @ahmed_k');
+  });
+});

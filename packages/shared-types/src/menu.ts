@@ -1,5 +1,6 @@
 import type { Cents, Bps } from './money.js';
 import type { UUID } from './ids.js';
+import { BUY_1_GET_1_NAME_RE } from './buy-1-get-1.js';
 
 export type PrepStation = 'kitchen' | 'bar' | 'cold';
 
@@ -56,11 +57,12 @@ export const VALUE_DEALS_NAME_RE = /\bdeals?\b|\bcombos?\b/i;
 
 /**
  * Whether no discount ever comes off a category's items (the owner,
- * 2026-10-02: "there is no discount on combos"): what the owner set, else
- * what its name says.
+ * 2026-10-02: "there is no discount on combos"; 2026-10-07: "there is no
+ * percentage off on deals" — Buy 1 Get 1 too): what the owner set, else what
+ * its name says.
  */
 export function categoryNeverDiscounted(c: { name: string; noDiscount?: boolean | null }): boolean {
-  return c.noDiscount ?? VALUE_DEALS_NAME_RE.test(c.name);
+  return c.noDiscount ?? (VALUE_DEALS_NAME_RE.test(c.name) || BUY_1_GET_1_NAME_RE.test(c.name));
 }
 
 export interface MenuItem {

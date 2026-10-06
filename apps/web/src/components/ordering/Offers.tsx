@@ -27,10 +27,13 @@ function ruleParts(rule: string, prices: { mediumCents: number | null; largeCent
 export function OfferBanner({
   prices,
   where,
+  dealsAnchor = null,
 }: {
   prices: { mediumCents: number | null; largeCents: number | null };
   /** Where and when it counts, in the shop's words (page-copy MENU_OFFER_WHERE: "every day" only while open daily). */
   where: string;
+  /** The Buy 1 Get 1 deals' section on this menu (7 Oct 2026): a button jumps there; null = none, the banner as before. */
+  dealsAnchor?: string | null;
 }) {
   return (
     <section
@@ -52,6 +55,14 @@ export function OfferBanner({
         })}
       </ul>
       <p className="mt-2 text-sm leading-snug text-cream/75">{OFFER_TAG_LINE}</p>
+      {dealsAnchor && (
+        <a
+          href={`#${dealsAnchor}`}
+          className="mt-3 mr-2 inline-block rounded-full bg-cream px-4 py-2 font-cond text-base font-extrabold uppercase tracking-wide text-ink transition-transform hover:scale-105"
+        >
+          Order a Buy 1 Get 1 deal ↓
+        </a>
+      )}
       <p className="mt-3 inline-block rounded-lg bg-cheese px-3 py-2 font-cond text-base font-extrabold uppercase tracking-wide text-ink">
         {OFFER_FINE_PRINT}
       </p>

@@ -69,7 +69,8 @@ export function CheckoutSheet(
   const [address, setAddress] = useState(saved?.address ?? '');
   const [notes, setNotes] = useState('');
   // Since 5 Oct 2026 (lib/checkout-extras): where a delivery customer pinned themselves, and their Instagram / Facebook
-  // handle for the Tag-us offer. Both optional, both ride in the order's notes, neither is remembered on the phone.
+  // handle for the Tag-us offer. Both ride in the order's notes and neither is remembered on the phone; the handle is
+  // required with a Buy 1 Get 1 deal in the cart (7 Oct 2026), optional otherwise.
   const [pin, setPin] = useState<LocationPin | null>(null);
   const [social, setSocial] = useState('');
   const [remember, setRemember] = useState(true);
@@ -134,6 +135,9 @@ export function CheckoutSheet(
       deliveryAreas: deliveryAreasText(props.deliveryFacts),
       minDeliveryOrderCents: props.minDeliveryOrderCents,
       foodSubtotalCents: props.subtotal,
+      buy1Get1InCart: props.buy1Get1InCart === true,
+      buy1Get1Open: props.buy1Get1Open !== false,
+      social,
     });
     if (invalid) return show(invalid);
     if (!props.acceptingOrders) {
@@ -375,13 +379,20 @@ export function CheckoutSheet(
                 placeholder={pickup ? 'I’ll be there at 9 pm' : 'Near the park, ring the bell twice'}
                 maxLength={400}
               />
+              {/* Required with a Buy 1 Get 1 deal in the cart (owner, 7 Oct 2026): it goes first in the order's notes,
+                  so the cashier knows whose post to check. Optional otherwise, as before. */}
               <TextField
-                label="Your Instagram or Facebook (optional)"
+                inputRef={setFieldRef('social')}
+                label={props.buy1Get1InCart ? 'Your Instagram or Facebook name (for Buy 1 Get 1)' : 'Your Instagram or Facebook (optional)'}
                 value={social}
-                onChange={setSocial}
+                onChange={(v) => {
+                  edited('social');
+                  setSocial(v);
+                }}
                 placeholder="@yourname"
                 autoComplete="off"
                 maxLength={SOCIAL_MAX}
+                error={fieldError('social')}
                 hint={tagUsHint(shop.profile.name, shop.profile.socialLinks)}
               />
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">

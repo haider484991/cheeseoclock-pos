@@ -507,7 +507,8 @@ export function dealWorthCents(
     slots++;
     let cheapest: number | null = null;
     for (const m of group.modifiers) {
-      const slot = /^(?:2nd\s+)?(medium|large):\s*(.+)$/i.exec(m.name.trim());
+      // "Large: Fajita Pizza", "2nd Medium: …", and a Buy 1 Get 1 deal's free pizza "Free Medium: …" (7 Oct 2026).
+      const slot = /^(?:2nd\s+|free\s+)?(medium|large):\s*(.+)$/i.exec(m.name.trim());
       const price = slot ? priceOf.get(`${slot[2]!.trim()}|${slot[1]}`.toLowerCase()) : undefined;
       if (price !== undefined) cheapest = cheapest === null ? price : Math.min(cheapest, price);
     }

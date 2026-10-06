@@ -179,6 +179,22 @@ describe('value deals', () => {
     expect(dealWorthCents(m, familyFeast)).toBe(375_000);
   });
 
+  it('prices a Buy 1 Get 1 deal’s free Medium too ("Free Medium: …", 7 Oct 2026); a free burger or side it cannot', () => {
+    const largeFreeMedium = item('Large + Free Medium', 2000, {
+      description: 'A Large 12" regular pizza + any Medium 9" regular pizza FREE.',
+      modifierGroups: [
+        slot('Deal: Large pizza', ['Large: Fajita Pizza']),
+        slot('Free: Medium pizza', ['Free Medium: Fajita Pizza']),
+      ],
+    });
+    // Large Rs 2,000 + Medium Rs 1,500 bought separately (no drink): the deal is Rs 2,000, so "Save Rs 1,500".
+    expect(dealWorthCents(m, largeFreeMedium)).toBe(350_000);
+    const largeFreeSide = item('Large + Free Burger/Side', 2000, {
+      modifierGroups: [slot('Deal: Large pizza', ['Large: Fajita Pizza']), slot('Free: burger or side', ['Free: Nuggets'])],
+    });
+    expect(dealWorthCents(m, largeFreeSide)).toBeNull();
+  });
+
   it('never names a drink brand, even in a description the till published', () => {
     expect(withoutDrinkBrand('2 Large 12" regular pizzas + 1 litre Pepsi.')).toBe(
       '2 Large 12" regular pizzas + 1 litre soft drink.',

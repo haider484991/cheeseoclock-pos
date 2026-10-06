@@ -42,6 +42,13 @@ export interface CartProps {
   notOnDeals?: boolean;
   dealInCart?: boolean;
   onlyDeals?: boolean;
+  /**
+   * A Buy 1 Get 1 deal is in the cart (shared-types buy-1-get-1): the checkout then asks for the customer's
+   * Instagram / Facebook name (required) and refuses the deal outside its hours. Absent = false.
+   */
+  buy1Get1InCart?: boolean;
+  /** Buy 1 Get 1 deals are on sale right now (1–7 PM, Karachi). Absent = true. */
+  buy1Get1Open?: boolean;
 }
 
 /**

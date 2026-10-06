@@ -2,6 +2,7 @@ import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
 import { requireAdmin, requireCapability, REFUSED, requireLicenceForSales } from '../guards.js';
 import { assertCounterAddress, assertCounterMaySee, assertOrderStillBeingTaken } from '../order-access.js';
+import { assertBuy1Get1Hours } from '../buy-1-get-1-hours.js';
 import { COST_CAPABILITY, ok, hasCapability } from '@cheeseoclock/shared-types';
 import type {
   AuthenticatedUser,
@@ -350,6 +351,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   defineHandler('orders:addItem', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
     assertChoicePicks(ctx.db, payload.menuItemId, payload.modifierIds ?? []);
+    assertBuy1Get1Hours(ctx.db, payload.orderId, [payload.menuItemId]);
     // Only the fields the contract names. `unitPriceOverrideCents` and
     // `parentOrderItemId` exist for a future server-side combo expander and
     // must never be accepted from the renderer — a free item with a clean
@@ -539,6 +541,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     if (!order) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     assertCounterMaySee(ctx.db, s, order, 'open');
     assertEditPicks(ctx.db, parsed.data.ops);
+    assertBuy1Get1Hours(ctx.db, parsed.data.orderId, addedItems(parsed.data.ops));
     try {
       return ok(previewOrderEdit(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
     } catch (e) {
@@ -557,6 +560,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     if (!order) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     assertCounterMaySee(ctx.db, s, order, 'open');
     assertEditPicks(ctx.db, input.ops);
+    assertBuy1Get1Hours(ctx.db, input.orderId, addedItems(input.ops));
     const actor = { userId: s.id, deviceId: ctx.deviceId };
     // What Save asks for (nothing written), then the manager's PIN when it asks for one: a
     // reason missing is refused first, so it never uses up a PIN attempt.
@@ -1369,6 +1373,11 @@ function assertEditPicks(db: AppDatabase, ops: ReadonlyArray<OrderEditOp>): void
       if (menuItemId) assertChoicePicks(db, menuItemId, op.modifierIds);
     }
   }
+}
+
+/** The menu items an edit puts on the order (its 'add' ops), for the Buy 1 Get 1 hours. */
+function addedItems(ops: ReadonlyArray<OrderEditOp>): string[] {
+  return ops.flatMap((op) => (op.op === 'add' ? [op.menuItemId] : []));
 }
 
 /**

@@ -60,7 +60,15 @@ import { menuImageSrcSet } from '@/lib/images';
 import { cardOffer, regularPizzaPrices, type CardOffer } from '@/lib/offers';
 import { pixel, type PixelLine } from '@/lib/meta-pixel';
 import { trackPath } from '@/lib/order-display';
-import { NOT_ON_VALUE_DEALS, type PublishedMenuItem, type WebFulfilment } from '@cheeseoclock/shared-types';
+import {
+  BUY_1_GET_1_CLOSED_MESSAGE,
+  BUY_1_GET_1_WINDOW,
+  NOT_ON_VALUE_DEALS,
+  buy1Get1OpenAt,
+  isBuy1Get1Category,
+  type PublishedMenuItem,
+  type WebFulfilment,
+} from '@cheeseoclock/shared-types';
 import type { PublicMenu } from '@/lib/public-menu';
 import { CartPanel, type CartProps } from './ordering/cart-ui';
 import { CheckoutSheet, type PlacedOrder } from './ordering/CheckoutSheet';
@@ -245,10 +253,14 @@ export function OrderingApp({
   // comes to. Kept per card key so the memoised cards re-render only when the percents or the menu change.
   const offersByCard = useMemo(() => {
     const m = new Map<string, CardOffer>();
-    for (const s of sections) for (const c of s.cards) m.set(c.key, cardOffer(s.name, c, { pickupPct, deliveryPct, canPickup }));
+    const dealsOnMenu = sections.some((s) => isBuy1Get1Category(s.name));
+    for (const s of sections) for (const c of s.cards) m.set(c.key, cardOffer(s.name, c, { pickupPct, deliveryPct, canPickup }, { dealsOnMenu }));
     return m;
   }, [sections, pickupPct, deliveryPct, canPickup]);
   const offerPrices = useMemo(() => regularPizzaPrices(sections), [sections]);
+  // The Buy 1 Get 1 deals' own section, once the till has published one: the banner's button jumps there, and the
+  // cards' strips say the free item comes in a deal.
+  const buy1Get1Anchor = useMemo(() => sections.find((s) => isBuy1Get1Category(s.name))?.anchor ?? null, [sections]);
 
   const [cart, setCart] = useState<CartLine[]>([]);
   const [sheet, setSheet] = useState<{ card: MenuCard; variantIndex: number } | null>(null);
@@ -339,6 +351,21 @@ export function OrderingApp({
   // Value deals take no pick-up discount (v0.7.34): the words say so only while the menu marks one.
   const notOnDeals = useMemo(() => menuHasNoDiscountItems(menu), [menu]);
   const { dealInCart, onlyDeals } = cartDeals(cart);
+  // Buy 1 Get 1 deals (shared-types buy-1-get-1): sold 1–7 PM only. The clock is read after the page mounts (the page
+  // can be served from a cache made at another hour), then every 30 seconds; until then they count as on sale — the
+  // checkout and the server check the hours again.
+  const [clockMs, setClockMs] = useState<number | null>(null);
+  useEffect(() => {
+    setClockMs(Date.now());
+    const t = setInterval(() => setClockMs(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  const buy1Get1Open = clockMs === null || buy1Get1OpenAt(clockMs);
+  const buy1Get1Items = useMemo(
+    () => new Set(menu.categories.filter((c) => isBuy1Get1Category(c.name)).flatMap((c) => c.items.map((i) => i.posItemId))),
+    [menu],
+  );
+  const buy1Get1InCart = cart.some((l) => buy1Get1Items.has(l.item.posItemId));
 
   const qtyByItem = useMemo(() => {
     const m = new Map<string, number>();
@@ -361,6 +388,10 @@ export function OrderingApp({
       const v = card.variants[variantIndex];
       // A pick-up-only size is orderable only while online pick-up is (the whole card, or one size).
       if (!v || !sizeOrderable(v, canPickup)) return;
+      if (!buy1Get1Open && buy1Get1Items.has(v.item.posItemId)) {
+        flash(BUY_1_GET_1_CLOSED_MESSAGE, 3200);
+        return;
+      }
       if (v.item.modifierGroups.length > 0) {
         pixel.viewItem({ id: v.item.posItemId, name: variantLabel(card, v), unitCents: v.item.basePriceCents });
         setSheet({ card, variantIndex });
@@ -368,7 +399,7 @@ export function OrderingApp({
         addToCart(v.item, variantLabel(card, v), []);
       }
     },
-    [canPickup, addToCart],
+    [canPickup, addToCart, buy1Get1Open, buy1Get1Items, flash],
   );
 
   const setQty = useCallback((key: string, qty: number) => setCart((prev) => setLineQty(prev, key, qty)), []);
@@ -447,6 +478,8 @@ export function OrderingApp({
     notOnDeals,
     dealInCart,
     onlyDeals,
+    buy1Get1InCart,
+    buy1Get1Open,
   };
 
   return (
@@ -463,6 +496,7 @@ export function OrderingApp({
         shop={shop}
         offerPrices={offerPrices}
         offerWhere={copyText(MENU_OFFER_WHERE, { ...deliveryFacts, shop })}
+        offerDealsAnchor={buy1Get1Anchor}
       />
 
       {lastOrder && (
@@ -490,6 +524,8 @@ export function OrderingApp({
                       key={card.key}
                       card={card}
                       n={i + 1}
+                      kind={isBuy1Get1Category(s.name) ? 'buy1get1' : 'value'}
+                      closed={isBuy1Get1Category(s.name) && !buy1Get1Open}
                       worthCents={dealWorth.get(card.variants[0]?.item.posItemId ?? '') ?? null}
                       qtyByItem={qtyByItem}
                       canPickup={canPickup}
@@ -577,6 +613,10 @@ export function OrderingApp({
           onConfirm={(v, ids, qty, notes) => {
             // The card's rule again at the cart: a pick-up-only size only while online pick-up is on.
             if (!sizeOrderable(v, canPickup)) return;
+            if (!buy1Get1Open && buy1Get1Items.has(v.item.posItemId)) {
+              flash(BUY_1_GET_1_CLOSED_MESSAGE, 3200);
+              return;
+            }
             addToCart(v.item, variantLabel(sheet.card, v), ids, qty, notes);
             setSheet(null);
           }}
@@ -608,6 +648,7 @@ function isSignature(sectionName: string): boolean {
 }
 
 function sectionNote(sectionName: string): string | null {
+  if (isBuy1Get1Category(sectionName)) return `Every day ${BUY_1_GET_1_WINDOW} · regular pizzas · post your meal, tag us & show us the post`;
   if (/signature/i.test(sectionName)) return 'Large 12" only';
   if (/deal/i.test(sectionName)) return 'Choice of pizzas only from the regular menu';
   if (/^pizza|regular/i.test(sectionName)) return 'Medium 9" · Large 12"';
@@ -625,6 +666,7 @@ function MenuHeader({
   shop,
   offerPrices,
   offerWhere,
+  offerDealsAnchor = null,
 }: {
   canPickup: boolean;
   pickupPct: number;
@@ -643,6 +685,8 @@ function MenuHeader({
   offerPrices: { mediumCents: number | null; largeCents: number | null };
   /** The banner's where-and-when line (page-copy MENU_OFFER_WHERE). */
   offerWhere: string;
+  /** The Buy 1 Get 1 deals' section anchor, once the menu has them; null = no button (the banner as before). */
+  offerDealsAnchor?: string | null;
 }) {
   return (
     <div className="bg-ink text-cream">
@@ -691,7 +735,7 @@ function MenuHeader({
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">{hoursChip}</li>
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">Cash on delivery</li>
         </ul>
-        <OfferBanner prices={offerPrices} where={offerWhere} />
+        <OfferBanner prices={offerPrices} where={offerWhere} dealsAnchor={offerDealsAnchor} />
         <p className="mt-4 max-w-2xl text-sm leading-snug text-cream/75">{shop.website.allergyNotice}</p>
       </div>
     </div>
@@ -1039,11 +1083,20 @@ const ItemCard = memo(function ItemCard({ card, qtyByItem, canPickup, onPick, of
 const DealCard = memo(function DealCard({
   card,
   n,
+  kind = 'value',
+  closed = false,
   worthCents,
   qtyByItem,
   canPickup,
   onPick,
-}: CardProps & { n: number; worthCents: number | null }) {
+}: CardProps & {
+  n: number;
+  /** A value deal, or a Buy 1 Get 1 deal (its own label; sold 1–7 PM only). */
+  kind?: 'value' | 'buy1get1';
+  /** A Buy 1 Get 1 deal outside its hours: it says when, and has no add buttons. */
+  closed?: boolean;
+  worthCents: number | null;
+}) {
   const count = countFor(card, qtyByItem);
   const price = card.variants[0]?.item.basePriceCents ?? 0;
   const save = worthCents !== null ? worthCents - price : 0;
@@ -1058,7 +1111,9 @@ const DealCard = memo(function DealCard({
       </span>
       <div className="relative flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="font-cond text-xs font-extrabold uppercase tracking-[0.22em] text-ink/70">Value deal {num}</p>
+          <p className="font-cond text-xs font-extrabold uppercase tracking-[0.22em] text-ink/70">
+            {kind === 'buy1get1' ? `Buy 1 Get 1 · ${BUY_1_GET_1_WINDOW}` : `Value deal ${num}`}
+          </p>
           <h3 className="mt-1 font-display text-3xl uppercase leading-none tracking-wide">{card.name}</h3>
         </div>
         {save > 0 && (
@@ -1075,7 +1130,13 @@ const DealCard = memo(function DealCard({
         </p>
       )}
       <div className="relative mt-auto flex flex-wrap items-center gap-3 pt-4">
-        <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} onGold />
+        {closed ? (
+          <span className="rounded-full border-2 border-ink px-4 py-2 font-cond text-sm font-extrabold uppercase tracking-wide text-ink">
+            Available {BUY_1_GET_1_WINDOW}
+          </span>
+        ) : (
+          <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} onGold />
+        )}
         {count > 0 && (
           <span className="rounded-full bg-ink px-2.5 py-1 font-cond text-xs font-bold uppercase text-cheese">
             {count} in order

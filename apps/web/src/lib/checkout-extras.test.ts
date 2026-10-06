@@ -106,3 +106,18 @@ describe('composeNotes', () => {
     expect(composeNotes({ pin: null, social: '@ahmed_k', notes: 'abcdef' }, 15)).toBe('Social: @ahmed_');
   });
 });
+
+describe('composeNotes with a Buy 1 Get 1 deal (7 Oct 2026)', () => {
+  it('leads with whose post the cashier checks, before the pin; no second "Social:"', () => {
+    const pin = { lat: 24.808354, lng: 67.068452, accuracyM: 25 };
+    expect(composeNotes({ pin, social: '@ahmed_k', notes: 'Ring twice', buy1Get1: true })).toBe(
+      'Buy 1 Get 1: check the post by @ahmed_k. Map pin: https://maps.google.com/?q=24.808354,67.068452 (about 25 m). Ring twice',
+    );
+    expect(composeNotes({ pin: null, social: '@ahmed_k', notes: null, buy1Get1: true })).toBe('Buy 1 Get 1: check the post by @ahmed_k');
+  });
+
+  it('without a deal, or without a name, the notes are as before', () => {
+    expect(composeNotes({ pin: null, social: '@ahmed_k', notes: null, buy1Get1: false })).toBe('Social: @ahmed_k');
+    expect(composeNotes({ pin: null, social: null, notes: 'Hi', buy1Get1: true })).toBe('Hi');
+  });
+});

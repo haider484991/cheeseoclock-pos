@@ -1,3 +1,5 @@
+import { buy1Get1NoteLine } from '@cheeseoclock/shared-types';
+
 /**
  * The two optional extras the checkout adds to an order (owner, 5 Oct 2026: "add social media and
  * location pin on the checkout address so people pin their location too"):
@@ -71,10 +73,24 @@ export function cleanSocial(raw: unknown): string | null {
  * are first, so it is the customer's words that give way. Null when there is nothing to say.
  */
 export function composeNotes(
-  parts: { pin: LocationPin | null; social: string | null; notes: string | null },
+  parts: {
+    pin: LocationPin | null;
+    social: string | null;
+    notes: string | null;
+    /**
+     * A Buy 1 Get 1 deal is on the order (7 Oct 2026): the handle leads the notes as "Buy 1 Get 1: check the post by
+     * @x" (shared-types buy1Get1NoteLine), so the cashier knows whose post to check, before the pin.
+     */
+    buy1Get1?: boolean;
+  },
   max: number = ORDER_NOTES_MAX,
 ): string | null {
-  const head = [parts.pin ? pinLine(parts.pin) : null, parts.social ? `Social: ${parts.social}` : null]
+  const deal = parts.buy1Get1 === true && parts.social !== null;
+  const head = [
+    deal ? buy1Get1NoteLine(parts.social!) : null,
+    parts.pin ? pinLine(parts.pin) : null,
+    parts.social && !deal ? `Social: ${parts.social}` : null,
+  ]
     .filter((s): s is string => s !== null)
     .join('. ');
   const rest = parts.notes?.trim() || '';

@@ -87,3 +87,35 @@ describe('the owner’s delivery areas', () => {
     });
   });
 });
+
+describe('Buy 1 Get 1 deals at checkout (owner, 7 Oct 2026)', () => {
+  const DEAL = { ...OK, buy1Get1InCart: true, buy1Get1Open: true, social: '@ahmed_k' };
+
+  it('pass with the customer’s Instagram or Facebook name, inside the hours', () => {
+    expect(validateCheckout(DEAL)).toBeNull();
+    expect(validateCheckout({ ...DEAL, fulfilment: 'pickup', hasZone: false, address: '' })).toBeNull();
+  });
+
+  it('are refused outside 1–7 PM, at the cart', () => {
+    expect(validateCheckout({ ...DEAL, buy1Get1Open: false })).toEqual({
+      field: 'cart',
+      message: 'Buy 1 Get 1 deals are sold every day from 1 PM to 7 PM. Remove the deal to order now.',
+    });
+  });
+
+  it('need the Instagram or Facebook name — after the other details — and only with a deal in the cart', () => {
+    expect(validateCheckout({ ...DEAL, social: '' })).toEqual({
+      field: 'social',
+      message: 'Add your Instagram or Facebook name to get the Buy 1 Get 1 deal: post your meal, tag us and show us the post.',
+    });
+    expect(validateCheckout({ ...DEAL, social: ' @ ' })?.field).toBe('social');
+    expect(validateCheckout({ ...DEAL, social: '', name: '' })?.field).toBe('name');
+    expect(validateCheckout({ ...OK, social: '' })).toBeNull();
+    expect(validateCheckout({ ...OK, buy1Get1InCart: false, buy1Get1Open: false })).toBeNull();
+  });
+
+  it('the server’s refusals point at the cart and at the name field', () => {
+    expect(problemFromServer({ error: 'buy1get1_closed', message: 'Closed now.' })).toEqual({ field: 'cart', message: 'Closed now.' });
+    expect(problemFromServer({ error: 'buy1get1_social', message: 'Add your name.' })).toEqual({ field: 'social', message: 'Add your name.' });
+  });
+});

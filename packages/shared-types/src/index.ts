@@ -18,6 +18,7 @@ export * from './order-edit.js';
 export * from './order-stock.js';
 export * from './order-history.js';
 export * from './menu.js';
+export * from './buy-1-get-1.js';
 export * from './menu-import.js';
 export * from './menu-deploy.js';
 export * from './menu-deploy-view.js';

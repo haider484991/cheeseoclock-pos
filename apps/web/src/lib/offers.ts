@@ -11,6 +11,10 @@ import { percentDiscountCents } from './pricing';
  * item of Buy 1 Get 1 is given the way it always was — the customer tags the shop, shows the post, and the shop
  * takes the free item off the bill. This file only says so, per card.
  *
+ * Since 7 Oct 2026 the till sells the offer as Buy 1 Get 1 DEALS (a menu category of their own, shared-types
+ * buy-1-get-1: the pizza you pay for with the free item as a Rs 0 choice, 1–7 PM only). While the menu has them
+ * (`dealsOnMenu`), each card's strip says the free item comes in a deal, and the banner has a button to them.
+ *
  * Pure and unit-tested (offers.test.ts). The words are one place (OFFER_*): the menu's banner, each card's strip
  * and the checkout's "tag us" hint all read them, so a change of hours or terms is one edit here.
  *
@@ -117,23 +121,31 @@ function pricesAt(card: Pick<MenuCard, 'name' | 'variants'>, pct: number): Offer
 
 const hasSize = (card: Pick<MenuCard, 'variants'>, size: RegExp) => card.variants.some((v) => size.test(v.size ?? ''));
 
-function bogoFor(section: OfferSection, card: Pick<MenuCard, 'name' | 'variants'>): CardOffer['bogo'] {
+function bogoFor(section: OfferSection, card: Pick<MenuCard, 'name' | 'variants'>, dealsOnMenu: boolean): CardOffer['bogo'] {
+  // With the deals on the menu the free item comes in one ("…in a Buy 1 Get 1 deal"); before that, the poster's words.
+  const inDeal = (words: string) => (dealsOnMenu ? `${words} in a Buy 1 Get 1 deal` : words);
   switch (section) {
     case 'pizza': {
       const medium = hasSize(card, /medium/i);
       const large = hasSize(card, /large/i);
       const title = `BUY 1 GET 1 FREE · ${OFFER_WINDOW}`;
+      if (dealsOnMenu) {
+        if (large && medium) return { title, detail: 'In a Buy 1 Get 1 deal: Large + free burger, side or Medium · Medium + free side' };
+        if (large) return { title, detail: 'In a Buy 1 Get 1 deal: + a free burger, side or Medium pizza' };
+        if (medium) return { title, detail: 'In a Buy 1 Get 1 deal: + a free side' };
+        return null;
+      }
       if (large && medium) return { title, detail: 'Large: any burger, side or Medium FREE · Medium: any side FREE' };
       if (large) return { title, detail: 'Any burger, side or Medium pizza FREE' };
       if (medium) return { title, detail: 'Any side FREE' };
       return null;
     }
     case 'burger':
-      return /nashville/i.test(card.name) ? null : { title: `FREE · ${OFFER_WINDOW}`, detail: 'With any Large pizza' };
+      return /nashville/i.test(card.name) ? null : { title: `FREE · ${OFFER_WINDOW}`, detail: inDeal('With any Large pizza') };
     case 'side':
       return {
         title: `FREE · ${OFFER_WINDOW}`,
-        detail: /loaded/i.test(card.name) ? 'With any Large pizza' : 'With any Large or Medium pizza',
+        detail: inDeal(/loaded/i.test(card.name) ? 'With any Large pizza' : 'With any Large or Medium pizza'),
       };
     default:
       return null;
@@ -145,13 +157,18 @@ function bogoFor(section: OfferSection, card: Pick<MenuCard, 'name' | 'variants'
  * every item the till marked "no discount") takes no % off, so it shows none and no strip: its own "Save Rs …"
  * badge is its offer.
  */
-export function cardOffer(sectionName: string, card: MenuCard, percents: OfferPercents): CardOffer {
+export function cardOffer(
+  sectionName: string,
+  card: MenuCard,
+  percents: OfferPercents,
+  opts: { /** The menu has Buy 1 Get 1 deals (their own section): the strips say the free item comes in one. */ dealsOnMenu?: boolean } = {},
+): CardOffer {
   const section = offerSectionOf(sectionName);
   if (section === 'deal') return { bogo: null, discount: null };
   const taking = card.variants.length > 0 && card.variants.some((v) => v.item.noDiscount !== true);
   const words = taking ? discountWords(percents) : null;
   return {
-    bogo: bogoFor(section, card),
+    bogo: bogoFor(section, card, opts.dealsOnMenu === true),
     discount: words ? { label: words.label, prices: words.pct === null ? null : pricesAt(card, words.pct) } : null,
   };
 }

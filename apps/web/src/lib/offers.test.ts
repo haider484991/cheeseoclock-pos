@@ -196,3 +196,38 @@ describe('the % off is worked out as the till rounds it', () => {
     expect(odd.discount?.prices).toEqual([{ size: '', wasCents: 33_300, nowCents: 29_970 }]);
   });
 });
+
+describe('cardOffer with Buy 1 Get 1 deals on the menu (7 Oct 2026)', () => {
+  const ON = { dealsOnMenu: true };
+
+  it('the strips say the free item comes in a deal', () => {
+    const both = card('Fajita Pizza', [
+      ['Medium', 1500],
+      ['Large', 2000],
+    ]);
+    expect(cardOffer('Pizza', both, PICKUP_10, ON).bogo).toEqual({
+      title: 'BUY 1 GET 1 FREE · 1–7 PM',
+      detail: 'In a Buy 1 Get 1 deal: Large + free burger, side or Medium · Medium + free side',
+    });
+    expect(cardOffer('Pizza', card('Fajita Pizza', [['Large', 2000]]), PICKUP_10, ON).bogo?.detail).toBe(
+      'In a Buy 1 Get 1 deal: + a free burger, side or Medium pizza',
+    );
+    expect(cardOffer('Pizza', card('Fajita Pizza', [['Medium', 1500]]), PICKUP_10, ON).bogo?.detail).toBe('In a Buy 1 Get 1 deal: + a free side');
+    expect(cardOffer('Burgers', card('Classic Crispy Chicken', [[null, 700]]), PICKUP_10, ON).bogo?.detail).toBe(
+      'With any Large pizza in a Buy 1 Get 1 deal',
+    );
+    expect(cardOffer('Burgers', card('Nashville Authentic (Hot)', [[null, 950]]), PICKUP_10, ON).bogo).toBeNull();
+    expect(cardOffer('Fries & Sides', card('Nuggets', [[null, 670]]), PICKUP_10, ON).bogo?.detail).toBe(
+      'With any Large or Medium pizza in a Buy 1 Get 1 deal',
+    );
+    expect(cardOffer('Fries & Sides', card('Signature Loaded Fries', [[null, 700]]), PICKUP_10, ON).bogo?.detail).toBe(
+      'With any Large pizza in a Buy 1 Get 1 deal',
+    );
+    // The % off is unchanged.
+    expect(cardOffer('Pizza', both, PICKUP_10, ON).discount).toEqual(cardOffer('Pizza', both, PICKUP_10).discount);
+  });
+
+  it('the deals themselves show no strip and no % off (deals are never discounted)', () => {
+    expect(cardOffer('Buy 1 Get 1 Deals', card('Large + Free Medium', [[null, 2000]]), PICKUP_10, ON)).toEqual({ bogo: null, discount: null });
+  });
+});
