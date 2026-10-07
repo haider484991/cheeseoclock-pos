@@ -130,7 +130,7 @@ export const menuImportItemSchema = z.object({
  * a file in a newer format is never downloaded by a till that would refuse it
  * ("update the till"). Raise it together with the union (a test pins them).
  */
-export const MAX_MENU_FILE_VERSION = 3;
+export const MAX_MENU_FILE_VERSION = 4;
 
 export const menuImportFileSchema = z
   .object({
@@ -142,8 +142,12 @@ export const menuImportFileSchema = z
      * uses them says 2, and an older POS refuses it instead.
      * 3 = may carry "leave out" choices (option `removes`, POS 0.7.5): a POS
      * before that would import "No onion" and still deduct the onion.
+     * 4 = may carry Buy 1 Get 1 deals (a category named "Buy 1 Get 1 …", POS
+     * 0.7.39): a POS before that would sell them at any hour, with none of
+     * the owner's rules (Settings → Money & discounts) — so a till that has
+     * not updated yet waits for its update, then takes the file by itself.
      */
-    version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
     source: z.string().max(300).nullable().default(null),
     /**
      * The tax every item in the file is charged (added on top of the price —

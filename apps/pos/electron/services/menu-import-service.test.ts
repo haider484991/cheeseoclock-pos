@@ -104,8 +104,8 @@ describe.skipIf(!DatabaseSync)('a picked file (Menu → Import)', () => {
     const db = openTill('till-1');
     pick('huge.json', Buffer.alloc(5 * 1024 * 1024 + 1, 0x20));
     await expect(pickMenuImport(db)).rejects.toThrow('That file is too large to be a menu file.');
-    pick('v4.json', JSON.stringify(madeUpMenu('v4', { version: 4 })));
-    await expect(pickMenuImport(db)).rejects.toThrow('This menu file is newer than this till (format 4; this till reads up to 3).');
+    pick('v5.json', JSON.stringify(madeUpMenu('v5', { version: 5 })));
+    await expect(pickMenuImport(db)).rejects.toThrow('This menu file is newer than this till (format 5; this till reads up to 4).');
     pick('bom.json', `\uFEFF${JSON.stringify(madeUpMenu('bom'))}`);
     await expect(pickMenuImport(db)).resolves.toMatchObject({ fileName: 'bom.json', summary: { newItems: 2 } });
   });

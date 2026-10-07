@@ -734,10 +734,10 @@ describe('claiming a file (two linked tills)', () => {
     expect((await res.json()).error).toBe('too_old');
     const old = await events('too_old');
     expect(old).toHaveLength(1);
-    expect(old[0]!['detail']).toMatchObject({ formatVersion: 4, maxFormatVersion: 3 });
+    expect(old[0]!['detail']).toMatchObject({ formatVersion: MAX_MENU_FILE_VERSION + 1, maxFormatVersion: MAX_MENU_FILE_VERSION });
     expect((await pkgRow(p.id))['state']).toBe('pending');
     // A till that reads it may claim it.
-    expect((await claim('till-B', p.id, { max: 4 })).status).toBe(200);
+    expect((await claim('till-B', p.id, { max: MAX_MENU_FILE_VERSION + 1 })).status).toBe(200);
   });
 
   it('is busy while another till imports an older file, stalled once that claim runs out', async () => {

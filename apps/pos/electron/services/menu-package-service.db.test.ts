@@ -176,18 +176,18 @@ live('where the till stands decides', () => {
 
   it('a file newer than this till reads: never downloaded, "update the till", said once', async () => {
     const c = setup();
-    c.website.upload(madeUpMenu('v4', { version: 4 }));
+    c.website.upload(madeUpMenu('v5', { version: 5 }));
     for (let i = 0; i < 3; i++) {
       const v = await c.till.service.checkNow();
       expect(v.phase).toBe('too_old');
-      expect(v.message).toContain('format 4; this till reads up to 3');
+      expect(v.message).toContain('format 5; this till reads up to 4');
       expect(v.message).toContain('Update the till');
       tick(c, 3 * MIN);
     }
     expect(c.website.claims()).toHaveLength(0);
     expect(c.website.callsTo(/\/content$/)).toHaveLength(0);
     expect(c.website.reports('too_old')).toHaveLength(1);
-    expect(c.website.reports('too_old')[0]!.body).toMatchObject({ formatVersion: 4, maxFormatVersion: 3 });
+    expect(c.website.reports('too_old')[0]!.body).toMatchObject({ formatVersion: 5, maxFormatVersion: 4 });
     expect(c.till.emits.map((e) => e.notice?.kind).filter(Boolean)).toEqual(['problem']);
   });
 

@@ -493,7 +493,9 @@ export interface PublishedMenu {
 //
 // DEPLOY ORDER. The website first (a push to main deploys it), then the
 // tills, then the menu file with the deals. Until a menu has a "Buy 1 Get 1"
-// category, nothing on either side changes.
+// category, nothing on either side changes. The menu file that brings them is
+// format 4 (shared-schemas menu-import.ts): a till before v0.7.39 never takes
+// it ("update the till"), and takes it by itself once updated.
 
 // ---------------------------------------------------------------------------
 // THE SHOP BLOCK (sweep B2 + B4, after v0.7.30) — the shop's name, numbers,

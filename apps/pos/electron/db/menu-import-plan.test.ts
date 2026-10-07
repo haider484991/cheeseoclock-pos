@@ -640,13 +640,14 @@ describe('menuImportFileSchema', () => {
     expect(orderOf(last, 'dips')).toBe(6);
   });
 
-  it('reads versions 1 to 3 only', () => {
+  it('reads versions 1 to 4 only (4: the Buy 1 Get 1 deals, v0.7.39)', () => {
     const file = (version: number) =>
       menuImportFileSchema.safeParse({ format: 'cheeseoclock-menu-import', version, categories: [], ingredients: [], items: [] });
     expect(file(1).success).toBe(true);
     expect(file(2).success).toBe(true);
     expect(file(3).success).toBe(true);
-    expect(file(4).success).toBe(false);
+    expect(file(4).success).toBe(true);
+    expect(file(5).success).toBe(false);
   });
 });
 
