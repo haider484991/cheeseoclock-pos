@@ -13,10 +13,19 @@ import { SecretHint } from '../../components/secret/SecretHint';
 import { secretReady } from '../../components/secret/secretRules';
 import { RecordPurchaseDialog, type PayoutToConvert } from '../inventory/RecordPurchaseDialog';
 import { useOrderReasons } from '../settings/shop-rules/useShopSetting';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
+import {
+  CASH_IN_EXAMPLE,
+  CASH_IN_HINT,
+  NOTE_CHANGE_TEXT,
+  NOTE_CHANGE_TITLE,
+  noteChangeQuestion,
+  showsNoteChangeNote,
+} from './noteChangeWords';
 
 const TYPES: Array<{ id: CashMovementType; label: string; hint: string; icon: typeof Wallet }> = [
   { id: 'payout', label: 'Cash out', hint: 'Supplier, gas, an expense', icon: ArrowUpFromLine },
-  { id: 'payin', label: 'Cash in', hint: 'Change from the bank', icon: ArrowDownToLine },
+  { id: 'payin', label: 'Cash in', hint: CASH_IN_HINT, icon: ArrowDownToLine },
   { id: 'tip_out', label: 'Rider tip', hint: 'Tip handed to a rider', icon: Bike },
 ];
 
@@ -76,6 +85,13 @@ export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onCl
   });
 
   const moves = listQ.data ?? [];
+
+  // Breaking a note is not money in or out (noteChangeWords.ts): a reason about change asks first, in Roman Urdu.
+  const record = async () => {
+    const q = noteChangeQuestion(type, reason);
+    if (q && !(await askConfirm(q.message, { yesLabel: q.yesLabel, noLabel: q.noLabel, safeDefault: true }))) return;
+    saveMut.mutate();
+  };
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
@@ -170,11 +186,21 @@ export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onCl
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 placeholder={
-                  type === 'payin' ? 'Change from the bank' : type === 'tip_out' ? 'Tip for Ali' : 'Gas cylinder'
+                  type === 'payin' ? CASH_IN_EXAMPLE : type === 'tip_out' ? 'Tip for Ali' : 'Gas cylinder'
                 }
                 className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
               />
             </div>
+            {showsNoteChangeNote(type, reason) && (
+              <div
+                role="note"
+                lang="ur-Latn"
+                className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950"
+              >
+                <p className="font-semibold text-amber-900 dark:text-amber-100">{NOTE_CHANGE_TITLE}</p>
+                <p className="mt-1 text-amber-900 dark:text-amber-100">{NOTE_CHANGE_TEXT}</p>
+              </div>
+            )}
             {!canDirect && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950">
                 <div className="mb-2 text-sm font-semibold text-amber-900 dark:text-amber-100">
@@ -201,7 +227,7 @@ export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onCl
               size="md"
               className="flex-1"
               disabled={!ready || saveMut.isPending}
-              onClick={() => saveMut.mutate()}
+              onClick={() => void record()}
             >
               {saveMut.isPending ? 'Saving…' : 'Record'}
             </Button>
