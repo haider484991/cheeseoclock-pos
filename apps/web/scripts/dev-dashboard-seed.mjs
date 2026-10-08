@@ -8,12 +8,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 const SITE = process.env.SITE ?? 'http://localhost:3000';
-// Never the real website: this makes up orders and an owner sign-in with a known password.
+// Never the real website: this makes up orders and two sign-ins it prints.
 const HOST = new URL(SITE).hostname;
 if (!['localhost', '127.0.0.1', '[::1]'].includes(HOST) && !HOST.endsWith('.localhost') && !HOST.endsWith('.test')) {
   throw new Error(`Development only: ${SITE} is not a local site`);
 }
 const SECRET = process.env.BRIDGE_SECRET;
+/** A test sign-in's password, made up on each run and printed at the end (none is typed in here). */
+const madeUpPassword = () => `dev-${randomUUID().slice(0, 13)}`;
 if (!SECRET) throw new Error('Set BRIDGE_SECRET to the dev server’s secret');
 const DAYS = Number(process.env.SEED_DAYS ?? 42);
 
@@ -328,8 +330,8 @@ for (const till of TILLS) {
 const ALPHA = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const code = () => Array.from({ length: 12 }, () => ALPHA[Math.floor(rnd() * 32)]).join('');
 const people = [
-  { username: 'testowner', displayName: 'Test Owner', role: 'owner', seesReports: true, password: 'owner-pass-123' },
-  { username: 'testmanager', displayName: 'Test Manager', role: 'manager', seesReports: false, password: 'manager-pass-123' },
+  { username: 'testowner', displayName: 'Test Owner', role: 'owner', seesReports: true, password: madeUpPassword() },
+  { username: 'testmanager', displayName: 'Test Manager', role: 'manager', seesReports: false, password: madeUpPassword() },
 ];
 for (const p of people) {
   const c = code();

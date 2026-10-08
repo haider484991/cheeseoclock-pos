@@ -55,6 +55,15 @@ const SECRET = 'test-bridge-secret-0123456789';
 const SITE = 'https://site.test';
 const TILL = 'till-test-1';
 
+/**
+ * The tests' passwords, made up as they run: a secret scanner reads any
+ * password typed into the repository as a leaked one (GitGuardian, 8 Oct
+ * 2026). Each name stands for one; TOO_SHORT is too short on purpose.
+ */
+const PW_NAMES = ['first', 'second', 'third', 'nope', 'right', 'wrong', 'good', 'nobody', 'site', 'page'] as const;
+const PW = Object.fromEntries(PW_NAMES.map((k) => [k, `${k}-${randomBytes(6).toString('hex')}`])) as Record<(typeof PW_NAMES)[number], string>;
+const TOO_SHORT = 'abcde';
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -375,10 +384,10 @@ describe('a person on their phone', () => {
   it('sets up with the code, signs in, changes the password, and is signed out when removed', async () => {
     const { id, code } = await addPerson('testmgr', 'manager');
     // Not set up yet: sign-in points to the code.
-    expect((await call(signIn.POST(phoneReq('/dashboard/api/sign-in', { username: 'testmgr', password: 'whatever1' })))).status).toBe(409);
+    expect((await call(signIn.POST(phoneReq('/dashboard/api/sign-in', { username: 'testmgr', password: PW.nobody })))).status).toBe(409);
     // A weak password does NOT use the code up.
-    expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testmgr', code, password: 'short' })))).status).toBe(400);
-    const done = await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'TESTMGR', code: formatSetupCode(code).toLowerCase(), password: 'test-pass-123' })));
+    expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testmgr', code, password: TOO_SHORT })))).status).toBe(400);
+    const done = await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'TESTMGR', code: formatSetupCode(code).toLowerCase(), password: PW.first })));
     expect(done.status).toBe(200);
     const token = cookieOf(done);
     expect(token).toBeTruthy();
@@ -386,16 +395,16 @@ describe('a person on their phone', () => {
     expect(done.headers.get('set-cookie')).toMatch(/Path=\/dashboard/);
     expect(done.headers.get('set-cookie')).toMatch(/Secure/);
     // The code is used up.
-    expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testmgr', code, password: 'test-pass-456' })))).status).toBe(401);
+    expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testmgr', code, password: PW.second })))).status).toBe(401);
 
     const user = await session.userForToken(token);
     expect(user).toMatchObject({ username: 'testmgr', role: 'manager', seesReports: false });
 
     // Sign in on a second phone, then change the password on the first: the second is signed out.
-    const second = cookieOf(await call(signIn.POST(phoneReq('/dashboard/api/sign-in', { username: 'testmgr', password: 'test-pass-123' }))));
+    const second = cookieOf(await call(signIn.POST(phoneReq('/dashboard/api/sign-in', { username: 'testmgr', password: PW.first }))));
     expect(second).toBeTruthy();
-    expect((await call(password.POST(phoneReq('/dashboard/api/password', { current: 'nope-nope-1', next: 'test-pass-789' }, { cookie: token! })))).status).toBe(401);
-    expect((await call(password.POST(phoneReq('/dashboard/api/password', { current: 'test-pass-123', next: 'test-pass-789' }, { cookie: token! })))).status).toBe(200);
+    expect((await call(password.POST(phoneReq('/dashboard/api/password', { current: PW.nope, next: PW.third }, { cookie: token! })))).status).toBe(401);
+    expect((await call(password.POST(phoneReq('/dashboard/api/password', { current: PW.first, next: PW.third }, { cookie: token! })))).status).toBe(200);
     expect(await session.userForToken(token)).not.toBeNull();
     expect(await session.userForToken(second)).toBeNull();
 
@@ -406,34 +415,34 @@ describe('a person on their phone', () => {
 
   it('locks a username after five wrong passwords, and voids a code after five wrong tries', async () => {
     const { code } = await addPerson('testlock', 'owner');
-    await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testlock', code, password: 'right-pass-1' })));
+    await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testlock', code, password: PW.right })));
     for (let i = 0; i < DASH_WRONG_PASSWORDS - 1; i++) {
-      expect((await call(signIn.POST(phoneReq('/dashboard/api/sign-in', { username: 'testlock', password: `wrong-${i}` })))).status).toBe(401);
+      expect((await call(signIn.POST(phoneReq('/dashboard/api/sign-in', { username: 'testlock', password: `${PW.wrong}-${i}` })))).status).toBe(401);
     }
-    expect((await call(signIn.POST(phoneReq('/dashboard/api/sign-in', { username: 'testlock', password: 'wrong-last' })))).status).toBe(429);
+    expect((await call(signIn.POST(phoneReq('/dashboard/api/sign-in', { username: 'testlock', password: PW.wrong })))).status).toBe(429);
     // Locked: even the right password waits.
-    expect((await call(signIn.POST(phoneReq('/dashboard/api/sign-in', { username: 'testlock', password: 'right-pass-1' })))).status).toBe(429);
+    expect((await call(signIn.POST(phoneReq('/dashboard/api/sign-in', { username: 'testlock', password: PW.right })))).status).toBe(429);
 
     const { code: code2 } = await addPerson('testcode', 'manager');
     for (let i = 0; i < DASH_SETUP_CODE_TRIES; i++) {
-      expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testcode', code: newCode(), password: 'a-good-pass' }, { ip: '198.51.100.20' })))).status).toBe(401);
+      expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testcode', code: newCode(), password: PW.good }, { ip: '198.51.100.20' })))).status).toBe(401);
     }
     // Voided: the right code no longer works.
-    expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testcode', code: code2, password: 'a-good-pass' }, { ip: '198.51.100.20' })))).status).toBe(401);
+    expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testcode', code: code2, password: PW.good }, { ip: '198.51.100.20' })))).status).toBe(401);
   });
 
   it('answers an unknown username like a wrong password', async () => {
-    const res = await call(signIn.POST(phoneReq('/dashboard/api/sign-in', { username: 'nobody', password: 'whatever-1' })));
+    const res = await call(signIn.POST(phoneReq('/dashboard/api/sign-in', { username: 'nobody', password: PW.nobody })));
     expect(res.status).toBe(401);
     expect(((await res.json()) as { error: string }).error).toBe('wrong');
   });
 
   it('refuses another site, a form post, and signs out', async () => {
     const { code } = await addPerson('testsite', 'owner');
-    expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testsite', code, password: 'x-pass-1234' }, { origin: 'https://evil.test' })))).status).toBe(403);
-    expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testsite', code, password: 'x-pass-1234' }, { site: 'cross-site' })))).status).toBe(403);
-    expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testsite', code, password: 'x-pass-1234' }, { type: 'text/plain' })))).status).toBe(415);
-    const token = cookieOf(await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testsite', code, password: 'x-pass-1234' }))));
+    expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testsite', code, password: PW.site }, { origin: 'https://evil.test' })))).status).toBe(403);
+    expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testsite', code, password: PW.site }, { site: 'cross-site' })))).status).toBe(403);
+    expect((await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testsite', code, password: PW.site }, { type: 'text/plain' })))).status).toBe(415);
+    const token = cookieOf(await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testsite', code, password: PW.site }))));
     expect(await session.userForToken(token)).not.toBeNull();
     const out = await call(signOut.POST(phoneReq('/dashboard/api/sign-out', {}, { cookie: token! })));
     expect(out.headers.get('set-cookie')).toMatch(/Max-Age=0/);
@@ -443,7 +452,7 @@ describe('a person on their phone', () => {
   it('pages read the cookie, and send a stranger to sign in', async () => {
     await expect(session.requireUser('/dashboard/orders')).rejects.toThrow('redirect:/dashboard/sign-in?next=%2Fdashboard%2Forders');
     const { code } = await addPerson('testpage', 'manager', true);
-    cookieJar.value = cookieOf(await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testpage', code, password: 'page-pass-1' })))) ?? undefined;
+    cookieJar.value = cookieOf(await call(setup.POST(phoneReq('/dashboard/api/setup', { username: 'testpage', code, password: PW.page })))) ?? undefined;
     expect(await session.requireUser()).toMatchObject({ username: 'testpage', seesReports: true });
   });
 

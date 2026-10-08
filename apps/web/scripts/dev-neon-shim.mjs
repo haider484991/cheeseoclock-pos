@@ -8,7 +8,9 @@
 //   DEV_PGLITE_DIR=C:\some\dir node scripts/dev-neon-shim.mjs   (kept on disk)
 //
 // then run the site with
-//   DATABASE_URL=postgresql://dev:dev@localhost:4444/dev
+//   DATABASE_URL = a postgresql:// URL to localhost:4444, database "dev" (the
+//                  driver wants a user name and password in it: any made-up
+//                  ones, the shim checks neither)
 //   DEV_NEON_ENDPOINT=http://localhost:4444/sql
 //
 // The driver posts { query, params } with "Neon-Raw-Text-Output: true" and
