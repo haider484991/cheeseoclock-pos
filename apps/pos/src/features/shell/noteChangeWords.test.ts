@@ -9,6 +9,9 @@ import {
   CASH_IN_HINT,
   NOTE_CHANGE_TEXT,
   NOTE_CHANGE_TITLE,
+  OPEN_DRAWER_CASH_BUTTON,
+  OPEN_DRAWER_NOTE_TEXT,
+  OPEN_DRAWER_NOTE_TITLE,
   looksLikeNoteChange,
   noteChangeQuestion,
   showsNoteChangeNote,
@@ -99,5 +102,15 @@ describe('the question before Record', () => {
     expect(noteChangeQuestion('payin', 'Float from the owner')).toBeNull();
     expect(noteChangeQuestion('payout', 'water suzuki')).toBeNull();
     expect(noteChangeQuestion('tip_out', 'for change')).toBeNull();
+  });
+});
+
+describe('Open drawer (the owner, 8 Oct 2026: "there is 2 ways to cash out ... confusing for cashier")', () => {
+  it('says in Roman Urdu that it records no money, and sends money in or out to Cash out / Cash in', () => {
+    expect(OPEN_DRAWER_NOTE_TITLE).toBe('Open drawer se paisa record nahi hota');
+    expect(OPEN_DRAWER_NOTE_TEXT).toContain('galle ka paisa utna hi rehta hai');
+    expect(OPEN_DRAWER_NOTE_TEXT).toContain('to yahan se nahi, "Cash out" karein');
+    expect(OPEN_DRAWER_NOTE_TEXT).toContain('Naya paisa daalna hai to "Cash in" karein');
+    expect(OPEN_DRAWER_CASH_BUTTON).toBe('Cash out / Cash in karein');
   });
 });

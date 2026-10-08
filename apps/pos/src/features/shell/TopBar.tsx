@@ -5,6 +5,7 @@ import { LogOut, Clock, Calculator, Inbox } from 'lucide-react';
 import { CalculatorPopover } from './CalculatorPopover';
 import { ShiftWidget } from './ShiftWidget';
 import { OpenDrawerDialog } from './OpenDrawerDialog';
+import { CashMovementDialog } from './CashMovementDialog';
 import { useKeepLoginAsk } from './StepInHold';
 import { stepInTimeLabel } from './stepInClock';
 
@@ -45,6 +46,8 @@ export function TopBar() {
   const logout = useSessionStore((s) => s.logout);
   const [calcOpen, setCalcOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Open drawer's "Cash out / Cash in karein": the cash in / out box, for the shift open now.
+  const [cashShiftId, setCashShiftId] = useState<string | null>(null);
   const tick = useNowTick();
   const now = new Date(tick);
 
@@ -135,7 +138,16 @@ export function TopBar() {
         </Button>
       </div>
       <CalculatorPopover open={calcOpen} onClose={() => setCalcOpen(false)} />
-      {drawerOpen && <OpenDrawerDialog onClose={() => setDrawerOpen(false)} />}
+      {drawerOpen && (
+        <OpenDrawerDialog
+          onClose={() => setDrawerOpen(false)}
+          onCashInOut={(shiftId) => {
+            setDrawerOpen(false);
+            setCashShiftId(shiftId);
+          }}
+        />
+      )}
+      {cashShiftId && <CashMovementDialog shiftId={cashShiftId} onClose={() => setCashShiftId(null)} />}
     </header>
   );
 }

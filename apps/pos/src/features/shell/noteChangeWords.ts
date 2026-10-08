@@ -76,3 +76,19 @@ export function noteChangeQuestion(type: CashMovementType, reason: string): Note
   }
   return null;
 }
+
+/**
+ * Open drawer (the top bar): it records no money, but the cashiers took cash
+ * out through it as well as through Drawer cash in / out (the owner, 8 Oct
+ * 2026: "there is 2 ways to cash out ... that's confusing for cashier"). The
+ * box says what it is for, in their words, and leads to Cash out / Cash in.
+ */
+export const OPEN_DRAWER_NOTE_TITLE = 'Open drawer se paisa record nahi hota';
+
+export const OPEN_DRAWER_NOTE_TEXT =
+  'Open drawer sirf galla kholne ke liye hai, jaise note khulwana ya khula dena: is mein galle ka paisa utna hi rehta hai. ' +
+  'Agar galle se paisa nikal kar kharch karna hai (pani, doodh, sabzi…) to yahan se nahi, "Cash out" karein. ' +
+  'Naya paisa daalna hai to "Cash in" karein.';
+
+export const OPEN_DRAWER_CASH_BUTTON = 'Cash out / Cash in karein';
+

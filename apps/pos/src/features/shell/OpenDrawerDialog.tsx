@@ -2,11 +2,12 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
-import { Inbox, X } from 'lucide-react';
+import { ArrowUpFromLine, Inbox, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { DRAWER_REASONS, drawerReason, drawerResultToast, type DrawerReasonChip } from './drawerToast';
+import { OPEN_DRAWER_CASH_BUTTON, OPEN_DRAWER_NOTE_TEXT, OPEN_DRAWER_NOTE_TITLE } from './noteChangeWords';
 
 /**
  * Open the cash drawer with no sale — for change, to check a note. A manager
@@ -14,7 +15,14 @@ import { DRAWER_REASONS, drawerReason, drawerResultToast, type DrawerReasonChip 
  * (any the sign-in accepts, so the box takes letters too). Every open is
  * saved with the person's name before the drawer opens, and shows in Reports.
  */
-export function OpenDrawerDialog({ onClose }: { onClose: () => void }) {
+export function OpenDrawerDialog({
+  onClose,
+  onCashInOut,
+}: {
+  onClose: () => void;
+  /** Money in or out is Drawer cash in / out's (v0.7.42): this box leads there, for the shift open now. */
+  onCashInOut?: (shiftId: string) => void;
+}) {
   const canDirect = useSessionStore((s) => s.can('cash.movement'));
   const [chip, setChip] = useState<DrawerReasonChip | null>(null);
   const [other, setOther] = useState('');
@@ -80,6 +88,22 @@ export function OpenDrawerDialog({ onClose }: { onClose: () => void }) {
                 <X className="h-4 w-4" />
               </button>
             </header>
+
+            <div role="note" lang="ur-Latn" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
+              <p className="font-semibold text-amber-900 dark:text-amber-100">{OPEN_DRAWER_NOTE_TITLE}</p>
+              <p className="mt-1 text-amber-900 dark:text-amber-100">{OPEN_DRAWER_NOTE_TEXT}</p>
+              {onCashInOut && shiftQ.data && (
+                <button
+                  type="button"
+                  onClick={() => shiftQ.data && onCashInOut(shiftQ.data.id)}
+                  disabled={openMut.isPending}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-sm font-semibold text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:bg-stone-900 dark:text-amber-100"
+                >
+                  <ArrowUpFromLine className="h-4 w-4" />
+                  {OPEN_DRAWER_CASH_BUTTON}
+                </button>
+              )}
+            </div>
 
             {noShift && (
               <p className="mb-3 rounded-lg bg-stone-100 px-3 py-2 text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-300">
