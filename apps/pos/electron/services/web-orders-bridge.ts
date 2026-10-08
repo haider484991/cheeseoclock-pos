@@ -17,6 +17,8 @@ import {
   stageRestoreFromPath,
 } from './backup-service.js';
 import { MenuPackageService, WebsiteNotReadyError, setMenuPackageService } from './menu-package-service.js';
+import { DashboardPushService, setDashboardPushService } from './dashboard-push.js';
+import { readTillLink } from './till-link.js';
 import { sealSecret } from './secret-seal.js';
 import { SYNC_SNAPSHOT_KEYS } from '../db/repositories/sync-repo.js';
 import { deliveryChargeItemForWebOrder } from '../db/repositories/delivery-zones-repo.js';
@@ -458,6 +460,8 @@ class WebOrdersBridge {
   private shopRetryMs = 0;
   /** Menu files from the costing PC (v0.7.32): looked for while this till has the website link. */
   private menuPackages: MenuPackageService | null = null;
+  /** The owner's phone dashboard (v0.7.40): this till's figures, sent while it has the website link. */
+  private dashboardPush: DashboardPushService | null = null;
 
   init(db: AppDatabase, deviceId: string): void {
     this.db = db;
@@ -478,6 +482,26 @@ class WebOrdersBridge {
       emit: (e) => notifyRenderer('menuDeploy:changed', e),
     });
     setMenuPackageService(this.menuPackages);
+    this.dashboardPush?.stop();
+    this.dashboardPush = new DashboardPushService({
+      db,
+      deviceId,
+      deviceName: deviceDisplayName(db),
+      appVersion: app.getVersion(),
+      callWebsite: (path, init) => this.callWebsite(path, init),
+      linked: () => (this.db ? isWebBridgeReady(getWebBridgeConfig(this.db)).ok : false),
+      siteUrl: () => (this.db ? getWebBridgeConfig(this.db).siteUrl || null : null),
+      web: () => this.dashboardWeb(),
+      // Loaded when first asked, not with the bridge: tests that stand in for the order repository leave it out.
+      notPrinted: async () => {
+        if (!this.db) return 0;
+        const { readAlertWatch } = await import('./alert-watch.js');
+        return readAlertWatch(this.db, Date.now(), deviceId).ticketsNotPrinted.length;
+      },
+      shopWide: () => (this.db ? readTillLink(this.db).on : false),
+      log,
+    });
+    setDashboardPushService(this.dashboardPush);
     // The areas or the pick-up offer changed — saved here or arrived from the other till: the
     // website gets the newer block from ANY till with the link.
     this.stopSettingsListener?.();
@@ -841,6 +865,9 @@ class WebOrdersBridge {
     // cloud copies on or off.
     if (isWebBridgeReady(cfg).ok) this.menuPackages?.start();
     else this.menuPackages?.stop();
+    // The phone dashboard too: this till's figures go whenever the link is set up (the owner's switch, the service's own).
+    if (isWebBridgeReady(cfg).ok) this.dashboardPush?.start();
+    else this.dashboardPush?.stop();
     // Tell the website at once, above all when this is a switch OFF: the site
     // should stop taking orders the moment the cashier unticks the box, not
     // whenever the last heartbeat happens to go stale.
@@ -898,6 +925,16 @@ class WebOrdersBridge {
     this.stopSettingsListener?.();
     this.stopSettingsListener = null;
     this.menuPackages?.stop();
+    this.dashboardPush?.stop();
+  }
+
+  /** The website switch on this till, for the phone dashboard's live block. */
+  private dashboardWeb(): { linked: boolean; ordersOn: boolean; accepting: boolean; pausedByShift: boolean } {
+    if (!this.db) return { linked: false, ordersOn: false, accepting: false, pausedByShift: false };
+    const cfg = getWebBridgeConfig(this.db);
+    const pause = getWebOrdersShiftPause(this.db);
+    const linked = isWebBridgeReady(cfg).ok;
+    return { linked, ordersOn: cfg.enabled, accepting: linked && storeAcceptingOrders(cfg, pause), pausedByShift: pause !== null };
   }
 
   status(): BridgeStatus {

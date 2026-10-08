@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import Script from 'next/script';
-import { META_PIXEL_ID, metaPixelSnippet, pixel } from '@/lib/meta-pixel';
+import { META_PIXEL_ID, isPrivatePath, metaPixelSnippet, pixel } from '@/lib/meta-pixel';
 
 /**
  * The Meta Pixel (lib/meta-pixel): its base snippet, loaded once, and a PageView on the first
@@ -20,7 +20,9 @@ import { META_PIXEL_ID, metaPixelSnippet, pixel } from '@/lib/meta-pixel';
  * lib/meta-pixel for why nothing is ever sent from there.
  */
 export function MetaPixel() {
-  if (META_PIXEL_ID === null) return null;
+  // The dashboard's pages never load Meta's script: an owner who opens one first gets none at all.
+  const pathname = usePathname();
+  if (META_PIXEL_ID === null || isPrivatePath(pathname)) return null;
   return <PixelLoader pixelId={META_PIXEL_ID} />;
 }
 

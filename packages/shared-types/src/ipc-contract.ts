@@ -9,6 +9,7 @@
 
 import type { ApiResult } from './ipc.js';
 import type { LicenceStatus } from './licence.js';
+import type { DashLoginMade, DashLoginView, DashPushStatus, DashRole } from './dashboard.js';
 import type { AuthenticatedUser, User, Role } from './auth.js';
 import type {
   Category,
@@ -1925,6 +1926,57 @@ export interface IpcContract {
   // doing with the computer it runs on. Owner only (settings.manage), checked
   // in the main process, like the "this till" cards.
   /** Is this computer held awake now, will Windows open the till at sign-in, when did it last sleep. */
+  // -------------------------------------------------------------------------
+  // The owner's phone dashboard (v0.7.40, shared-types dashboard.ts). The
+  // status and the switch: the owner's (Settings, settings.manage). The
+  // sign-in list lives on the website; every change is the owner's (admin
+  // login), checked in the main process, and the setup code comes back once.
+  // -------------------------------------------------------------------------
+  /** Is this till sending its figures, when it last did, the dashboard's address. */
+  'dashboard:getStatus': {
+    request: undefined;
+    response: ApiResult<DashPushStatus>;
+  };
+  /** Switch this till's sending on or off (its own setting, never synced). */
+  'dashboard:setOn': {
+    request: { on: boolean };
+    response: ApiResult<DashPushStatus>;
+  };
+  /** Send what changed now, without waiting for the next look. */
+  'dashboard:pushNow': {
+    request: undefined;
+    response: ApiResult<DashPushStatus>;
+  };
+  /** The people who can sign in to the dashboard, as the website has them. */
+  'dashboard:listLogins': {
+    request: undefined;
+    response: ApiResult<DashLoginView[]>;
+  };
+  /** Add a person; their one-time setup code comes back once. */
+  'dashboard:addLogin': {
+    request: { username: string; displayName: string; role: DashRole; seesReports: boolean };
+    response: ApiResult<DashLoginMade>;
+  };
+  /** Change a person's name, role or whether a manager sees reports. */
+  'dashboard:updateLogin': {
+    request: { id: string; displayName: string; role: DashRole; seesReports: boolean };
+    response: ApiResult<DashLoginView[]>;
+  };
+  /** A new one-time setup code (a forgotten password, or a new phone); comes back once. */
+  'dashboard:newCode': {
+    request: { id: string };
+    response: ApiResult<DashLoginMade>;
+  };
+  /** Sign the person out of every phone. */
+  'dashboard:signOutAll': {
+    request: { id: string };
+    response: ApiResult<DashLoginView[]>;
+  };
+  /** Remove the person: they can no longer sign in, their phones are signed out. */
+  'dashboard:removeLogin': {
+    request: { id: string };
+    response: ApiResult<DashLoginView[]>;
+  };
   'power:getStatus': {
     request: undefined;
     response: ApiResult<TillPowerStatus>;

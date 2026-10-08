@@ -210,9 +210,30 @@ export function isTrackingPath(value: string | null | undefined): boolean {
   return /^\/+track(\/|$)/i.test(path);
 }
 
-/** A page view is sent for a known page that is not a tracking page. */
+/**
+ * The owner's phone dashboard (/dashboard): private pages behind their own
+ * sign-in, with orders, customers and the shop's money on them. The pixel
+ * never loads there (MetaPixel.tsx) and never counts one, as /track.
+ */
+export function isPrivatePath(value: string | null | undefined): boolean {
+  if (typeof value !== 'string' || value === '') return false;
+  let path: string;
+  try {
+    path = new URL(value.startsWith('/') ? `https://pixel.invalid${value}` : value).pathname;
+  } catch {
+    return false;
+  }
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // A malformed escape: the path as it is.
+  }
+  return /^\/+dashboard(\/|$)/i.test(path);
+}
+
+/** A page view is sent for a known page that is not a tracking page or a dashboard page. */
 export function shouldTrackPageView(pathname: string | null | undefined): boolean {
-  return typeof pathname === 'string' && pathname !== '' && !isTrackingPath(pathname);
+  return typeof pathname === 'string' && pathname !== '' && !isTrackingPath(pathname) && !isPrivatePath(pathname);
 }
 
 // ---------------------------------------------------------------------------

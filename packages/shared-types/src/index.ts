@@ -22,6 +22,7 @@ export * from './buy-1-get-1.js';
 export * from './menu-import.js';
 export * from './menu-deploy.js';
 export * from './menu-deploy-view.js';
+export * from './dashboard.js';
 export * from './customer.js';
 export * from './shift.js';
 export * from './shift-report.js';

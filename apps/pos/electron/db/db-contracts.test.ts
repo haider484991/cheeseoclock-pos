@@ -301,7 +301,7 @@ describe('migrations: numbered in order, one file per number', () => {
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
-  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), then 0048 (when an order was sent), then 0049 (outside riders), then 0050 (the note count at close), then 0051 (the shift report at close), then 0052 (the card rate), by name', () => {
+  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), then 0048 (when an order was sent), then 0049 (outside riders), then 0050 (the note count at close), then 0051 (the shift report at close), then 0052 (the card rate), then 0053 (the dashboard’s change indexes), by name', () => {
     const numbers = files.map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? NaN));
     expect(numbers).toEqual(numbers.map((_, i) => i + 1));
     // 0040 / 0041 were released in v0.7.22: the drawer log and the test-order
@@ -321,6 +321,7 @@ describe('migrations: numbered in order, one file per number', () => {
       '0050_shift_counted_notes.sql',
       '0051_shift_close_report.sql',
       '0052_card_rate.sql',
+      '0053_dashboard_change_indexes.sql',
     ]);
   });
 
@@ -443,6 +444,16 @@ describe('migrations: numbered in order, one file per number', () => {
     expect(/\bBEGIN\b/i.test(raw)).toBe(false);
     // shifts replicates: the column travels in the shift's row image, no sync-core change.
     expect(PURE_LOCAL_TABLES.has('shifts')).toBe(false);
+  });
+
+  it('0053 only adds indexes on updated_at (the phone dashboard looks for what changed): no column, no data, no other table', () => {
+    const raw = readFileSync(join(MIGRATIONS_DIR, '0053_dashboard_change_indexes.sql'), 'utf8');
+    const statements = stripComments(raw)
+      .split(';')
+      .map((x) => x.replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+    expect(statements).toHaveLength(11);
+    for (const st of statements) expect(st).toMatch(/^CREATE INDEX IF NOT EXISTS idx_[a-z_]+_updated ON [a-z_]+\(updated_at\)$/);
   });
 
   it('0052 only adds the card-rate columns: tax_categories.digital_rate_bps, order_items.digital_rate_bps_snapshot, orders.digital_total_cents (nullable) and orders.digital_net_cents / digital_tax_cents (0 by default); no CHECK, no backfill, no index', () => {

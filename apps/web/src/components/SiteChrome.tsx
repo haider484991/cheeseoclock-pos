@@ -167,7 +167,11 @@ export async function SiteFooter() {
       </div>
       <div className="border-t border-white/5 py-4 text-center text-xs text-smoke">
         © {new Date().getFullYear()} {profile.name} · {profile.address.areaLine} ·{' '}
-        {profile.phone.display}
+        {profile.phone.display} ·{' '}
+        {/* The owner's and managers' phone dashboard: a plain link (a whole page load) that crawlers don't follow. */}
+        <a href="/dashboard" rel="nofollow" className="hover:text-cheese">
+          Staff login
+        </a>
       </div>
     </footer>
   );

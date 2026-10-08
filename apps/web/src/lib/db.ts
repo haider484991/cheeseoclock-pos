@@ -1,4 +1,11 @@
-import { neon } from '@neondatabase/serverless';
+import { neon, neonConfig } from '@neondatabase/serverless';
+
+// Development only: scripts/dev-neon-shim.mjs answers the driver's HTTP
+// protocol from an in-process Postgres, so `next dev` runs every page and
+// route on a real database without a Neon project. Never in production.
+if (process.env.NODE_ENV !== 'production' && process.env['DEV_NEON_ENDPOINT']) {
+  neonConfig.fetchEndpoint = process.env['DEV_NEON_ENDPOINT'];
+}
 
 /**
  * Neon serverless SQL client. Each invocation is an HTTP round-trip —

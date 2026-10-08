@@ -343,6 +343,17 @@ const api: RendererApi = {
     preview: (req) => invoke('menuDeploy:preview', req),
     apply: (req) => invoke('menuDeploy:apply', req),
   },
+  dashboard: {
+    getStatus: () => invoke('dashboard:getStatus', undefined),
+    setOn: (req) => invoke('dashboard:setOn', req),
+    pushNow: () => invoke('dashboard:pushNow', undefined),
+    listLogins: () => invoke('dashboard:listLogins', undefined),
+    addLogin: (req) => invoke('dashboard:addLogin', req),
+    updateLogin: (req) => invoke('dashboard:updateLogin', req),
+    newCode: (req) => invoke('dashboard:newCode', req),
+    signOutAll: (req) => invoke('dashboard:signOutAll', req),
+    removeLogin: (req) => invoke('dashboard:removeLogin', req),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

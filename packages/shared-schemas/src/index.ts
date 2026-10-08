@@ -17,3 +17,4 @@ export * from './web-settings.js';
 export * from './cash-count.js';
 export * from './shift-report.js';
 export * from './licence.js';
+export * from './dashboard.js';

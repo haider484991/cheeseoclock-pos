@@ -17,6 +17,32 @@ const nextConfig = {
     };
     return config;
   },
+  // The owner's phone dashboard: private pages and their own API (src/app/dashboard). Never indexed,
+  // never kept by a cache, never in another site's frame, and the address never sent on to another site.
+  async headers() {
+    return [
+      {
+        source: '/dashboard/:path*',
+        headers: [
+          { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
+          { key: 'Cache-Control', value: 'private, no-store' },
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
+          { key: 'Referrer-Policy', value: 'same-origin' },
+        ],
+      },
+      {
+        source: '/dashboard',
+        headers: [
+          { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
+          { key: 'Cache-Control', value: 'private, no-store' },
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
+          { key: 'Referrer-Policy', value: 'same-origin' },
+        ],
+      },
+    ];
+  },
   async redirects() {
     return [
       // Gizri / Punjab Colony was never a delivery zone (DHA & Clifton only).

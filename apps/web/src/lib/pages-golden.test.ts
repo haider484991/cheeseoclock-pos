@@ -399,6 +399,8 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     // The shop's Instagram and Facebook (owner, 5 Oct 2026: "add social media"): JSON-LD and the footer name them.
     expect(homeHtml).toContain('"sameAs":["https://www.instagram.com/cheeseoclock_/","https://www.facebook.com/cheeseoclock.karachi"]');
     expect(homeHtml).toContain('Instagram →');
+    // The owner's and managers' phone dashboard (owner, 8 Oct 2026): one plain link at the end of the footer, not followed by crawlers.
+    expect(homeHtml).toContain(' · <a href="/dashboard" rel="nofollow" class="hover:text-cheese">Staff login</a></div></footer>');
     expect((golden.metadata['a']!['layout'] as Metadata)['description']).toBe(
       'Signature pizzas, crispy chicken burgers and fries delivered across DHA Phases 1–8 and Clifton. Cash on delivery, open daily 1 pm – 1 am. Order online or on WhatsApp.',
     );

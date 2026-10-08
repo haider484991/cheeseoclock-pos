@@ -529,6 +529,19 @@ export const ipc = {
     preview: (packageId: string) => unwrap(window.api.menuDeploy.preview({ packageId })),
     apply: (input: IpcRequest<'menuDeploy:apply'>) => unwrap(window.api.menuDeploy.apply(input)),
   },
+  /** The owner's phone dashboard: this till's sending, and the people who can sign in (owner only). */
+  dashboard: {
+    getStatus: () => unwrap(window.api.dashboard.getStatus()),
+    setOn: (on: boolean) => unwrap(window.api.dashboard.setOn({ on })),
+    pushNow: () => unwrap(window.api.dashboard.pushNow()),
+    listLogins: () => unwrap(window.api.dashboard.listLogins()),
+    /** A new person; the setup code comes back once (component state only, never kept). */
+    addLogin: (input: IpcRequest<'dashboard:addLogin'>) => unwrap(window.api.dashboard.addLogin(input)),
+    updateLogin: (input: IpcRequest<'dashboard:updateLogin'>) => unwrap(window.api.dashboard.updateLogin(input)),
+    newCode: (id: string) => unwrap(window.api.dashboard.newCode({ id })),
+    signOutAll: (id: string) => unwrap(window.api.dashboard.signOutAll({ id })),
+    removeLogin: (id: string) => unwrap(window.api.dashboard.removeLogin({ id })),
+  },
 };
 
 /** Listen for news about the menu files from the costing PC (main 'menuDeploy:changed'). */

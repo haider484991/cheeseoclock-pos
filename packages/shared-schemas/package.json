@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./sign-in-secret": "./src/sign-in-secret.ts",
     "./web-settings": "./src/web-settings.ts",
-    "./menu-deploy": "./src/menu-deploy.ts"
+    "./menu-deploy": "./src/menu-deploy.ts",
+    "./dashboard": "./src/dashboard.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

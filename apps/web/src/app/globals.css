@@ -68,3 +68,99 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+ * The owner's phone dashboard (/dashboard): its own quiet surfaces, light by
+ * day and dark when the phone is, on tokens so every page and chart reads
+ * them (tailwind `dash-*`). Chart colours are the validated set (amber,
+ * blue, green, violet; colour-blind checked in both modes); status colours
+ * always come with a word or an icon. The public site's film grain and dark
+ * body stay off these pages.
+ */
+.dash {
+  color-scheme: light;
+  --d-page: #f5f2eb;
+  --d-surface: #ffffff;
+  --d-sunk: #faf8f4;
+  --d-ink: #151412;
+  --d-ink-soft: #46423b;
+  --d-muted: #6e685e;
+  --d-line: #e7e2d7;
+  --d-grid: #eeeae2;
+  --d-axis: #cfc9bc;
+  --d-accent: #f5b301;
+  --d-accent-ink: #151412;
+  --d-accent-soft: #fdf3d3;
+  --d-series-1: #d97706;
+  --d-series-2: #2a78d6;
+  --d-series-3: #008300;
+  --d-series-4: #4a3aa7;
+  --d-good: #0ca30c;
+  --d-good-text: #006300;
+  --d-good-bg: #e7f6e7;
+  --d-warn: #fab219;
+  --d-warn-text: #7a4d00;
+  --d-warn-bg: #fff4d6;
+  --d-bad: #d03b3b;
+  --d-bad-text: #a32020;
+  --d-bad-bg: #fdecec;
+  --d-info-text: #1d5aa3;
+  --d-info-bg: #e8f1fc;
+  --d-heat-0: #f3efe6;
+  --d-heat-1: #fef3c7;
+  --d-heat-2: #fde68a;
+  --d-heat-3: #fcd34d;
+  --d-heat-4: #fbbf24;
+  --d-heat-5: #f59e0b;
+  --d-heat-6: #d97706;
+  --d-heat-7: #b45309;
+  --d-shadow: 0 1px 2px rgba(28, 25, 23, 0.05), 0 1px 1px rgba(28, 25, 23, 0.03);
+}
+@media (prefers-color-scheme: dark) {
+  .dash {
+    color-scheme: dark;
+    --d-page: #0c0a07;
+    --d-surface: #17140f;
+    --d-sunk: #120f0b;
+    --d-ink: #f4f0e6;
+    --d-ink-soft: #cdc6b8;
+    --d-muted: #9c9587;
+    --d-line: #2b2620;
+    --d-grid: #24201a;
+    --d-axis: #3a342c;
+    --d-accent-soft: #3a2e0c;
+    --d-series-2: #3987e5;
+    --d-series-4: #9085e9;
+    --d-good-text: #5bd65b;
+    --d-good-bg: #12260f;
+    --d-warn-text: #f5c451;
+    --d-warn-bg: #2e240c;
+    --d-bad-text: #ff8a80;
+    --d-bad-bg: #2f1414;
+    --d-info-text: #8cbcf2;
+    --d-info-bg: #12243a;
+    --d-heat-0: #1d1914;
+    --d-heat-1: #2c2213;
+    --d-heat-2: #4a3410;
+    --d-heat-3: #6e4a0c;
+    --d-heat-4: #92610a;
+    --d-heat-5: #b7790a;
+    --d-heat-6: #d99208;
+    --d-heat-7: #f5b301;
+    --d-shadow: none;
+  }
+}
+body:has(.dash) {
+  background: var(--d-page);
+  color: var(--d-ink);
+}
+body:has(.dash) .bg-noise {
+  display: none;
+}
+.dash :focus-visible {
+  --tw-ring-color: var(--d-accent);
+  --tw-ring-offset-color: var(--d-page);
+}
+.dash .tnum {
+  font-variant-numeric: tabular-nums;
+}

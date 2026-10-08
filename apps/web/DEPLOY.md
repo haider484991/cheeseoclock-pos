@@ -547,6 +547,107 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
 - From v0.7.34 a delivery bill prints FOOD TOTAL (with tax) / Delivery
   charge / CUSTOMER PAYS; the website's totals and tracker do not change.
 
+## Owner's phone dashboard (from v0.7.40)
+
+- **What is new.** `https://www.cheeseoclock.net/dashboard`: the owner's and
+  managers' own dashboard, made for a phone (it can be added to the home
+  screen). It is **read only**: nothing on it changes a till. Its pages:
+  - **Live**: the shift open now and the cash expected in the drawer, the
+    kitchen board (in the kitchen, ready, out with a rider, handed over
+    unpaid), whether online orders are on, low stock, and today's sales so
+    far against the same weekday last week;
+  - **Orders**: every order, searched by number, name or phone and filtered
+    by state and channel, each with its lines, choices, discounts, payments
+    and refunds;
+  - **Shifts & cash**: each shift's float, cash in and out, and the count
+    against what was expected, with its orders;
+  - **Stock** and **Menu**: what is on the shelves (low and out first), and
+    every item with its price and, with costs, its food cost;
+  - **Reports**: sales by day, by hour and a week's heatmap, channels,
+    payment methods, top items, categories, delivery charges, staff and
+    riders, food cost and waste, and profit.
+
+  Every page's footer has a small **Staff login** link to it. Search engines
+  are told not to follow it, the dashboard's pages are `noindex`, never
+  cached and never framed, and the Meta Pixel and Vercel Analytics skip them.
+- **Who sees what.**
+  - The **owner** sees everything.
+  - A **manager** sees Live, Orders, the shift open now, Stock and Menu with
+    costs.
+  - Reports and past shifts are for a manager only when the owner ticks
+    "also sees reports and past shifts".
+  - Profit, the drawer-open log and deleted orders are the owner's alone.
+- **Sign-ins are the website's own, not the till PINs.**
+  - **Adding a person.** On a till, with the owner's login: Settings →
+    Online orders → Phone dashboard → Add a person (name, username, owner or
+    manager). The till shows a **setup code once**; it works for 72 hours
+    and allows 5 tries. A Copy button gives a ready message to send them.
+  - **Their first sign-in.** They open the dashboard, tap "First time? Use
+    your setup code" and pick their own password (8 characters or more).
+  - **Forgotten password or a new phone.** Make a new **Setup code**: their
+    old password stops working once they use it.
+  - **Lost phone.** **Sign out** signs them out of every phone at once.
+  - **Someone leaves.** **Remove** them.
+  - **How long a sign-in lasts.** A phone stays signed in for up to 180
+    days, or 30 days without use.
+  - **Wrong passwords.** Five wrong passwords lock that username for 15
+    minutes. Thirty wrong tries from one address in 15 minutes lock that
+    address.
+  - **What the website keeps.** Only hashes: scrypt for passwords, SHA-256
+    for setup codes and sign-in cookies.
+  - **On the till.** Each change leaves an audit row (never the code).
+- **How the figures get there.**
+  - **What a till sends.** Every v0.7.40 till with the website link sends
+    its OWN orders, shifts, cash in and out, drawer opens, stock list, stock
+    moves (the last 120 days), menu with costs, and each trading day's food
+    cost, waste and profit as its own Reports work them out. All of it goes
+    through the website link (`BRIDGE_SECRET`).
+  - **When.** It looks every 30 seconds and sends only when something
+    changed, plus a short "still here" every 10 minutes while a shift is
+    open, so Neon can sleep while the shop is closed.
+  - **The first time.** It sends its history in batches of 200 orders a few
+    seconds apart; Settings → Online orders → Phone dashboard shows how far
+    it has got.
+  - **Switching it off.** The owner can switch it off there, per till. A
+    switched-off till's figures stay as they were last sent. It is on by
+    default, and nothing is written to a till's settings at the update.
+  - **Two tills.** Orders, shifts and cash add up across both tills. With
+    the link to the second till on, the day's food figures are shop-wide,
+    so they are taken from one till.
+- **No Vercel environment variable changes.**
+  - **New tables.** `dash_*`, in `db/schema.sql` and created on first use
+    by `src/lib/dashboard/schema.ts`.
+  - **New routes.** `/dashboard/*` and `/api/bridge/dashboard/*`.
+  - **Nothing existing changes.** No existing route, table or answer
+    changes. Tills up to v0.7.39 never call the new routes.
+- **Deploy the website first** (a push to `main` deploys it). Then check
+  that the doors are shut without a key or a sign-in:
+
+  ```powershell
+  curl.exe -i "https://www.cheeseoclock.net/api/bridge/dashboard/push?device=x"   # 401
+  curl.exe -i https://www.cheeseoclock.net/api/bridge/dashboard/logins            # 401
+  curl.exe -i https://www.cheeseoclock.net/dashboard                              # 307 to /dashboard/sign-in
+  ```
+
+  A v0.7.40 till against an older website sees 404, says "The website needs
+  its update", and tries again every hour.
+- **Then update BOTH tills the same day.** Until both show 0.7.40
+  (Settings → About → App version), the dashboard has only the updated
+  till's figures. The update adds one migration (0053: indexes only) and
+  changes nothing in either till's settings.
+- **First run.** On a till, with the owner's login, open Settings → Online
+  orders → Phone dashboard → Add a person, and add yourself as **Owner**.
+  Use the setup code on your phone, then add each manager the same way.
+- **Known limits** (nothing more is built for them):
+  - The figures are as fresh as each till's last send. Live says when each
+    till was last heard from; a till that is off shows its last figures.
+  - The dashboard reads; it does not change the menu, the stock or a
+    shift. Those stay on the till.
+  - The website's database now holds the shop's order history, with the
+    customers' names and phones (online orders already did). Give the
+    dashboard only to people the owner trusts with it, and remove them when
+    they leave.
+
 ## Meta Pixel (ad measurement, optional)
 
 - **What it is.** The shop's Facebook and Instagram ads can be measured on
