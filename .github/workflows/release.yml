@@ -73,6 +73,39 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Create the GitHub release (electron-builder only uploads into it)
+        # electron-builder 26 gives the .exe and the .exe.blockmap a GitHub
+        # publisher each (app-builder-lib's getOrCreatePublisher awaits between
+        # reading and filling its cache) and uploads them in parallel; with no
+        # release for the tag, BOTH create one. v0.7.38–v0.7.40 each got two
+        # releases for one tag with the files split between them, and the tag
+        # can open the half without latest.yml (v0.7.40's first run: the tills
+        # got a 404). Made here first, every publisher finds it and none
+        # creates. Same shape as electron-builder's: the bare version as the
+        # title, an empty body. It is public from here on, so a till that
+        # checks during the build finds no latest.yml yet, logs it and tries
+        # again 4 hours later.
+        shell: pwsh
+        run: |
+          # gh's exit codes are checked by hand. Off is PowerShell's default;
+          # if it were on, "release not found" would end the script under the
+          # runner's $ErrorActionPreference = 'stop' before the create.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $version = (Get-Content apps/pos/package.json -Raw | ConvertFrom-Json).version
+          $tag = "v$version"
+          gh release view $tag --json tagName,isDraft,publishedAt
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists; electron-builder uploads into it."
+            exit 0
+          }
+          Write-Host "No release for $tag yet; creating it."
+          # --verify-tag: refuse rather than let gh make the tag itself.
+          gh release create $tag --verify-tag --title $version --notes ""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
       - name: Build + publish to GitHub Releases
         # The `publish: github` block in apps/pos/electron-builder.yml tells
         # electron-builder where to upload. `--publish always` forces it to
@@ -103,3 +136,49 @@ jobs:
           # Crash reporting (services/error-reporter.ts): empty = off. Sign up at sentry.io and add the secret.
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+
+      - name: Check the release has the installer, blockmap and latest.yml
+        # electron-builder exits 0 even when its files went to another release
+        # (see "Create the GitHub release"), so check what the tills download
+        # from: exactly one release with this tag, published, holding all three.
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $version = (Get-Content apps/pos/package.json -Raw | ConvertFrom-Json).version
+          $tag = "v$version"
+          # Drafts count too: electron-builder uploads into the first release it
+          # lists with the tag, the tills download from the one the tag opens.
+          $rows = @(gh api 'repos/{owner}/{repo}/releases?per_page=100' --paginate --jq '.[] | [.tag_name, .id, .draft, (.assets | length)] | @tsv')
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::Could not list the releases."; exit 1 }
+          $mine = @($rows | Where-Object { ($_ -split "`t")[0] -ceq $tag })
+          if ($mine.Count -ne 1) {
+            foreach ($row in $mine) {
+              $f = $row -split "`t"
+              Write-Host "release id $($f[1]): draft $($f[2]), $($f[3]) files"
+            }
+            Write-Host "::error::$($mine.Count) releases carry the tag $tag; the tills need exactly one. Delete the extra ones on GitHub (keep the one with all three files), then re-run this job."
+            exit 1
+          }
+          $json = gh release view $tag --json isDraft,isPrerelease,assets
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::Could not read release $tag."; exit 1 }
+          $release = ($json -join "`n") | ConvertFrom-Json
+          if ($release.isDraft -or $release.isPrerelease) {
+            Write-Host "::error::Release $tag is a draft or a pre-release; the tills only take a published release."
+            exit 1
+          }
+          # As uploaded: electron-builder.yml's artifactName, the space in the
+          # product name turned into a dash.
+          $wanted = @("CheeseOclock-POS-$version-x64.exe", "CheeseOclock-POS-$version-x64.exe.blockmap", 'latest.yml')
+          $missing = @()
+          foreach ($name in $wanted) {
+            $asset = @($release.assets | Where-Object { $_.name -ceq $name -and $_.state -eq 'uploaded' -and $_.size -gt 0 })
+            if ($asset.Count -eq 0) { $missing += $name } else { Write-Host "$name  $($asset[0].size) bytes" }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Host "::error::Release $tag is missing $($missing -join ', '). Re-run this job: electron-builder uploads into a release for 2 hours after it was published (later than that, delete the release, not the tag, then re-run)."
+            exit 1
+          }
+          Write-Host "Release $tag has the installer, its blockmap and latest.yml."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
