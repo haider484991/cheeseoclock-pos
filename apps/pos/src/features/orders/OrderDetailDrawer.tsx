@@ -45,6 +45,8 @@ import { PAYMENT_LABELS, isOwed, orderTimeLabel, shortOrderNumber } from './hist
 import { historyStockStep } from './stockCopy';
 import { offersKitchenReprint, outsideRiderChipText, sentStepAt } from './boardLogic';
 import { offersEdit, useStartEdit } from './useStartEdit';
+import { ChangePaymentMethodDialog } from './ChangePaymentMethodDialog';
+import { mayChangeMethod } from './paymentMethodWords';
 
 interface DrawerProps {
   orderId: string;
@@ -66,7 +68,9 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   // Collect payment with "Customer refused an item" (outside rider, order-edit #5): the Refund box next, on the order as now paid.
   const [refusedItemSnap, setRefusedItemSnap] = useState<OrderSnapshot | null>(null);
-  const dialogOpen = voidOpen || refundOpen || collectOpen || deleteOpen || refusedItemSnap !== null;
+  // Money → Change (v0.7.42): the owner puts right how one payment was paid.
+  const [changing, setChanging] = useState<OrderSnapshot['payments'][number] | null>(null);
+  const dialogOpen = voidOpen || refundOpen || collectOpen || deleteOpen || refusedItemSnap !== null || changing !== null;
   // "Delete test order…" is the owner's alone (the main process checks again,
   // and asks for the owner's PIN or password in the dialog).
   const role = useSessionStore((st) => st.user?.role ?? null);
@@ -371,8 +375,20 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                             <span className="font-semibold">
                               {refund ? `Refund · ${PAYMENT_LABELS[p.method]}` : PAYMENT_LABELS[p.method]}
                             </span>
-                            <span className="font-mono">
-                              {refund ? `− ${formatCents(-p.amountCents)}` : formatCents(p.amountCents)}
+                            <span className="flex items-baseline gap-2">
+                              {mayChangeMethod(role, o.mode, p.method) && (
+                                <button
+                                  type="button"
+                                  onClick={() => setChanging(p)}
+                                  className="text-[11px] font-semibold text-amber-700 underline hover:text-amber-900 dark:text-amber-300"
+                                  aria-label={`Change how ${refund ? 'the refund was given' : 'it was paid'}`}
+                                >
+                                  Change
+                                </button>
+                              )}
+                              <span className="font-mono">
+                                {refund ? `− ${formatCents(-p.amountCents)}` : formatCents(p.amountCents)}
+                              </span>
                             </span>
                           </div>
                           <div className="text-[11px] text-stone-500 dark:text-stone-400">
@@ -546,6 +562,14 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
           {...REFUSED_ITEM_REFUND}
           onClose={() => setRefusedItemSnap(null)}
           onDone={afterChange(() => setRefusedItemSnap(null))}
+        />
+      )}
+      {changing && snap && (
+        <ChangePaymentMethodDialog
+          orderId={snap.order.id}
+          orderLabel={`Order ${shortOrderNumber(snap.order.orderNumber)}`}
+          payment={changing}
+          onClose={() => setChanging(null)}
         />
       )}
     </>

@@ -826,6 +826,15 @@ const TEST_ORDERS_OWNER = (): Record<string, unknown> => ({
 });
 
 /**
+ * How a paid order was paid, put right (v0.7.42; payment-method-repo.ts):
+ * the OWNER (admin) login only — a manager and a cashier are refused before
+ * anything is read.
+ */
+const PAYMENT_METHOD_OWNER = (): Record<string, unknown> => ({
+  'orders:changePaymentMethod': { orderId: s.paidNow, paymentId: 'no-such-payment', method: 'card' },
+});
+
+/**
  * Menu files from the costing PC (v0.7.32): whoever manages the menu
  * (menu.manage, like Menu → Import) looks and puts a file in; making the
  * upload key, taking a file over from a till that stopped halfway, and
@@ -1114,6 +1123,34 @@ describe.skipIf(!Sqlite)('menu files from the costing PC (v0.7.32)', () => {
     } finally {
       setMenuPackageService(null);
     }
+  });
+});
+
+describe.skipIf(!Sqlite)('how a paid order was paid: the owner (admin) login only (v0.7.42)', () => {
+  it('a cashier and a manager are refused in plain words and nothing is written; the owner gets past the guard', async () => {
+    const before = writtenRows();
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      for (const [channel, payload] of Object.entries(PAYMENT_METHOD_OWNER())) {
+        expect({ channel, who: who.role, o: await call(channel, payload) }).toEqual({
+          channel,
+          who: who.role,
+          o: { ok: false, code: 'forbidden', message: 'Changing how an order was paid needs the owner (admin) login' },
+        });
+      }
+    }
+    h.session = null;
+    for (const [channel, payload] of Object.entries(PAYMENT_METHOD_OWNER())) {
+      expect({ channel, o: await call(channel, payload) }).toMatchObject({ channel, o: { ok: false, code: 'unauthenticated' } });
+    }
+    expect(writtenRows()).toEqual(before);
+    // The owner: past the guard, to the payment itself (none such on this order).
+    h.session = OWNER;
+    expect(await call('orders:changePaymentMethod', PAYMENT_METHOD_OWNER()['orders:changePaymentMethod'])).toMatchObject({
+      ok: false,
+      code: 'precondition_failed',
+      message: 'That payment is not on this order.',
+    });
   });
 });
 
@@ -1976,6 +2013,7 @@ const classification = (): Record<string, string[]> => ({
   PRINTER_SETTINGS: Object.keys(PRINTER_SETTINGS()),
   OWNER_ONLY: Object.keys(OWNER_ONLY()),
   TEST_ORDERS_OWNER: Object.keys(TEST_ORDERS_OWNER()),
+  PAYMENT_METHOD_OWNER: Object.keys(PAYMENT_METHOD_OWNER()),
   COUNTER_SCOPED,
   COUNTER_ALLOWED: Object.keys(COUNTER_ALLOWED()),
   ALREADY_MANAGERS: Object.keys(ALREADY_MANAGERS()),

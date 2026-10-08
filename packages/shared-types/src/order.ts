@@ -354,6 +354,32 @@ export interface OrderSnapshot {
    */
   kitchenTicketNotPrinted?: boolean;
 }
+/**
+ * The owner changes how a paid order was paid (v0.7.42; the owner, 8 Oct 2026:
+ * "admin be able to change payment method after the order have done so this
+ * issues can be resolve after at closing"). Between these only: foodpanda
+ * settles its own orders, so never to or from it.
+ */
+export const CHANGEABLE_PAYMENT_METHODS = ['cash', 'card', 'easypaisa', 'jazzcash', 'bank_transfer'] as const;
+export type ChangeablePaymentMethod = (typeof CHANGEABLE_PAYMENT_METHODS)[number];
+
+/** A payment's method changed: the order as it is now, and the closed shift whose drawer followed. */
+export interface PaymentMethodChanged {
+  snapshot: OrderSnapshot;
+  /**
+   * The payment's shift was already closed and its cash moved (cash to card,
+   * say): that shift's "should be in the drawer" and difference were put
+   * right with it. Null: the shift is still open (its figures follow by
+   * themselves), or no cash moved (card to JazzCash).
+   */
+  closedShift: {
+    shiftId: string;
+    openedAt: string;
+    expectedCashCents: number;
+    varianceCents: number;
+    previousVarianceCents: number;
+  } | null;
+}
 
 /**
  * The till's tag in front of a website customer's note, as the web bridge

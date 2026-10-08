@@ -19,6 +19,7 @@ import type {
 } from '@cheeseoclock/shared-types';
 import {
   cameBySchema,
+  changePaymentMethodInputSchema,
   deleteTestOrderInputSchema,
   foodpandaTenderCheckSchema,
   previewEditInputSchema,
@@ -116,6 +117,7 @@ import { fbrWorker } from '../../services/fbr-worker.js';
 import { getReceiptPrinterConfig } from '../../services/printer-config.js';
 import { decrementForOrder } from '../../db/repositories/stock-movement-repo.js';
 import { getOrderStockStatus } from '../../db/repositories/order-stock-repo.js';
+import { changePaymentMethod } from '../../db/repositories/payment-method-repo.js';
 import { kitchenTicketsNotPrinted } from '../../db/repositories/print-queue-repo.js';
 import log from 'electron-log/main';
 import {
@@ -146,6 +148,7 @@ function withKitchenTicketMarks(db: AppDatabase, snaps: OrderSnapshot[]): OrderS
 /** What requireAdmin names ("… needs the owner (admin) login"). */
 const DELETE_TEST = 'Deleting a test order';
 const DELETED_TESTS = 'The list of deleted test orders';
+const CHANGE_PAYMENT = 'Changing how an order was paid';
 
 function requireOrderCreate(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -1200,6 +1203,30 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     const status = getOrderStockStatus(ctx.db, payload.orderId, ctx.deviceId, Date.now());
     if (!status) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     return ok(mayViewStock(s) ? status : stockStatusForCounter(status));
+  });
+
+  // ---- How a paid order was paid, put right by the owner (v0.7.42) ----
+  // The owner (admin) login only: a payment typed in as Cash that came by
+  // JazzCash leaves the drawer short at the close (payment-method-repo.ts).
+
+  defineHandler('orders:changePaymentMethod', ctx, (_ctx, payload) => {
+    const s = requireAdmin(CHANGE_PAYMENT);
+    const parsed = changePaymentMethodInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new IpcGuardError({ code: 'validation_failed', message: 'Pick Cash, Card, EasyPaisa, JazzCash or Bank transfer.' });
+    }
+    let change: ReturnType<typeof changePaymentMethod>;
+    try {
+      change = changePaymentMethod(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Could not change how it was paid',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, parsed.data.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok({ snapshot: snap, closedShift: change.closedShift });
   });
 
   // ---- Test orders the owner deletes (migration 0043) ----

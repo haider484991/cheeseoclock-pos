@@ -162,6 +162,8 @@ export const ipc = {
     resumeDraft: () => unwrap(window.api.orders.resumeDraft()),
     discardDraft: (orderId: string) => unwrap(window.api.orders.discardDraft({ orderId })),
     tender: (input: IpcRequest<'orders:tender'>) => unwrap(window.api.orders.tender(input)),
+    /** The owner puts right how a paid order was paid (v0.7.42). */
+    changePaymentMethod: (input: IpcRequest<'orders:changePaymentMethod'>) => unwrap(window.api.orders.changePaymentMethod(input)),
     void: (input: IpcRequest<'orders:void'>) => unwrap(window.api.orders.void(input)),
     refund: (input: IpcRequest<'orders:refund'>) => unwrap(window.api.orders.refund(input)),
     /** What cancelling / refunding would do to stock ("Was the food made?"), or what it did. */

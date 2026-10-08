@@ -5,7 +5,7 @@ import { IconChevronLeft } from '@/components/dashboard/icons';
 import { CASH_MOVE_WORDS, DRAWER_KIND_WORDS, VariancePill } from '@/components/dashboard/money-bits';
 import { OrderList } from '@/components/dashboard/OrderList';
 import { Shell } from '@/components/dashboard/Shell';
-import { Card, Divider, Empty, PageHeader, Row } from '@/components/dashboard/ui';
+import { Card, Divider, Empty, Note, PageHeader, Row } from '@/components/dashboard/ui';
 import { CHANNEL_WORDS, METHOD_WORDS, count, dayClock, money } from '@/lib/dashboard/format';
 import { seesDrawerLog, seesReports } from '@/lib/dashboard/perms';
 import { getShift, getTills, listCashMoves, listDrawerOpens, listShiftOrders } from '@/lib/dashboard/queries';
@@ -103,6 +103,14 @@ export default async function ShiftPage({ params }: { params: { id: string } }) 
                 </>
               ) : null}
             </div>
+            {/* The owner changed how a payment was paid after the close (till v0.7.42): the drawer was put right,
+                the rows above are still the shift report as printed. */}
+            {report && shift.closedAt && shift.expectedCashCents !== null && report.drawer.expectedCents !== shift.expectedCashCents ? (
+              <Note>
+                Put right after the close: the owner changed how a payment was paid, on the till. The rows above are the
+                shift report as printed; at the close it said {money(report.drawer.expectedCents)} should be in the drawer.
+              </Note>
+            ) : null}
             {notes && notes.notes.length > 0 ? (
               <details className="mt-3 rounded-xl bg-dash-sunk px-3 py-2 text-sm">
                 <summary className="cursor-pointer font-medium text-dash-soft">The count by note</summary>

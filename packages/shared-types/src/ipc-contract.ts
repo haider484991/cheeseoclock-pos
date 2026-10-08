@@ -22,11 +22,13 @@ import type {
   WebAvailability,
 } from './menu.js';
 import type {
+  ChangeablePaymentMethod,
   Order,
   OrderMode,
   OrderSnapshot,
   OrderStatus,
   PaymentMethod,
+  PaymentMethodChanged,
   Rider,
 } from './order.js';
 import type {
@@ -1012,6 +1014,18 @@ export interface IpcContract {
       riderKeepsCents: number;
     };
     response: ApiResult<OrderSnapshot>;
+  };
+  /**
+   * The owner (admin login) changes how a paid order was paid — a payment
+   * typed in as Cash that came by JazzCash, say (v0.7.42). The amount and
+   * the bill stay; the drawer's expected cash follows, and for a shift
+   * already closed its "should be in the drawer" and difference are put
+   * right too. Audited. Never foodpanda; on an order whose bill depends on
+   * how it was paid (the card tax rate) cash and card cannot be swapped.
+   */
+  'orders:changePaymentMethod': {
+    request: { orderId: string; paymentId: string; method: ChangeablePaymentMethod };
+    response: ApiResult<PaymentMethodChanged>;
   };
 
   // Shifts (cashier cash-drawer reconciliation)

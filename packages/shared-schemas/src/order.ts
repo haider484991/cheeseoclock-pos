@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { uuidSchema, centsSchema } from './common.js';
 import { signInSecretSchema } from './auth.js';
+import { CHANGEABLE_PAYMENT_METHODS } from '@cheeseoclock/shared-types';
 
 export const orderModeSchema = z.enum(['dine_in', 'takeaway', 'delivery', 'online', 'foodpanda']);
 export const orderStatusSchema = z.enum([
@@ -21,6 +22,19 @@ export const paymentMethodSchema = z.enum([
   'foodpanda',
 ]);
 export const kitchenStatusSchema = z.enum(['pending', 'preparing', 'ready', 'served']);
+
+/**
+ * The owner changes how a paid order was paid (orders:changePaymentMethod,
+ * v0.7.42): between these methods only — foodpanda settles its own orders.
+ */
+export const changeablePaymentMethodSchema = z.enum(CHANGEABLE_PAYMENT_METHODS);
+export const changePaymentMethodInputSchema = z
+  .object({
+    orderId: z.string().min(1).max(64),
+    paymentId: z.string().min(1).max(64),
+    method: changeablePaymentMethodSchema,
+  })
+  .strict();
 
 /** Input to start a new order on the POS. */
 export const createOrderInputSchema = z.object({
