@@ -10,6 +10,7 @@
 import type { ApiResult } from './ipc.js';
 import type { LicenceStatus } from './licence.js';
 import type { DashLoginMade, DashLoginView, DashPushStatus, DashRole } from './dashboard.js';
+import type { DeliveryChargeTaxSaved, DeliveryChargeTaxView, SaveDeliveryChargeTaxRequest } from './delivery-charge-tax.js';
 import type { AuthenticatedUser, User, Role } from './auth.js';
 import type {
   Category,
@@ -2015,6 +2016,25 @@ export interface IpcContract {
   'settings:saveDeliveryZones': {
     request: SaveDeliveryZonesRequest;
     response: ApiResult<ShopSettingCard<'delivery.zones'>>;
+  };
+  /**
+   * Settings → Delivery areas & fees → "Tax on the delivery charge": the
+   * "Delivery Charge (Rs N)" items' tax now, the food's tax, and how the
+   * website gets a change (shared-types delivery-charge-tax.ts). Owner only.
+   */
+  'settings:deliveryChargeTax': {
+    request: undefined;
+    response: ApiResult<DeliveryChargeTaxView>;
+  };
+  /**
+   * Its Save: every delivery charge item onto the food's tax, no tax, or a
+   * rate of its own ("Delivery charge tax"), in ONE transaction; the areas
+   * saved again as they are, so the website gets the charges with their new
+   * tax (the block alone). Owner only; synced and audited.
+   */
+  'settings:saveDeliveryChargeTax': {
+    request: SaveDeliveryChargeTaxRequest;
+    response: ApiResult<DeliveryChargeTaxSaved>;
   };
   /**
    * What the counter needs to take an order, for any signed-in login: the

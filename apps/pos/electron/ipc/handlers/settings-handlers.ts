@@ -12,6 +12,7 @@ import {
 import {
   getShopSettingInputSchema,
   getTillSettingInputSchema,
+  saveDeliveryChargeTaxInputSchema,
   saveDeliveryZonesInputSchema,
   setShopSettingInputSchema,
   setTillSettingInputSchema,
@@ -25,6 +26,7 @@ import { websiteSettingsChanged } from '../../services/website-settings-events.j
 import { nudgeMenuDeploy } from '../../services/menu-deploy-events.js';
 import { tillPowerSettingsChanged } from '../../services/till-power-events.js';
 import { saveDeliveryZones } from '../../db/repositories/delivery-zones-repo.js';
+import { readDeliveryChargeTax, saveDeliveryChargeTax } from '../../db/repositories/delivery-charge-tax-repo.js';
 import { anyTillSettingCard, setTillSetting } from '../../services/till-settings.js';
 import type { AppDatabase } from '../../db/connection.js';
 
@@ -41,6 +43,11 @@ import type { AppDatabase } from '../../db/connection.js';
  *    have their own channel because their Save also makes the
  *    "Delivery Charge (Rs N)" menu items (delivery-zones-repo, one
  *    transaction); settings:setBusiness refuses 'delivery.zones'.
+ *  - settings:deliveryChargeTax / settings:saveDeliveryChargeTax: the owner
+ *    alone too — "Tax on the delivery charge" (owner, 10 Oct 2026): every
+ *    "Delivery Charge (Rs N)" item onto one tax, and the areas saved again
+ *    as they are so the website gets the charges with it
+ *    (delivery-charge-tax-repo, one transaction).
  *  - settings:getTill / settings:setTill: the settings that belong to THIS
  *    till (its receipt's extra lines, its opening float, this computer:
  *    keep it awake, start with Windows; till-settings.ts), the owner alone
@@ -108,6 +115,33 @@ export function registerSettingsHandlers(ctx: HandlerContext): void {
     broadcastShopSettingsChanged();
     websiteSettingsChanged();
     return ok(getShopSettingCard(ctx.db, 'delivery.zones', readTillLink(ctx.db)) as ShopSettingCard<'delivery.zones'>);
+  });
+
+  defineHandler('settings:deliveryChargeTax', ctx, () => {
+    requireSettingsManage();
+    return ok(readDeliveryChargeTax(ctx.db));
+  });
+
+  defineHandler('settings:saveDeliveryChargeTax', ctx, (_ctx, payload) => {
+    const s = requireSettingsManage();
+    const parsed = saveDeliveryChargeTaxInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new IpcGuardError({ code: 'validation_failed', message: parsed.error.issues[0]?.message ?? 'Which tax on the delivery charge?' });
+    }
+    let saved;
+    try {
+      saved = saveDeliveryChargeTax(ctx.db, parsed.data.choice, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      // The repository's own words ("Add a tax in Menu → Tax first…") — a database error stays hidden.
+      if (e instanceof Error && Object.getPrototypeOf(e) === Error.prototype) {
+        throw new IpcGuardError({ code: 'validation_failed', message: e.message });
+      }
+      throw e;
+    }
+    if (saved.changed) broadcastShopSettingsChanged();
+    // The areas went again with their charge items: the bridge sends them to the website (the block alone).
+    if (saved.sentToWebsite) websiteSettingsChanged();
+    return ok(saved);
   });
 
   defineHandler('settings:getTill', ctx, (_ctx, payload) => {

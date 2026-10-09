@@ -323,6 +323,9 @@ const api: RendererApi = {
     getBusiness: (req) => invoke('settings:getBusiness', req),
     setBusiness: (req) => invoke('settings:setBusiness', req),
     saveDeliveryZones: (req) => invoke('settings:saveDeliveryZones', req),
+    // Settings → Delivery areas & fees → "Tax on the delivery charge": the owner only too.
+    deliveryChargeTax: () => invoke('settings:deliveryChargeTax', undefined),
+    saveDeliveryChargeTax: (req) => invoke('settings:saveDeliveryChargeTax', req),
     // This till's own (the receipt's extra lines, the opening float, this computer): the owner only too.
     getTill: (req) => invoke('settings:getTill', req),
     setTill: (req) => invoke('settings:setTill', req),

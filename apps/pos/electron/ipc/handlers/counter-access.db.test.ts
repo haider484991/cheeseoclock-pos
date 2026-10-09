@@ -532,6 +532,10 @@ const SHOP_SETTINGS_OWNER_ONLY = (): Record<string, unknown> => ({
   // Settings → Delivery areas (step 3): the areas AND their fee items, one transaction. Free delivery
   // everywhere here (this test till has no tax category for a fee item), so the owner's Save writes.
   'settings:saveDeliveryZones': FREE_DELIVERY_ZONES(),
+  // Settings → Delivery areas & fees → "Tax on the delivery charge" (10 Oct 2026): reading the charges' tax, and
+  // its Save (every charge item onto one tax). This test till has no charge item, so the owner's Save changes nothing.
+  'settings:deliveryChargeTax': undefined,
+  'settings:saveDeliveryChargeTax': { choice: { kind: 'none' } },
 });
 
 /** Today's 21 areas, every one free to deliver to: a Save that needs no fee item. Made-up. */

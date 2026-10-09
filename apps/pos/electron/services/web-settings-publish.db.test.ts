@@ -293,6 +293,55 @@ live('a Save sends the areas ALONE — never the till’s unpublished menu chang
     expect(menus()).toHaveLength(0);
   });
 
+  it('“Tax on the delivery charge” (10 Oct 2026): its Save sends the areas again ALONE with the charges at their new tax — never the till’s unpublished menu changes', async () => {
+    const db = await till();
+    await bridge().publishMenu();
+    zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(1);
+    expect(settingsPuts()[0]!.feeItems.map((f) => f.item.taxRateBps)).toEqual([1_600, 1_600]);
+    // A price changed on the till and not published; then no tax on the delivery charge.
+    db.prepare(`UPDATE menu_items SET base_price_cents = 123400 WHERE id = ?`).run(items.pizza);
+    const { saveDeliveryChargeTax } = await import('../db/repositories/delivery-charge-tax-repo.js');
+    expect(saveDeliveryChargeTax(db as AppDatabase, { kind: 'none' }, OWNER)).toMatchObject({
+      changed: true,
+      itemsChanged: 2,
+      sentToWebsite: true,
+    });
+    await bridge().maybePublishSettings();
+    expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(2);
+    const body = settingsPuts()[1]!;
+    expect(JSON.stringify(body)).not.toMatch(/123400|Test Pizza/);
+    expect(body.feeItems.map((f) => [f.item.name, f.item.basePriceCents, f.item.taxRateBps])).toEqual([
+      ['Delivery Charge (Rs 200)', 20_000, 0],
+      ['Delivery Charge (Rs 250)', 25_000, 0],
+    ]);
+    expect(feeItemsProblem(body.settings, body.feeItems)).toBeNull();
+    expect(settingsBlockProblem(body.settings, asMenu(body))).toBeNull();
+    expect(publishStatus()).toMatchObject({ state: 'published' });
+  });
+
+  it('“Tax on the delivery charge” on a till whose areas were never saved: nothing goes by itself; the owner’s next Publish carries the charges at their new tax', async () => {
+    const db = await till();
+    await bridge().publishMenu();
+    const { saveDeliveryChargeTax } = await import('../db/repositories/delivery-charge-tax-repo.js');
+    expect(saveDeliveryChargeTax(db as AppDatabase, { kind: 'rate', rateBps: 500, digitalRateBps: null }, OWNER)).toMatchObject({
+      changed: true,
+      sentToWebsite: false,
+      view: { website: 'publish' },
+    });
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(0);
+    expect(menus()).toHaveLength(1);
+    await bridge().publishMenu();
+    const charges = menus()[1]!.categories.flatMap((c) => c.items).filter((i) => i.name.startsWith('Delivery Charge'));
+    expect(charges.map((i) => [i.name, i.taxRateBps])).toEqual([
+      ['Delivery Charge (Rs 200)', 500],
+      ['Delivery Charge (Rs 250)', 500],
+    ]);
+  });
+
   it('a website with no menu yet (409): nothing more by itself; Settings says to press Publish', async () => {
     const db = await till();
     answerSettings = () => ({ status: 409, json: { ok: false, error: 'menu_not_published', message: 'The website has no menu yet.' } });

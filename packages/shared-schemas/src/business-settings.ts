@@ -82,6 +82,7 @@ import type {
   WebsiteHome,
   PlainShopSettingKey,
   SaveDeliveryZonesRequest,
+  SaveDeliveryChargeTaxRequest,
   WebsitePickup,
   CameBy,
   DiscountApproval,
@@ -1087,6 +1088,36 @@ export const saveDeliveryZonesInputSchema = z.union([
     .strict(),
 ]);
 
+/** A tax rate on the delivery charge's card: whole basis points, 0–100% (1500 = 15%). */
+const chargeTaxBps = (what: string) =>
+  z
+    .number()
+    .int({ message: `${what} is a whole number of basis points` })
+    .min(0, { message: `${what} cannot be below 0%` })
+    .max(10_000, { message: `${what} cannot be above 100%` });
+
+/**
+ * settings:saveDeliveryChargeTax (Settings → Delivery areas & fees → "Tax on
+ * the delivery charge"): the food's tax, no tax, or a rate of its own (and
+ * its rate by card / wallet / bank; null = the same). shared-types
+ * delivery-charge-tax.ts.
+ */
+export const saveDeliveryChargeTaxInputSchema = z
+  .object({
+    choice: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('food') }).strict(),
+      z.object({ kind: z.literal('none') }).strict(),
+      z
+        .object({
+          kind: z.literal('rate'),
+          rateBps: chargeTaxBps('The tax on the delivery charge'),
+          digitalRateBps: chargeTaxBps('The tax on the delivery charge by card').nullable(),
+        })
+        .strict(),
+    ]),
+  })
+  .strict();
+
 /** A share of money in basis points, 0–100% (2500 = 25%). */
 const feeBps = (what: string) =>
   z
@@ -1517,6 +1548,7 @@ const _menuImportPolicyReadShape: Same<z.infer<typeof menuImportPolicyReadSchema
 const _deliveryZonesShape: Same<z.infer<typeof deliveryZonesSchema>, DeliveryZones> = true;
 const _deliveryZonesReadShape: Same<z.infer<typeof deliveryZonesReadSchema>, DeliveryZones> = true;
 const _saveDeliveryZonesShape: Same<z.infer<typeof saveDeliveryZonesInputSchema>, SaveDeliveryZonesRequest> = true;
+const _saveDeliveryChargeTaxShape: Same<z.infer<typeof saveDeliveryChargeTaxInputSchema>, SaveDeliveryChargeTaxRequest> = true;
 const _websitePickupShape: Same<z.infer<typeof websitePickupSchema>, WebsitePickup> = true;
 const _websitePickupReadShape: Same<z.infer<typeof websitePickupReadSchema>, WebsitePickup> = true;
 const _onlineOptionsShape: Same<z.infer<typeof onlineOptionsSchema>, OnlineOptions> = true;

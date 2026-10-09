@@ -502,6 +502,11 @@ export const ipc = {
       unwrap(window.api.settings.setBusiness({ key, useDefault: true } as SetShopSettingRequest)) as Promise<ShopSettingCard<K>>,
     /** Settings → Delivery areas: the areas and fees, and the delivery-charge items they need (one transaction). */
     saveDeliveryZones: (input: IpcRequest<'settings:saveDeliveryZones'>) => unwrap(window.api.settings.saveDeliveryZones(input)),
+    /** Settings → Delivery areas & fees → "Tax on the delivery charge": the charges' tax now and the food's. */
+    deliveryChargeTax: () => unwrap(window.api.settings.deliveryChargeTax()),
+    /** …its Save: every delivery charge item onto one tax (one transaction); the website gets it with the areas. */
+    saveDeliveryChargeTax: (input: IpcRequest<'settings:saveDeliveryChargeTax'>) =>
+      unwrap(window.api.settings.saveDeliveryChargeTax(input)),
     /** One "this till" card (the receipt's extra lines, the opening float, this computer). */
     getTill: <K extends TillSettingKey>(key: K) => unwrap(window.api.settings.getTill({ key })) as Promise<TillSettingCard<K>>,
     /** Save a "this till" card; answers with it as it now stands. */

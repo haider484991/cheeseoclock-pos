@@ -40,6 +40,7 @@ import { MoneySettings } from './MoneySettings';
 import { TimingSettings } from './TimingSettings';
 import { KitchenStockSettings } from './KitchenStockSettings';
 import { DeliveryAreasSettings } from './DeliveryAreasSettings';
+import { DeliveryChargeTaxCard } from './DeliveryChargeTaxCard';
 import { WebsiteShopSettings } from './WebsiteShopSettings';
 import { useSessionStore } from '../../stores/sessionStore';
 
@@ -186,6 +187,7 @@ export function SettingsPage() {
         {tab === 'delivery' && (
           <>
             <DeliveryCityCard />
+            <DeliveryChargeTaxCard />
             <DeliveryAreasSettings />
           </>
         )}
