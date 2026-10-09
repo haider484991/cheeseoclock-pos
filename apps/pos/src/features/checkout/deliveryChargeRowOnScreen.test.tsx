@@ -276,3 +276,38 @@ describe('the phone the row tells with the area (deliveryTellPhone)', () => {
     expect(deliveryTellPhone('0300 1234567', '0300 1234567')).toBe('0300 1234567');
   });
 });
+
+/**
+ * "Custom charge" (owner, 10 Oct 2026: "i want custom delivery charges
+ * entering option too so if we want to add custom delivery fees"): on the
+ * row of an open delivery, beside what the bill carries. Typing and "Put on"
+ * are the till's (orders:setDeliveryCharge, custom-delivery-charge.db.test).
+ */
+describe('“Custom charge” on the delivery-charge row', () => {
+  it('beside the area’s charge on the bill (“Take it off”) and beside a charge at another fee', () => {
+    useCheckoutStore.setState({ mode: 'delivery', snapshot: order([['Test Pizza', 100_000], ['Delivery Charge (Rs 200)', 20_000]]) });
+    expect(text(panel('DHA Phase 6'))).toContain('Rs 200 delivery charge is on the bill Take it off Custom charge');
+    useCheckoutStore.setState({ snapshot: order([['Test Pizza', 100_000], ['Delivery Charge (Rs 400)', 40_000]]) });
+    expect(text(panel('DHA Phase 6'))).toContain(
+      'The bill has a Rs 400 delivery charge — this area’s charge is Rs 200 Change to Rs 200 Custom charge',
+    );
+  });
+
+  it('an area not on the list: the words, a charge typed for it on the bill, and “Custom charge”', () => {
+    useCheckoutStore.setState({ mode: 'delivery', snapshot: order([['Test Pizza', 100_000], ['Delivery Charge (Rs 400)', 40_000]]) });
+    const t = text(panel('Gulshan Block 13'));
+    expect(t).toContain('Not one of the delivery areas');
+    expect(t).toContain('Rs 400 delivery charge is on the bill Custom charge');
+    useCheckoutStore.setState({ snapshot: order([['Test Pizza', 100_000]]) });
+    const none = text(panel('Gulshan Block 13'));
+    expect(none).toContain('Custom charge');
+    expect(none).not.toContain('is on the bill');
+  });
+
+  it('no order yet, or the till still being told the area: no “Custom charge” (nothing to put it on yet)', () => {
+    useCheckoutStore.setState({ mode: 'delivery', snapshot: null });
+    expect(text(panel('Gulshan Block 13'))).not.toContain('Custom charge');
+    useCheckoutStore.setState({ snapshot: order([['Test Pizza', 100_000]]) });
+    expect(text(panel('DHA Phase 8'))).not.toContain('Custom charge');
+  });
+});

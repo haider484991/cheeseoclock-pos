@@ -157,6 +157,8 @@ export const ipc = {
     setMode: (input: IpcRequest<'orders:setMode'>) => unwrap(window.api.orders.setMode(input)),
     /** The delivery area changed: the main process puts that area's delivery charge on (or swaps / takes it off). */
     setDeliveryArea: (input: IpcRequest<'orders:setDeliveryArea'>) => unwrap(window.api.orders.setDeliveryArea(input)),
+    /** "Custom charge": a delivery charge typed in whole rupees, in place of the bill's (owner, 10 Oct 2026). */
+    setDeliveryCharge: (input: IpcRequest<'orders:setDeliveryCharge'>) => unwrap(window.api.orders.setDeliveryCharge(input)),
     /** How a counter order came in (Walk-in · Phone · WhatsApp): a manager's PIN once the order has been sent. */
     setCameBy: (input: IpcRequest<'orders:setCameBy'>) => unwrap(window.api.orders.setCameBy(input)),
     resumeDraft: () => unwrap(window.api.orders.resumeDraft()),

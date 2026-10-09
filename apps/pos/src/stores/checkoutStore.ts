@@ -151,6 +151,13 @@ interface CheckoutState {
     opts?: { mayStartOrder?: boolean; forOrderId?: string | null; putBack?: boolean; phone?: string | null },
   ) => Promise<void>;
   /**
+   * "Custom charge" on the delivery-charge row (owner, 10 Oct 2026: "custom
+   * delivery charges"): a fee typed in whole rupees goes on in place of the
+   * bill's delivery charges (orders:setDeliveryCharge). Only on an open
+   * order, never while an order the kitchen has is being changed.
+   */
+  setDeliveryCharge: (feeCents: number) => Promise<void>;
+  /**
    * `opts.free`: a Free order (v0.7.36) — 100% off everything, value deals
    * and the delivery charge too, with a reason and a manager's PIN or
    * password. While an order the kitchen has is being changed, the PIN is
@@ -612,6 +619,16 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
           // The panel's phone (null: none typed): the main process matches it while the order has none of its own.
           ...(opts.phone !== undefined ? { phone: opts.phone } : {}),
         });
+        if (get().snapshot?.order.id === next.order.id) set({ snapshot: next });
+      });
+    },
+
+    setDeliveryCharge(feeCents) {
+      return run(async () => {
+        if (get().edit) return;
+        const snap = get().snapshot;
+        if (!snap || snap.order.status !== 'open') return;
+        const next = await ipc.orders.setDeliveryCharge({ orderId: snap.order.id, feeCents });
         if (get().snapshot?.order.id === next.order.id) set({ snapshot: next });
       });
     },

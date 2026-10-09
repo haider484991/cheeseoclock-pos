@@ -338,12 +338,78 @@ export function deliveryChargeItemForWebOrder(
   return id;
 }
 
+/**
+ * The menu item a delivery charge the cashier TYPES goes on as
+ * (orders:setDeliveryCharge; owner, 10 Oct 2026: "i want custom delivery
+ * charges entering option too"): the shop's own item at that fee — one that
+ * is on first (an area's), else any named as a charge at that price — else
+ * the fee's name-based row, brought back or made exactly as a Save would
+ * make it (its category, kitchen station and the charges' tax) but
+ * SWITCHED OFF: an amount typed once is no new tile on the till and never
+ * goes to the website, and a Save that later charges that fee turns the
+ * same row on (planFeeItems: the fee's own row). Runs inside the caller's
+ * transaction; synced and audited.
+ */
+export function deliveryChargeItemForTypedFee(db: AppDatabase, feeCents: number, actor: Actor): string {
+  const feeIds = deliveryZoneFeeItemIds(readShopSetting(db, 'delivery.zones').value.zones);
+  const rows = db
+    .prepare(
+      `SELECT id, name, base_price_cents, is_active, deleted_at, created_at, category_id, tax_category_id,
+              prep_station, sort_order
+         FROM menu_items`,
+    )
+    .all() as ItemRow[];
+  const live = rows.filter((r) => r.deleted_at === null);
+  const charges = live.filter((r) => feeIds.has(r.id) || isDeliveryChargeName(r.name));
+  const order = (a: ItemRow, b: ItemRow) =>
+    b.is_active - a.is_active || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id);
+  const atFee = charges.filter((r) => r.base_price_cents === feeCents).sort(order)[0];
+  if (atFee) return atFee.id;
+  const id = deliveryChargeItemId(feeCents);
+  const template = [...charges].sort(order)[0] ?? null;
+  const categoryId = ensureFeeCategory(db, template?.category_id ?? null, actor, false);
+  const own = rows.find((r) => r.id === id);
+  if (own) {
+    // The fee's own row, deleted (a fresh start) or renamed by an older till: back, at the fee, off.
+    if (own.deleted_at !== null) restoreMenuItem(db, id, actor);
+    updateMenuItem(
+      db,
+      { id, name: deliveryChargeItemName(feeCents), basePriceCents: feeCents, isActive: false, categoryId },
+      actor,
+    );
+    return id;
+  }
+  const tax = template?.tax_category_id ?? mostUsedTaxCategory(db);
+  if (!tax) throw new Error('Add a tax in Menu → Tax first: a delivery charge needs one');
+  createMenuItem(
+    db,
+    {
+      id,
+      categoryId,
+      name: deliveryChargeItemName(feeCents),
+      description: FEE_ITEM_DESCRIPTION,
+      basePriceCents: feeCents,
+      prepStation: template?.prep_station ?? 'kitchen',
+      taxCategoryId: tax,
+      sortOrder: Math.max(0, ...live.map((r) => r.sort_order + 1)),
+    },
+    actor,
+  );
+  updateMenuItem(db, { id, isActive: false }, actor);
+  return id;
+}
+
 /** What Menu shows under a fee item. */
 const FEE_ITEM_DESCRIPTION =
   'Delivery charge — the areas and fees are set in Settings → Delivery areas.';
 
-/** The category new fee items go in: the adopted items' own, else "Delivery Charges", else one made with a name-based id. */
-function ensureFeeCategory(db: AppDatabase, preferred: string | null, actor: Actor): string {
+/**
+ * The category new fee items go in: the adopted items' own, else "Delivery
+ * Charges", else one made with a name-based id. Switched on (the website
+ * must see the areas' items), unless `switchOn` is false: a typed charge's
+ * item is off, so it leaves the category as the owner has it.
+ */
+function ensureFeeCategory(db: AppDatabase, preferred: string | null, actor: Actor, switchOn = true): string {
   const live = (id: string) =>
     db
       .prepare(`SELECT id, is_active FROM categories WHERE id = ? AND deleted_at IS NULL`)
@@ -359,7 +425,7 @@ function ensureFeeCategory(db: AppDatabase, preferred: string | null, actor: Act
       .get(DELIVERY_CHARGES_CATEGORY_NAME) as { id: string; is_active: number } | undefined) ??
     live(deliveryChargesCategoryId());
   if (found) {
-    ensureCategoryOn(db, found.id, actor);
+    if (switchOn) ensureCategoryOn(db, found.id, actor);
     return found.id;
   }
   const id = deliveryChargesCategoryId();

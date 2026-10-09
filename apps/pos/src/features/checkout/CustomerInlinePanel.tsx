@@ -11,15 +11,17 @@ import {
   type OrderSnapshot,
 } from '@cheeseoclock/shared-types';
 import {
+  chargesOnBillWords,
   counterPhoneLookup,
   deliveryChargeRowState,
   deliveryChargeTarget,
   deliveryChargeWords,
   makeDeliveryAreaTeller,
   normalizePhone,
+  typedDeliveryChargeCents,
   type DeliveryAreaTeller,
 } from '@cheeseoclock/pos-domain';
-import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, PauseCircle, RefreshCw, X } from 'lucide-react';
+import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, PauseCircle, RefreshCw, X, Pencil } from 'lucide-react';
 import { AreaPicker } from '../customers/AreaPicker';
 import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 import { useCheckoutStore } from '../../stores/checkoutStore';
@@ -603,6 +605,7 @@ function DeliveryChargeRow({ area, phone }: { area: string; phone: string }) {
   const mode = useCheckoutStore((s) => s.mode);
   const busy = useCheckoutStore((s) => s.busy);
   const setDeliveryArea = useCheckoutStore((s) => s.setDeliveryArea);
+  const setDeliveryCharge = useCheckoutStore((s) => s.setDeliveryCharge);
   const removeItem = useCheckoutStore((s) => s.removeItem);
   const { toast } = useToast();
   // Same query (and cache) as the menu grid's "All" view.
@@ -656,8 +659,30 @@ function DeliveryChargeRow({ area, phone }: { area: string; phone: string }) {
   if (!words) return null;
   const base = 'mt-1 flex flex-wrap items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-xs';
   const amber = cn(base, 'bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200');
+  const feeIds = deliveryZoneFeeItemIds(A.zones);
+  const lines = (snapshot?.items ?? []).filter((l) => isDeliveryChargeLine(l, feeIds));
+  const failed = (title: string) => (e: unknown) =>
+    toast({ title, description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' });
+  // "Custom charge" (owner, 10 Oct 2026): a fee typed in whole rupees, in place of the bill's charges.
+  const custom = orderId ? (
+    <CustomChargeControl
+      disabled={busy}
+      onPut={(feeCents) =>
+        setDeliveryCharge(feeCents).then(
+          () => true,
+          (e: unknown) => {
+            failed('Could not put the delivery charge on')(e);
+            return false;
+          },
+        )
+      }
+    />
+  ) : null;
 
-  if (target.kind !== 'fee') {
+  if (target.kind !== 'fee' || !target.itemId) {
+    // No charge of the area's own to show: the words, what the bill carries (a charge typed or
+    // tapped on by hand), and "Custom charge".
+    const onBill = chargesOnBillWords(lines);
     return (
       <div className={amber}>
         <span className="inline-flex items-center gap-1">
@@ -668,27 +693,14 @@ function DeliveryChargeRow({ area, phone }: { area: string; phone: string }) {
           )}
           {words}
         </span>
+        {onBill && <span className="font-semibold">{onBill}</span>}
+        {custom}
       </div>
     );
   }
 
-  const feeIds = deliveryZoneFeeItemIds(A.zones);
-  const lines = (snapshot?.items ?? []).filter((l) => isDeliveryChargeLine(l, feeIds));
   const right = lines.filter((l) => l.unitPriceCents === target.feeCents);
   const pill = 'inline-flex min-h-[32px] items-center gap-1 rounded-full px-3 font-semibold';
-  const failed = (title: string) => (e: unknown) =>
-    toast({ title, description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' });
-
-  if (!target.itemId) {
-    return (
-      <div className={amber}>
-        <span className="inline-flex items-center gap-1">
-          <Bike className="h-3.5 w-3.5" aria-hidden="true" />
-          {words}
-        </span>
-      </div>
-    );
-  }
 
   // "Put it back" with the phone told: it then holds while the area and the delivery it goes with stay the same.
   const putBack = () =>
@@ -729,6 +741,7 @@ function DeliveryChargeRow({ area, phone }: { area: string; phone: string }) {
             <X className="h-3.5 w-3.5" /> Take it off
           </button>
         )}
+        {custom}
       </div>
     );
   }
@@ -747,6 +760,7 @@ function DeliveryChargeRow({ area, phone }: { area: string; phone: string }) {
             <RefreshCw className="h-3.5 w-3.5" /> {row.action}
           </button>
         )}
+        {custom}
       </div>
     );
   }
@@ -762,7 +776,88 @@ function DeliveryChargeRow({ area, phone }: { area: string; phone: string }) {
           <Plus className="h-3.5 w-3.5" /> {row.action}
         </button>
       )}
+      {row.kind === 'off' && custom}
     </div>
+  );
+}
+
+/**
+ * "Custom charge" on the delivery-charge row (owner, 10 Oct 2026: "i want
+ * custom delivery charges entering option too so if we want to add custom
+ * delivery fees"): a fee typed in whole rupees goes on in place of the
+ * bill's delivery charges (orders:setDeliveryCharge). Like a charge tapped
+ * on by hand it stays while the area stays the same, and another area swaps
+ * it for that area's own. `onPut` answers whether it went on (the box then
+ * closes); a refusal is the row's toast.
+ */
+export function CustomChargeControl({
+  disabled,
+  onPut,
+}: {
+  disabled: boolean;
+  onPut: (feeCents: number) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const cents = typedDeliveryChargeCents(text);
+  const pill = 'inline-flex min-h-[32px] items-center gap-1 rounded-full px-3 font-semibold';
+  const close = () => {
+    setOpen(false);
+    setText('');
+  };
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={cn(pill, 'bg-white/70 text-stone-800 hover:bg-white dark:bg-stone-800 dark:text-stone-100')}
+      >
+        <Pencil className="h-3.5 w-3.5" /> Custom charge
+      </button>
+    );
+  }
+  return (
+    <form
+      className="inline-flex items-center gap-1"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (cents === null || disabled) return;
+        void onPut(cents).then((done) => {
+          if (done) close();
+        });
+      }}
+    >
+      <label className="inline-flex items-center gap-1 font-semibold">
+        Rs
+        <input
+          autoFocus
+          aria-label="Custom delivery charge in rupees"
+          inputMode="numeric"
+          value={text}
+          placeholder="300"
+          onChange={(e) => setText(e.target.value.replace(/[^\d,]/g, '').slice(0, 7))}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') close();
+          }}
+          className="w-20 rounded-md border border-stone-300 bg-white px-2 py-1 text-right font-mono text-xs text-stone-900 dark:border-stone-600 dark:bg-stone-900 dark:text-stone-100"
+        />
+      </label>
+      <button
+        type="submit"
+        disabled={cents === null || disabled}
+        className={cn(pill, 'bg-amber-500 text-stone-900 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50')}
+      >
+        Put on
+      </button>
+      <button
+        type="button"
+        onClick={close}
+        aria-label="Cancel the custom charge"
+        className="rounded-full p-1.5 hover:bg-white/70 dark:hover:bg-stone-800"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </form>
   );
 }
 

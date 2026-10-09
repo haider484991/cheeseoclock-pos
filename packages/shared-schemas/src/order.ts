@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { uuidSchema, centsSchema } from './common.js';
 import { signInSecretSchema } from './auth.js';
-import { CHANGEABLE_PAYMENT_METHODS } from '@cheeseoclock/shared-types';
+import { CHANGEABLE_PAYMENT_METHODS, DELIVERY_FEE_MAX_CENTS } from '@cheeseoclock/shared-types';
 
 export const orderModeSchema = z.enum(['dine_in', 'takeaway', 'delivery', 'online', 'foodpanda']);
 export const orderStatusSchema = z.enum([
@@ -33,6 +33,25 @@ export const changePaymentMethodInputSchema = z
     orderId: z.string().min(1).max(64),
     paymentId: z.string().min(1).max(64),
     method: changeablePaymentMethodSchema,
+  })
+  .strict();
+
+/**
+ * A delivery charge the cashier types on an open counter delivery
+ * (orders:setDeliveryCharge, owner 10 Oct 2026): whole rupees, Rs 1 up to
+ * the highest fee an area may have.
+ */
+export const setDeliveryChargeInputSchema = z
+  .object({
+    orderId: z.string().min(1).max(64),
+    feeCents: z
+      .number()
+      .int({ message: 'A delivery charge is in whole rupees' })
+      .min(100, { message: 'A delivery charge is at least Rs 1 (to take it off, use Take it off)' })
+      .max(DELIVERY_FEE_MAX_CENTS, {
+        message: `A delivery charge is at most Rs ${(DELIVERY_FEE_MAX_CENTS / 100).toLocaleString('en-PK')}`,
+      })
+      .refine((c) => c % 100 === 0, { message: 'A delivery charge is in whole rupees' }),
   })
   .strict();
 

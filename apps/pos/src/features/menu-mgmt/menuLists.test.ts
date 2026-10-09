@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   groupItemName,
+  menuWithoutCharges,
   modifierGroupKind,
   modifierGroupSearchText,
   sectionGroupsForItem,
@@ -92,5 +93,37 @@ describe('sectionGroupsForItem', () => {
 
   it('never returns an empty section', () => {
     expect(sectionGroupsForItem([], new Set(), 'x')).toEqual([]);
+  });
+});
+
+describe('menuWithoutCharges: Menu leaves the delivery charges out (owner, 10 Oct 2026)', () => {
+  const item = (id: string, name: string, categoryId: string) => ({ id, name, categoryId });
+  const isCharge = (i: { name: string }) => /^delivery charge/i.test(i.name);
+
+  it('the charges go, and a category that holds nothing but charges; food stays in its order', () => {
+    const r = menuWithoutCharges(
+      [
+        item('p1', 'Test Pizza', 'food'),
+        item('d200', 'Delivery Charge (Rs 200)', 'fees'),
+        item('d250', 'Delivery Charge (Rs 250)', 'fees'),
+        item('s1', 'Test Side', 'food'),
+      ],
+      isCharge,
+    );
+    expect(r.items.map((i) => i.id)).toEqual(['p1', 's1']);
+    expect([...r.chargeCategoryIds]).toEqual(['fees']);
+    expect(r.charges).toBe(2);
+  });
+
+  it('a category with food in it as well stays (only the charge leaves it)', () => {
+    const r = menuWithoutCharges([item('x1', 'Test Extra', 'extras'), item('d300', 'Delivery Charge (Rs 300)', 'extras')], isCharge);
+    expect(r.items.map((i) => i.id)).toEqual(['x1']);
+    expect(r.chargeCategoryIds.size).toBe(0);
+    expect(r.charges).toBe(1);
+  });
+
+  it('no charges: everything as it is', () => {
+    const r = menuWithoutCharges([item('p1', 'Test Pizza', 'food')], isCharge);
+    expect(r).toEqual({ items: [item('p1', 'Test Pizza', 'food')], chargeCategoryIds: new Set(), charges: 0 });
   });
 });

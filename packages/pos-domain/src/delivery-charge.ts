@@ -19,6 +19,7 @@
 import {
   DEFAULT_DELIVERY_ZONES,
   DEFAULT_SETTINGS_AT,
+  DELIVERY_FEE_MAX_CENTS,
   compareSettingsStamp,
   deliveryChargeItemName,
   isDeliveryChargeName,
@@ -393,6 +394,28 @@ export function makeDeliveryAreaTeller(): DeliveryAreaTeller {
       last = { orderId, area: area.trim() };
     },
   };
+}
+
+/**
+ * A delivery charge the cashier types on the till ("Custom charge"; owner,
+ * 10 Oct 2026: "custom delivery charges"), as paisa: whole rupees, commas
+ * allowed ("1,200"), Rs 1 up to the highest fee an area may have
+ * (DELIVERY_FEE_MAX_CENTS). Null: not one (empty, Rs 0, paisa, too high).
+ */
+export function typedDeliveryChargeCents(text: string): number | null {
+  const t = text.trim().replace(/^rs\.?\s*/i, '').replace(/,/g, '');
+  if (!/^\d{1,6}$/.test(t)) return null;
+  const cents = Number(t) * 100;
+  return cents >= 100 && cents <= DELIVERY_FEE_MAX_CENTS ? cents : null;
+}
+
+/** The words for the delivery charges on the bill: "Rs 300 delivery charge is on the bill", or each fee when there are several. */
+export function chargesOnBillWords(lines: readonly ChargeLine[]): string | null {
+  const qty = lines.reduce((n, l) => n + l.quantity, 0);
+  if (qty === 0) return null;
+  if (qty === 1) return `${formatCents(lines[0]!.unitPriceCents)} delivery charge is on the bill`;
+  const fees = [...new Set(lines.map((l) => formatCents(l.unitPriceCents)))].join(', ');
+  return `${qty} delivery charges are on the bill (${fees}) — check it`;
 }
 
 /** The line under the area on the till: what the bill carries for it, in words. */

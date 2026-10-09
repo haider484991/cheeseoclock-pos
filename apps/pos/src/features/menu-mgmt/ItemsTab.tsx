@@ -46,12 +46,14 @@ import {
   type ChipOption,
 } from '../../components/list';
 import {
+  CHARGES_NOT_LISTED_NOTE,
   GROUP_KIND_LABEL,
   groupItemName,
   modifierGroupKind,
   modifierGroupSearchText,
   sectionGroupsForItem,
 } from './menuLists';
+import { foodTaxChoices, useMenuWithoutCharges } from './useMenuCharges';
 import { FoodCostChip } from '../costing/CostChip';
 import { COSTING_KEY, useCanSeeCosts, useMenuCosts } from '../costing/costingQueries';
 
@@ -71,7 +73,11 @@ export function ItemsTab() {
   const isFee = (i: { id: string; name: string }) => feeLock(i) === 'charged';
 
   const catQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
-  const itemsQ = useQuery({ queryKey: ['menu', 'items', 'all'], queryFn: () => ipc.menu.listItems() });
+  // The delivery charges are not dishes (owner, 10 Oct 2026): left out of the list, and so is a
+  // category holding nothing else; Settings → Delivery areas & fees has them.
+  const { itemsQ, items: menuItems, chargeCategoryIds, charges } = useMenuWithoutCharges();
+  // A category chip remembered from before (Delivery Charges) reads as "All".
+  const cat = chargeCategoryIds.has(category) ? 'all' : category;
   // The food-cost chip (costing spec Phase 1), for logins that may see costs.
   const canCost = useCanSeeCosts();
   const costsQ = useMenuCosts(canCost);
@@ -102,15 +108,15 @@ export function ItemsTab() {
       toast({ title: 'Could not change it', description: e instanceof IpcError ? e.message : String(e), variant: 'error' }),
   });
 
-  const categories = useMemo(() => catQ.data ?? [], [catQ.data]);
+  const categories = useMemo(() => (catQ.data ?? []).filter((c) => !chargeCategoryIds.has(c.id)), [catQ.data, chargeCategoryIds]);
   const catById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
   const catOrder = useMemo(() => new Map(categories.map((c, i) => [c.id, i])), [categories]);
 
   const filter = useCallback(
     (i: MenuItem) =>
-      (category === 'all' || i.categoryId === category) &&
+      (cat === 'all' || i.categoryId === cat) &&
       (status === 'all' || (status === 'active' ? i.isActive : !i.isActive)),
-    [category, status],
+    [cat, status],
   );
   // The printed menu's order: category, then the item's own sort order.
   const sort = useCallback(
@@ -121,13 +127,13 @@ export function ItemsTab() {
     [catOrder],
   );
   const list = useListQuery({
-    items: itemsQ.data,
+    items: itemsQ.data ? menuItems : undefined,
     searchText: (i) =>
       `${i.name} ${i.description ?? ''} ${i.sku ?? ''} ${i.barcode ?? ''} ${catById.get(i.categoryId)?.name ?? ''}`,
     filter,
     sort,
     persistKey: 'menu.items',
-    resetPageOn: [category, status],
+    resetPageOn: [cat, status],
   });
 
   const categoryCounts = useMemo(
@@ -142,7 +148,7 @@ export function ItemsTab() {
     { id: 'all', label: 'All', count: Object.values(categoryCounts).reduce<number>((a, b) => a + (b ?? 0), 0) },
     ...categories.map((c) => ({ id: c.id, label: c.name, count: categoryCounts[c.id] ?? 0 })),
   ];
-  const inCategory = list.searched.filter((i) => category === 'all' || i.categoryId === category);
+  const inCategory = list.searched.filter((i) => cat === 'all' || i.categoryId === cat);
   const statusOptions: ChipOption<StatusFilter>[] = [
     { id: 'all', label: 'Any status' },
     { id: 'active', label: 'On the till', count: inCategory.filter((i) => i.isActive).length, tone: 'green' },
@@ -162,8 +168,9 @@ export function ItemsTab() {
           <Plus className="h-4 w-4" /> Add item
         </Button>
       </div>
-      <FilterChips label="Category" options={categoryOptions} value={category} onChange={setCategory} className="mb-2" />
+      <FilterChips label="Category" options={categoryOptions} value={cat} onChange={setCategory} className="mb-2" />
       <FilterChips label="Status" options={statusOptions} value={status} onChange={setStatus} className="mb-3" />
+      {charges > 0 && <p className="mb-3 text-xs text-stone-500">{CHARGES_NOT_LISTED_NOTE}</p>}
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -269,7 +276,7 @@ export function ItemsTab() {
             {list.items.length === 0 && (
               <tr>
                 <td colSpan={canCost ? 8 : 7} className="py-6 text-center text-stone-500">
-                  {itemsQ.isLoading ? 'Loading…' : (itemsQ.data?.length ?? 0) === 0 ? 'No items yet — add one, or use Import.' : 'No items match.'}
+                  {itemsQ.isLoading ? 'Loading…' : menuItems.length === 0 ? 'No items yet — add one, or use Import.' : 'No items match.'}
                 </td>
               </tr>
             )}
@@ -292,7 +299,7 @@ export function ItemsTab() {
         <ItemDialog
           key={editing === 'new' ? 'new' : editing.id}
           existing={editing === 'new' ? null : editing}
-          defaultCategoryId={category === 'all' ? undefined : category}
+          defaultCategoryId={cat === 'all' ? undefined : cat}
           onClose={() => setEditing(null)}
         />
       )}
@@ -370,6 +377,13 @@ function ItemDialog({
   const feeFixed = lock !== null;
   const catQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
   const taxQ = useQuery({ queryKey: ['menu', 'taxCategories'], queryFn: () => ipc.menu.listTaxCategories() });
+  // Not the delivery charges' category, nor their tax (Settings → Delivery areas & fees), unless the item is on it.
+  const { chargeCategoryIds } = useMenuWithoutCharges();
+  const catOptions = useMemo(
+    () => (catQ.data ?? []).filter((c) => !chargeCategoryIds.has(c.id) || c.id === existing?.categoryId),
+    [catQ.data, chargeCategoryIds, existing?.categoryId],
+  );
+  const taxOptions = useMemo(() => foodTaxChoices(taxQ.data ?? [], existing?.taxCategoryId), [taxQ.data, existing?.taxCategoryId]);
   const modGroupsQ = useQuery({ queryKey: ['menu', 'modifierGroups'], queryFn: () => ipc.menu.listModifierGroups() });
   const attachedQ = useQuery({
     queryKey: ['menu', 'attachedGroups', existing?.id],
@@ -408,9 +422,9 @@ function ItemDialog({
   // Pick defaults when creating new
   useEffect(() => {
     if (existing) return;
-    if (!categoryId && catQ.data?.[0]) setCategoryId(catQ.data[0].id);
-    if (!taxCategoryId && taxQ.data?.[0]) setTaxCategoryId(taxQ.data[0].id);
-  }, [existing, categoryId, taxCategoryId, catQ.data, taxQ.data]);
+    if (!categoryId && catOptions[0]) setCategoryId(catOptions[0].id);
+    if (!taxCategoryId && taxOptions[0]) setTaxCategoryId(taxOptions[0].id);
+  }, [existing, categoryId, taxCategoryId, catOptions, taxOptions]);
 
   const price = Number(priceRupees);
   const priceValid = priceRupees.trim() !== '' && Number.isFinite(price) && price >= 0;
@@ -561,7 +575,7 @@ function ItemDialog({
                   onChange={(e) => setCategoryId(e.target.value)}
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 disabled:opacity-60 dark:border-stone-700 dark:bg-stone-800"
                 >
-                  {catQ.data?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  {catOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </Field>
               <Field label="Tax category">
@@ -570,7 +584,7 @@ function ItemDialog({
                   onChange={(e) => setTaxCategoryId(e.target.value)}
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
                 >
-                  {taxQ.data?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  {taxOptions.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
               </Field>
             </div>

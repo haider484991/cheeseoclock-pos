@@ -777,6 +777,20 @@ export interface IpcContract {
     request: { orderId: string; area: string | null; putBack?: boolean; phone?: string | null };
     response: ApiResult<OrderSnapshot>;
   };
+  /**
+   * A delivery charge the cashier types (owner, 10 Oct 2026: "i want custom
+   * delivery charges entering option too so if we want to add custom
+   * delivery fees"): on an open counter delivery, every delivery charge line
+   * comes off and one "Delivery Charge (Rs N)" at `feeCents` (whole rupees,
+   * Rs 1 to DELIVERY_FEE_MAX_CENTS) goes on — the shop's item at that fee,
+   * else one made switched off (never a new tile on the till). Like a charge
+   * tapped on by hand: it stays while the area stays the same; a new area
+   * swaps it for that area's charge. Never foodpanda or a website order.
+   */
+  'orders:setDeliveryCharge': {
+    request: { orderId: string; feeCents: number };
+    response: ApiResult<OrderSnapshot>;
+  };
   'orders:tender': {
     request: {
       orderId: string;

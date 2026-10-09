@@ -98,6 +98,7 @@ const api: RendererApi = {
     saveEdit: (req) => invoke('orders:saveEdit', req),
     setMode: (req) => invoke('orders:setMode', req),
     setDeliveryArea: (req) => invoke('orders:setDeliveryArea', req),
+    setDeliveryCharge: (req) => invoke('orders:setDeliveryCharge', req),
     setCameBy: (req) => invoke('orders:setCameBy', req),
     resumeDraft: () => invoke('orders:resumeDraft', undefined),
     discardDraft: (req) => invoke('orders:discardDraft', req),

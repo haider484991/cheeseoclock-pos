@@ -25,6 +25,7 @@ import {
   previewEditInputSchema,
   saveEditInputSchema,
   setCameByInputSchema,
+  setDeliveryChargeInputSchema,
   listDeletedTestsInputSchema,
   orderStockAnswerSchema,
   testDeletePreviewInputSchema,
@@ -118,6 +119,7 @@ import { getReceiptPrinterConfig } from '../../services/printer-config.js';
 import { decrementForOrder } from '../../db/repositories/stock-movement-repo.js';
 import { getOrderStockStatus } from '../../db/repositories/order-stock-repo.js';
 import { changePaymentMethod } from '../../db/repositories/payment-method-repo.js';
+import { setTypedDeliveryCharge } from '../../db/repositories/typed-delivery-charge-repo.js';
 import { kitchenTicketsNotPrinted } from '../../db/repositories/print-queue-repo.js';
 import log from 'electron-log/main';
 import {
@@ -681,6 +683,29 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       throw e;
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  // A delivery charge the cashier types ("Custom charge"; owner, 10 Oct 2026): any login taking the
+  // order, like the area's own charge. The repository's refusals ("Only a delivery order has a
+  // delivery charge") reach the cashier as they are; a database error stays hidden.
+  defineHandler('orders:setDeliveryCharge', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    const parsed = setDeliveryChargeInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new IpcGuardError({ code: 'validation_failed', message: parsed.error.issues[0]?.message ?? 'Which order, and what charge?' });
+    }
+    const { orderId, feeCents } = parsed.data;
+    try {
+      setTypedDeliveryCharge(ctx.db, orderId, feeCents, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      if (e instanceof Error && Object.getPrototypeOf(e) === Error.prototype && e.message === 'Order not found') {
+        throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+      }
+      throw e;
+    }
+    const snap = getOrderSnapshot(ctx.db, orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     return ok(snap);
   });

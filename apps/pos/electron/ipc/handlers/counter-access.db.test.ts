@@ -722,6 +722,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'orders:setCameBy': { orderId: s.draft, cameBy: 'phone' },
   // The delivery area's charge goes on by itself (owner, 28 Sep 2026): any login taking the order.
   'orders:setDeliveryArea': { orderId: s.draft, area: 'DHA Phase 6' },
+  // "Custom charge" (owner, 10 Oct 2026): a delivery charge typed on the bill, like the area's own.
+  'orders:setDeliveryCharge': { orderId: s.draft, feeCents: 30_000 },
   'orders:tender': { orderId: s.draft, payments: [] },
   'orders:sendToKitchen': { orderId: s.draft },
   'orders:listActive': undefined,

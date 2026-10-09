@@ -110,3 +110,41 @@ export function sectionGroupsForItem<G extends GroupLike>(
   ];
   return sections.filter((s) => s.groups.length > 0);
 }
+
+/**
+ * Menu without the delivery charges (the owner, 10 Oct 2026: "i want to
+ * remove menu delivery charges only"). The "Delivery Charge (Rs N)" items
+ * are Settings → Delivery areas & fees' (their fees) and its "Tax on the
+ * delivery charge" (their tax), not dishes: Menu's lists leave them out, and
+ * a category that holds nothing else (Delivery Charges) with them. The order
+ * screen's tiles and the phone dashboard keep them ("other is okay").
+ * `isCharge`: shared-types isDeliveryChargeMenuItem with the areas' items.
+ */
+export function menuWithoutCharges<I extends { id: string; name: string; categoryId: string }>(
+  items: readonly I[],
+  isCharge: (item: I) => boolean,
+): { items: I[]; chargeCategoryIds: Set<string>; charges: number } {
+  const kept: I[] = [];
+  const chargeCategoryIds = new Set<string>();
+  const foodCategoryIds = new Set<string>();
+  let charges = 0;
+  for (const i of items) {
+    if (isCharge(i)) {
+      charges += 1;
+      chargeCategoryIds.add(i.categoryId);
+    } else {
+      kept.push(i);
+      foodCategoryIds.add(i.categoryId);
+    }
+  }
+  for (const id of foodCategoryIds) chargeCategoryIds.delete(id);
+  return { items: kept, chargeCategoryIds, charges };
+}
+
+/** The line on Menu's Items tab while charges are left out (menuWithoutCharges). */
+export const CHARGES_NOT_LISTED_NOTE =
+  'Delivery charges are not listed here: Settings → Delivery areas & fees sets them and their tax, and a delivery bill gets its area’s charge by itself.';
+
+/** The line on Menu's Categories tab while a charges-only category is left out (menuWithoutCharges). */
+export const CHARGE_CATEGORY_NOT_LISTED_NOTE =
+  'The delivery charges’ category is not listed here: Settings → Delivery areas & fees has the charges.';

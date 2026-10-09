@@ -14,6 +14,8 @@ import {
   type IpcRequest,
 } from '@cheeseoclock/shared-types';
 import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
+import { useMenuWithoutCharges } from './useMenuCharges';
+import { CHARGE_CATEGORY_NOT_LISTED_NOTE } from './menuLists';
 import { Plus, Edit, Trash2, X, Globe } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -60,10 +62,15 @@ export function CategoriesTab() {
     const ids = deliveryZoneFeeItemIds(areas.zones);
     return new Set((itemsQ.data ?? []).filter((i) => i.isActive && isDeliveryChargeMenuItem(i, ids)).map((i) => i.categoryId));
   }, [itemsQ.data, areas]);
-  // The till shows categories in display order; so does this list.
+  // The till shows categories in display order; so does this list. A category holding nothing but
+  // delivery charges is left out (owner, 10 Oct 2026): Settings → Delivery areas & fees has them.
+  const { chargeCategoryIds } = useMenuWithoutCharges();
   const categories = useMemo(
-    () => [...(q.data ?? [])].sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name)),
-    [q.data],
+    () =>
+      [...(q.data ?? [])]
+        .filter((c) => !chargeCategoryIds.has(c.id))
+        .sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name)),
+    [q.data, chargeCategoryIds],
   );
 
   const [editing, setEditing] = useState<Category | null | 'new'>(null);
@@ -90,6 +97,7 @@ export function CategoriesTab() {
           <Plus className="h-4 w-4" /> Add category
         </Button>
       </div>
+      {chargeCategoryIds.size > 0 && <p className="mb-3 text-xs text-stone-500">{CHARGE_CATEGORY_NOT_LISTED_NOTE}</p>}
 
       <table className="w-full text-sm">
         <thead className="text-left text-xs uppercase tracking-wider text-stone-500">

@@ -1316,7 +1316,7 @@ export function setOrderMode(
 }
 
 /** The delivery charge lines on an order (sold under a delivery-charge name, or of an area's fee item). */
-function deliveryChargeLinesOf(
+export function deliveryChargeLinesOf(
   db: AppDatabase,
   orderId: string,
 ): Array<{ id: string; menuItemId: string | null; unitPriceCents: number; quantity: number }> {
@@ -1869,7 +1869,9 @@ export interface AddItemInput {
   /**
    * A delivery charge item that has since been switched off still goes on
    * (the web bridge: a website order placed at a fee Settings → Delivery
-   * areas has just moved carries the old fee's item). Food never does.
+   * areas has just moved carries the old fee's item; orders:setDeliveryCharge:
+   * a typed charge's item is made switched off). Food never does.
+   * orders:addItem never passes it.
    */
   allowSwitchedOffDeliveryCharge?: boolean;
   /**
