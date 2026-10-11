@@ -25,6 +25,9 @@
  * with the unpublished menu; never the heartbeat); the till bills the %
  * each web order carries. (The automatic
  * offers never touch a website order: the website prices its own.)
+ * And the tax by how the customer pays (TaxByPaymentCard.tsx, 0.7.45): each
+ * tax category's rate in cash and by each other way, changed with Menu → Tax's
+ * own form (the rates live on the tax categories, not here).
  * And the Buy 1 Get 1 deals ('deals.buy1Get1', Buy1Get1Settings.tsx, v0.7.39):
  * on or off, their hours, and whether the website asks for the customer's
  * Instagram or Facebook name — sent to the website in the settings block too.
@@ -47,6 +50,7 @@ import {
 import { SettingCard } from './shop-rules/SettingCard';
 import { OffersCard } from './OfferSettings';
 import { Buy1Get1Card } from './Buy1Get1Settings';
+import { TaxByPaymentCard } from './TaxByPaymentCard';
 import { useDraft } from './shop-rules/useDraft';
 import { useShopSetting, useShopSettingsLive, useValueDealsMarked } from './shop-rules/useShopSetting';
 import { sameValue } from './shop-rules/foodpandaForm';
@@ -316,6 +320,8 @@ function MoneyCards({
       </SettingCard>
 
       <OffersCard />
+
+      <TaxByPaymentCard />
 
       <DeliveryChargeCard />
 

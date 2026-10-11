@@ -55,6 +55,12 @@ interface Props {
    * card says Rider owes. A refused Confirm changes nothing and keeps the box.
    */
   sendOutFirst?: PaidNowAtSendOut;
+  /**
+   * Take payment (0.7.45): a takeaway the kitchen has, paid while the
+   * customer waits. It calls orders:takePayment: the order is stamped paid
+   * and stays where it is; Picked up closes it later with no money.
+   */
+  payOnly?: boolean;
 }
 
 /**
@@ -82,7 +88,7 @@ interface Props {
  * out's "Paid now") it is Rider paid on an order not sent out yet: see the
  * prop.
  */
-export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: riderPaidProp = false, sendOutFirst }: Props) {
+export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: riderPaidProp = false, sendOutFirst, payOnly = false }: Props) {
   const { order } = snap;
   const isDelivery = order.mode === 'delivery';
   // Send out's "Paid now" is Rider paid too, on an order still Ready.
@@ -150,6 +156,8 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: ride
             tenderedCents: method === 'cash' ? tenderedCents : null,
             referenceNo,
           };
+      // Take payment: the money alone; the order stays with the kitchen.
+      if (payOnly && payment) return ipc.orders.takePayment({ orderId: order.id, payment });
       const args = { orderId: order.id, ...(payment ? { payment } : {}) };
       return isDelivery ? ipc.orders.markDelivered(args) : ipc.orders.markServed(args);
     },
@@ -162,6 +170,8 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: ride
       toast({
         title: riderPaidOnly
           ? `Rider paid · ${formatCents(takeCents)} for the shop`
+          : payOnly
+            ? `Payment taken · ${formatCents(dueCents)} · it stays with the kitchen`
           : alreadyPaid
             ? `Marked ${verb}`
             : order.totalCents === 0
@@ -255,13 +265,21 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: ride
             <header className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <Dialog.Title className="text-lg font-semibold">
-                  {riderPaidOnly ? `Rider paid · #${short}` : alreadyPaid ? `Mark ${verb}` : `${verbCap} + take payment`}
+                  {riderPaidOnly
+                    ? `Rider paid · #${short}`
+                    : payOnly
+                      ? `Take payment · #${short}`
+                      : alreadyPaid
+                        ? `Mark ${verb}`
+                        : `${verbCap} + take payment`}
                 </Dialog.Title>
                 <Dialog.Description className="mt-0.5 text-xs text-stone-500">
                   {sendOutFirst ? (
                     <>{snap.customerName ?? 'Walk-in'} · it goes out, then the bill prints</>
                   ) : riderPaidOnly ? (
                     <>{snap.customerName ?? 'Walk-in'} · the order stays out for delivery</>
+                  ) : payOnly ? (
+                    <>{snap.customerName ?? 'Walk-in'} · it stays with the kitchen; Picked up when it is handed over</>
                   ) : (
                     <>
                       Order #{short} · {snap.customerName ?? 'Walk-in'}

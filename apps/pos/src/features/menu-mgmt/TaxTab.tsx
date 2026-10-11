@@ -5,8 +5,8 @@ import { Button, Card } from '@cheeseoclock/ui';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { TaxCategory } from '@cheeseoclock/shared-types';
-import { STARTING_TAX_RATE_BPS, taxRatePercentText } from '@cheeseoclock/shared-types';
-import { cardRateFieldStart, rateBpsOf, taxRateFieldStart, taxRatesText } from './taxForm';
+import { RATED_METHOD_LABEL, RATED_PAYMENT_METHODS, STARTING_TAX_RATE_BPS, taxRatePercentText } from '@cheeseoclock/shared-types';
+import { rateBpsOf, taxRateFieldStart, taxRatesText, wayRateFieldsStart, wayRatesOf, type WayRateFields } from './taxForm';
 import { Plus, Edit, Trash2, X } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 
@@ -50,7 +50,7 @@ export function TaxTab() {
           {(q.data ?? []).map((t) => (
             <tr key={t.id} className="border-t border-stone-100 dark:border-stone-800">
               <td className="py-2 font-medium">{t.name}</td>
-              {/* "15% · card 8%" when the category charges less by card / wallet / bank (0052). */}
+              {/* "15% · card 8%" when the category charges less by card / wallet / bank (0052); each way's own (0.7.45). */}
               <td className="py-2 text-right font-mono">{taxRatesText(t)}</td>
               <td className="py-2 text-right">
                 <button onClick={() => setEditing(t)} className="rounded p-1 text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800" aria-label="Edit">
@@ -91,7 +91,14 @@ export function TaxTab() {
   );
 }
 
-function TaxDialog({
+/**
+ * Add or edit a tax category: its name, its rate (cash), and its rate by how
+ * the customer pays (0052 one card rate; 0.7.45 one for each way: card,
+ * EasyPaisa, JazzCash, bank transfer — the owner, 12 Oct 2026: "add settings
+ * to set percentage tax on jazz cash or any payment method"). Also opened
+ * from Settings → Money & discounts → Tax by how the customer pays.
+ */
+export function TaxDialog({
   existing,
   onClose,
 }: {
@@ -103,20 +110,21 @@ function TaxDialog({
   const [name, setName] = useState(existing?.name ?? '');
   // Editing: the category's own rate, as it is. A new one starts at the till's starting rate.
   const [ratePercent, setRatePercent] = useState(taxRateFieldStart(existing));
-  // The rate when the bill is paid by card / wallet / bank (0052); empty = the same rate however it is paid.
-  const [cardPercent, setCardPercent] = useState(cardRateFieldStart(existing));
+  // The rate by each way of paying but cash; an empty box = the cash rate.
+  const [ways, setWays] = useState<WayRateFields>(wayRateFieldsStart(existing));
 
   const mut = useMutation({
     mutationFn: () => {
       const bps = rateBpsOf(ratePercent) ?? 0;
-      const digitalRateBps = rateBpsOf(cardPercent);
+      const { digitalRateBps, methodRatesBps } = wayRatesOf(bps, ways);
       return existing
-        ? ipc.menu.updateTaxCategory({ id: existing.id, name, rateBps: bps, digitalRateBps })
-        : ipc.menu.createTaxCategory({ name, rateBps: bps, digitalRateBps });
+        ? ipc.menu.updateTaxCategory({ id: existing.id, name, rateBps: bps, digitalRateBps, methodRatesBps })
+        : ipc.menu.createTaxCategory({ name, rateBps: bps, digitalRateBps, methodRatesBps });
     },
     onSuccess: () => {
       toast({ title: existing ? 'Updated' : 'Created', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['menu'] });
+      void qc.invalidateQueries({ queryKey: ['settings'] });
       onClose();
     },
     onError: (e) =>
@@ -167,22 +175,29 @@ function TaxDialog({
               </div>
             </div>
             <div>
-              <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">When paid by card, wallet or bank (%)</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                max="100"
-                value={cardPercent}
-                onChange={(e) => setCardPercent(e.target.value)}
-                placeholder="Same as the rate"
-                aria-label="Rate when paid by card, wallet or bank (%)"
-                className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
-              />
+              <span className="mb-1 block text-xs uppercase tracking-wider text-stone-500">Rate by how the customer pays (%)</span>
+              <div className="grid grid-cols-2 gap-2">
+                {RATED_PAYMENT_METHODS.map((m) => (
+                  <label key={m} className="flex items-center gap-2 text-sm">
+                    <span className="w-24 shrink-0 text-stone-600 dark:text-stone-300">{RATED_METHOD_LABEL[m]}</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="100"
+                      value={ways[m]}
+                      onChange={(e) => setWays((w) => ({ ...w, [m]: e.target.value }))}
+                      placeholder={ratePercent || 'Cash rate'}
+                      aria-label={`Rate when paid by ${RATED_METHOD_LABEL[m]} (%)`}
+                      className="w-full min-w-0 rounded-lg border border-stone-300 px-2 py-1.5 font-mono dark:border-stone-700 dark:bg-stone-800"
+                    />
+                  </label>
+                ))}
+              </div>
               <div className="mt-1 text-xs text-stone-500">
-                Sindh charges a restaurant&rsquo;s bill a lower rate when it is paid by card, wallet or bank transfer.
-                Leave it empty to charge the same rate however the bill is paid. Pay works out a bill paid part by
-                card, part in cash: the card part at this rate, the cash part at the rate above.
+                Sindh charges a restaurant&rsquo;s bill a lower rate when it is paid by card, wallet or bank transfer. Set
+                each way&rsquo;s rate; leave a box empty to charge the cash rate (the Rate above) that way. Pay works out a
+                bill paid part one way, part in cash: each part at its own rate.
               </div>
             </div>
           </div>

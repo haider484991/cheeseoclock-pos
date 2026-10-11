@@ -5205,6 +5205,90 @@ export function markOrderServed(
   return result;
 }
 
+/** Take payment is for a takeaway the kitchen has and nobody has paid for yet. */
+export const PAY_BEFORE_PICKUP_TAKEAWAY_ONLY = 'Take payment is for a takeaway in the kitchen: a delivery is paid when it is delivered.';
+export const PAY_BEFORE_PICKUP_NOT_IN_KITCHEN = 'This order is not with the kitchen: take its payment with Pay or Picked up.';
+
+/**
+ * Take the money for a takeaway the kitchen already has, before it is
+ * picked up (0.7.45; the owner, 12 Oct 2026: a customer who "did [not] pay
+ * yet on take away and we added [it to the] kitchen"): the customer pays
+ * while they wait, by any way, at that way's bill (cardRateSettlement, as Pay
+ * and Picked up settle it). The order is stamped paid and stays where it is
+ * on the board, with its PAID chip; Picked up then closes it with no money.
+ * One payment. Never a delivery (its money comes with the rider) or a
+ * foodpanda order (the platform settles it).
+ */
+export function payBeforePickup(
+  db: AppDatabase,
+  input: {
+    orderId: string;
+    payment: { method: PaymentMethod; amountCents: number; tenderedCents?: number | null; referenceNo?: string | null };
+    /** Settings → Printers: which sales open the drawer (0052); absent = every sale. */
+    drawerOpensOn?: DrawerOpensOn | null;
+  },
+  actor: Actor & { userId: string },
+): OrderWithDrawer {
+  let result!: OrderWithDrawer;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, input.orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.mode !== 'takeaway' && order.mode !== 'dine_in') throw new Error(PAY_BEFORE_PICKUP_TAKEAWAY_ONLY);
+    if (order.paidAt !== null) throw new Error('Order is already paid');
+    if (order.status !== 'sent_to_kitchen' && order.status !== 'preparing' && order.status !== 'ready') {
+      throw new Error(PAY_BEFORE_PICKUP_NOT_IN_KITCHEN);
+    }
+    const p = input.payment;
+    assertMethodFitsOrder(order.mode, p.method);
+    if (!Number.isInteger(p.amountCents) || p.amountCents <= 0) throw new Error('Payment amount must be positive');
+    // The one leg settles the bill at its way's rate (0052, 0.7.45); else it must be the stored total.
+    const settled = cardRateSettlement(order, [p]);
+    if (settled === null && p.amountCents !== order.totalCents) {
+      throw new Error(`Payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${order.totalCents / 100})`);
+    }
+    if (p.method === 'cash' && p.tenderedCents != null && p.tenderedCents < p.amountCents) {
+      throw new Error('Cash tendered cannot be less than the cash amount');
+    }
+    const now = nowIso();
+    const shiftId = shiftForPayment(db, actor.deviceId);
+    if (settled) writeSettledTotals(db, order, settled, now);
+    const pid = uuidv7();
+    db.prepare(
+      `INSERT INTO payments
+         (id, order_id, method, amount_cents, tendered_cents, reference_no,
+          received_by_user_id, paid_at, created_at, updated_at, device_id, version, shift_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+    ).run(pid, input.orderId, p.method, p.amountCents, p.tenderedCents ?? null, p.referenceNo ?? null, actor.userId, now, now, now, actor.deviceId, shiftId);
+    enqueuePaymentSyncAndAudit(
+      db,
+      {
+        entityType: 'payments',
+        entityId: pid,
+        op: 'upsert',
+        payload: { id: pid, orderId: input.orderId, ...p, paidAt: now, receivedByUserId: actor.userId },
+      },
+      actor.userId,
+    );
+    // Paid, and still with the kitchen: only paid_at moves.
+    db.prepare(`UPDATE orders SET paid_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`).run(now, now, input.orderId);
+    const after = findOrder(db, input.orderId)!;
+    enqueueSync(db, { entityType: 'orders', entityId: input.orderId, op: 'upsert', payload: after });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      action: 'pay_before_pickup',
+      actorUserId: actor.userId,
+      before: order,
+      after,
+    });
+    const drawerOpenId = recordCashSale(db, input.orderId, [p], actor, input.drawerOpensOn);
+    result = { ...after, drawerOpenId };
+  });
+  tx();
+  log.info('Order paid before pickup', { id: input.orderId, method: input.payment.method });
+  return result;
+}
+
 // -----------------------------------------------------------------------------
 // An outside rider's money (migration 0049; the owner, 2 Oct 2026: "Third-party
 // rider keeps the delivery charge: the drawer expects the food total from the

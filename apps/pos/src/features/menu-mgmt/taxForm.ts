@@ -5,21 +5,19 @@
  * started at 16% up to v0.7.26). Only where a form starts: editing an
  * existing tax category shows its own rate, and nothing here saves one.
  */
-import { STARTING_TAX_CATEGORIES, STARTING_TAX_RATE_BPS } from '@cheeseoclock/shared-types';
+import {
+  RATED_METHOD_LABEL,
+  RATED_PAYMENT_METHODS,
+  rateByMethod,
+  STARTING_TAX_CATEGORIES,
+  STARTING_TAX_RATE_BPS,
+  type MethodRatesBps,
+  type RatedPaymentMethod,
+} from '@cheeseoclock/shared-types';
 
 /** The Rate (%) box: the category's own rate when editing one, the starting rate for a new one. */
 export function taxRateFieldStart(existing: { rateBps: number } | null): string {
   return ((existing?.rateBps ?? STARTING_TAX_RATE_BPS) / 100).toString();
-}
-
-/**
- * The "when paid by card / wallet" box (0052): the category's own card rate
- * when it has one, else empty — empty means no card rate (the same rate
- * however the bill is paid), for a new category too.
- */
-export function cardRateFieldStart(existing: { rateBps?: number; digitalRateBps?: number | null } | null): string {
-  const bps = existing?.digitalRateBps;
-  return typeof bps === 'number' ? (bps / 100).toString() : '';
 }
 
 /**
@@ -32,10 +30,66 @@ export function rateBpsOf(text: string): number | null {
   return Math.min(10_000, Math.max(0, Math.round(n * 100)));
 }
 
-/** "15%", "15% · card 8%": a category's rates as the Tax list shows them. */
-export function taxRatesText(t: { rateBps: number; digitalRateBps?: number | null }): string {
-  const pct = (bps: number) => `${Number((bps / 100).toFixed(2))}%`;
-  return typeof t.digitalRateBps === 'number' && t.digitalRateBps !== t.rateBps ? `${pct(t.rateBps)} · card ${pct(t.digitalRateBps)}` : pct(t.rateBps);
+/** "15%", "12.5%". */
+const pct = (bps: number) => `${Number((bps / 100).toFixed(2))}%`;
+
+/** "card", "EasyPaisa", "bank": a way of paying in the tax list's words. */
+function wayWord(m: RatedPaymentMethod): string {
+  return m === 'card' ? 'card' : m === 'bank_transfer' ? 'bank' : RATED_METHOD_LABEL[m];
+}
+
+/**
+ * "15%", "15% · card 8%": a category's rates as the Tax list shows them.
+ * Every way but cash at one rate reads "card 8%", as since 0052; ways at
+ * rates of their own (0.7.45) are listed by rate — "15% · card, EasyPaisa
+ * 8% · bank 10%" — and a way at the cash rate is not listed.
+ */
+export function taxRatesText(t: { rateBps: number; digitalRateBps?: number | null; methodRatesBps?: MethodRatesBps | null }): string {
+  const groups: Array<{ rate: number; ways: RatedPaymentMethod[] }> = [];
+  for (const m of RATED_PAYMENT_METHODS) {
+    const rate = rateByMethod(t, m);
+    if (rate === t.rateBps) continue;
+    const g = groups.find((x) => x.rate === rate);
+    if (g) g.ways.push(m);
+    else groups.push({ rate, ways: [m] });
+  }
+  if (groups.length === 0) return pct(t.rateBps);
+  if (groups.length === 1 && groups[0]!.ways.length === RATED_PAYMENT_METHODS.length) return `${pct(t.rateBps)} · card ${pct(groups[0]!.rate)}`;
+  return [pct(t.rateBps), ...groups.map((g) => `${g.ways.map(wayWord).join(', ')} ${pct(g.rate)}`)].join(' · ');
+}
+
+/** The boxes "Rate by how the customer pays" (0.7.45): one per way of paying but cash, as typed. */
+export type WayRateFields = Record<RatedPaymentMethod, string>;
+
+/**
+ * Where those boxes start: each way's rate as the category charges it now,
+ * written out — empty when it is the cash rate (an empty box means the cash
+ * rate). A new category starts with every box empty.
+ */
+export function wayRateFieldsStart(existing: { rateBps: number; digitalRateBps?: number | null; methodRatesBps?: MethodRatesBps | null } | null): WayRateFields {
+  const out = {} as WayRateFields;
+  for (const m of RATED_PAYMENT_METHODS) {
+    const rate = existing ? rateByMethod(existing, m) : null;
+    out[m] = rate === null || rate === existing?.rateBps ? '' : (rate / 100).toString();
+  }
+  return out;
+}
+
+/**
+ * The boxes as the tax category stores them: the card's box is the card rate
+ * (empty: none, the cash rate), each other way's box its own rate (empty:
+ * the cash rate). The main process keeps only the ways that differ from the
+ * card rate, so a category whose ways all pay the card rate is stored
+ * exactly as before 0.7.45.
+ */
+export function wayRatesOf(rateBps: number, fields: WayRateFields): { digitalRateBps: number | null; methodRatesBps: MethodRatesBps } {
+  const card = rateBpsOf(fields.card);
+  const methodRatesBps: MethodRatesBps = {};
+  for (const m of RATED_PAYMENT_METHODS) {
+    if (m === 'card') continue;
+    methodRatesBps[m] = rateBpsOf(fields[m]) ?? rateBps;
+  }
+  return { digitalRateBps: card === rateBps ? null : card, methodRatesBps };
 }
 
 /** First-time setup's tax rows (fresh copies, each editable there). */

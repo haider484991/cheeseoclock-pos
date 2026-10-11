@@ -985,6 +985,23 @@ export interface IpcContract {
     response: ApiResult<OrderSnapshot>;
   };
   /**
+   * Take the money for a takeaway the kitchen has, before it is picked up
+   * (0.7.45): the order is stamped paid and stays where it is; Picked up
+   * closes it later with no money. One payment, at its way's bill.
+   */
+  'orders:takePayment': {
+    request: {
+      orderId: string;
+      payment: {
+        method: PaymentMethod;
+        amountCents: number;
+        tenderedCents?: number | null;
+        referenceNo?: string | null;
+      };
+    };
+    response: ApiResult<OrderSnapshot>;
+  };
+  /**
    * Mark a delivery order delivered. If `payment` is provided we also record
    * the COD payment in the same transaction so the order moves directly to
    * paid + delivered. If omitted, the order moves to `delivered` and a tender

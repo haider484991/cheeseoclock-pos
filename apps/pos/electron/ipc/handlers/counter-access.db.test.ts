@@ -703,6 +703,8 @@ const COUNTER_SCOPED = [
   'printer:reprintKitchen',
   // What the print button would print and the order's papers: the same orders as a reprint.
   'printer:orderPapers',
+  // Change payment's preview (0.7.45): what each way would make of a payment, for the orders the counter may open.
+  'orders:paymentChangePreview',
   'shifts:listCashMovements',
   'fbr:getInvoiceStatus',
 ];
@@ -734,6 +736,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'orders:assignRider': { orderId: s.kitchenNow, riderId: 'no-such-rider' },
   'orders:unassignRider': { orderId: s.kitchenNow },
   'orders:markServed': { orderId: s.kitchenNow },
+  // Take payment before pickup (0.7.45): the counter's, like Picked up + Pay. Rs 0.01 is not the bill: refused, nothing moves.
+  'orders:takePayment': { orderId: s.kitchenNow, payment: { method: 'cash', amountCents: 1 } },
   'orders:markDelivered': { orderId: s.boardOld },
   // Rider paid (v0.7.34): an outside rider pays the shop while still out, no manager PIN. A paid order: refused, nothing moves.
   'orders:riderPaid': { orderId: s.paidNow, method: 'cash', riderKeepsCents: 0 },

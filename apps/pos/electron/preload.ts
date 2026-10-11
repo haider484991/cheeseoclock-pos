@@ -122,6 +122,7 @@ const api: RendererApi = {
     assignRider: (req) => invoke('orders:assignRider', req),
     unassignRider: (req) => invoke('orders:unassignRider', req),
     markServed: (req) => invoke('orders:markServed', req),
+    takePayment: (req) => invoke('orders:takePayment', req),
     markDelivered: (req) => invoke('orders:markDelivered', req),
     riderPaid: (req) => invoke('orders:riderPaid', req),
   },

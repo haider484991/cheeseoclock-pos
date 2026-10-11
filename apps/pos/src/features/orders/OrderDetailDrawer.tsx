@@ -65,12 +65,14 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   const [voidOpen, setVoidOpen] = useState(false);
   const [refundOpen, setRefundOpen] = useState(false);
   const [collectOpen, setCollectOpen] = useState(false);
+  // Take payment before it is picked up (0.7.45).
+  const [payOpen, setPayOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   // Collect payment with "Customer refused an item" (outside rider, order-edit #5): the Refund box next, on the order as now paid.
   const [refusedItemSnap, setRefusedItemSnap] = useState<OrderSnapshot | null>(null);
   // Money → Change (v0.7.42; 0.7.45 the counter too while its shift is open): how one payment was paid.
   const [changing, setChanging] = useState<OrderSnapshot['payments'][number] | null>(null);
-  const dialogOpen = voidOpen || refundOpen || collectOpen || deleteOpen || refusedItemSnap !== null || changing !== null;
+  const dialogOpen = voidOpen || refundOpen || collectOpen || payOpen || deleteOpen || refusedItemSnap !== null || changing !== null;
   // "Delete test order…" is the owner's alone (the main process checks again,
   // and asks for the owner's PIN or password in the dialog).
   const role = useSessionStore((st) => st.user?.role ?? null);
@@ -173,6 +175,9 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
     (o.mode === 'delivery'
       ? o.status === 'ready' || o.status === 'out_for_delivery' || o.status === 'delivered'
       : o.status === 'ready' || o.status === 'served');
+  // Take payment (0.7.45): a takeaway the kitchen has, paid while the customer waits; it stays where it is.
+  const canTakePayment =
+    !!o && owed && (o.mode === 'takeaway' || o.mode === 'dine_in') && (o.status === 'sent_to_kitchen' || o.status === 'preparing');
   const canRefund = !!o && o.paidAt !== null && o.status !== 'refunded' && o.status !== 'void';
   // Not for an 'open' cart: that is still being rung up at Checkout (it never
   // shows in history, but the guard stays in case one is opened directly).
@@ -470,6 +475,12 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                   Collect payment · {formatCents(o.totalCents)}
                 </Button>
               )}
+              {canTakePayment && (
+                <Button variant="success" size="md" className="w-full whitespace-nowrap" onClick={() => setPayOpen(true)}>
+                  <CreditCard className="h-4 w-4" />
+                  Take payment now · {formatCents(o.totalCents)}
+                </Button>
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="secondary"
@@ -563,6 +574,9 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
             if (next?.refundItem) setRefusedItemSnap(next.snap);
           }}
         />
+      )}
+      {payOpen && snap && (
+        <MarkDeliveredDialog snap={snap} payOnly onClose={() => setPayOpen(false)} onDone={afterChange(() => setPayOpen(false))} />
       )}
       {refusedItemSnap && (
         <RefundOrderDialog

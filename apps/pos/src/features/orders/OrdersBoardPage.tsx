@@ -64,6 +64,7 @@ import {
   type BoardTiming,
   type PaidNowAtSendOut,
   type SecondaryBoardAction,
+  offersTakePayment,
 } from './boardLogic';
 import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
 
@@ -149,6 +150,8 @@ export function OrdersBoardPage() {
   // Rider paid: the outside rider pays the shop while the order stays out
   // (the Out card's button).
   const [riderPaidFor, setRiderPaidFor] = useState<OrderSnapshot | null>(null);
+  // Take payment (0.7.45): an unpaid takeaway the kitchen has, paid while the customer waits.
+  const [payFor, setPayFor] = useState<OrderSnapshot | null>(null);
   // Send out's "Paid now" (e2e fix A): Rider paid on the order still Ready —
   // it sends it out and takes his money in one step, then the bill prints.
   const [paidNowFor, setPaidNowFor] = useState<{ snap: OrderSnapshot; paidNow: PaidNowAtSendOut } | null>(null);
@@ -372,6 +375,7 @@ export function OrdersBoardPage() {
                         onCancel={() => (snap.order.paidAt !== null ? setRefundFor({ snap, refusedItem: false }) : setVoidFor(snap))}
                         // Edit order (v0.7.36): only while the till would let it be changed.
                         onEdit={offersEdit(snap.order) ? () => void startEdit(snap.order) : null}
+                        onTakePayment={offersTakePayment(snap.order) ? () => setPayFor(snap) : null}
                       />
                     );
                   })
@@ -421,6 +425,17 @@ export function OrdersBoardPage() {
             const { snap } = sendOutFor;
             setSendOutFor(null);
             setAssignFor(snap);
+          }}
+        />
+      )}
+      {payFor && (
+        <MarkDeliveredDialog
+          snap={payFor}
+          payOnly
+          onClose={() => setPayFor(null)}
+          onDone={() => {
+            setPayFor(null);
+            void refresh();
           }}
         />
       )}
@@ -537,6 +552,8 @@ interface OrderCardProps {
   onCancel: () => void;
   /** Edit order (add or take off items), or null when this order can't be changed. */
   onEdit: (() => void) | null;
+  /** Take payment (0.7.45): the NOT PAID chip takes the money; null when it can't here. */
+  onTakePayment: (() => void) | null;
 }
 
 function OrderCard({
@@ -554,6 +571,7 @@ function OrderCard({
   onReprintKitchen,
   onCancel,
   onEdit,
+  onTakePayment,
 }: OrderCardProps) {
   const { order } = snap;
   const paid = order.paidAt !== null;
@@ -793,7 +811,15 @@ function OrderCard({
             <span className="font-mono text-base font-bold text-stone-900 dark:text-stone-100">
               {formatCents(order.totalCents)}
             </span>
-            <PaidChip paid={paid} />
+            {onTakePayment ? (
+              // Not paid, and the kitchen has it: the chip takes the money now (the order stays where it is).
+              <button type="button" onClick={onTakePayment} title="Take payment now" aria-label="Not paid: take payment now" className="rounded-full">
+                <PaidChip paid={false} className="ring-1 ring-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900" />
+                <span className="ml-1 text-[11px] font-semibold text-amber-800 underline dark:text-amber-300">Take payment</span>
+              </button>
+            ) : (
+              <PaidChip paid={paid} />
+            )}
           </div>
           <span className="text-xs text-stone-500">
             {itemCount} {itemCount === 1 ? 'item' : 'items'}

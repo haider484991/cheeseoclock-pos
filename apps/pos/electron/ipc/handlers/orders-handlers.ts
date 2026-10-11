@@ -72,6 +72,7 @@ import {
   assignRiderToOrder,
   unassignRiderFromOrder,
   markOrderServed,
+  payBeforePickup,
   markOrderDelivered,
   takeRiderPayment,
   findOrder,
@@ -1098,6 +1099,42 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
          
         console.warn('Stock decrement failed on serve (sale not affected):', e);
       }
+    }
+    return ok(snap);
+  });
+
+  // Take payment before pickup (0.7.45): a takeaway the kitchen has, paid while the customer waits.
+  defineHandler('orders:takePayment', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    requireLicenceForSales();
+    const order = findOrder(ctx.db, payload.orderId);
+    if (!order) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    assertCounterMaySee(ctx.db, s, order, 'open');
+    let drawerOpenId: string | null;
+    try {
+      drawerOpenId = payBeforePickup(
+        ctx.db,
+        { orderId: payload.orderId, payment: payload.payment, drawerOpensOn: getReceiptPrinterConfig(ctx.db)?.drawer?.opensOn ?? null },
+        { userId: s.id, deviceId: ctx.deviceId },
+      ).drawerOpenId;
+    } catch (e) {
+      throw new IpcGuardError({ code: 'precondition_failed', message: e instanceof Error ? e.message : 'Payment not taken' });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    // As Picked up + Pay: the drawer and the receipt, the FBR invoice, the stock.
+    printSpooler.onOrderEvent(payload.orderId, 'payment_captured', { drawerOpenId });
+    try {
+      const cfg = getFbrConfig(ctx.db);
+      enqueueFbrSubmission(ctx.db, payload.orderId, mapOrderToFbrPayload(snap, toSellerInfo(cfg)), cfg.mode);
+      fbrWorker.kick();
+    } catch (e) {
+      log.warn('FBR enqueue failed on Take payment (sale not affected)', { orderId: payload.orderId, error: e instanceof Error ? e.message : String(e) });
+    }
+    try {
+      decrementForOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      log.warn('Stock decrement failed on Take payment (sale not affected)', { orderId: payload.orderId, error: e instanceof Error ? e.message : String(e) });
     }
     return ok(snap);
   });

@@ -155,3 +155,43 @@ describe.skipIf(!DatabaseSync)('a rate for each way of paying on a tax category'
     expect(t.row(o)).toMatchObject({ tax: 10_000, total: 110_000, cardNet: 100_000, cardTax: 10_000 });
   });
 });
+
+describe.skipIf(!DatabaseSync)('Take payment before pickup (0.7.45)', () => {
+  it('a takeaway the kitchen has, paid by card at the card bill while the customer waits: stamped paid, still in the kitchen; Picked up closes it with no money', () => {
+    const o = t.ring(t.cardPlate);
+    t.r.sendOrderToKitchen(t.db, o, CASHIER);
+    const done = t.r.payBeforePickup(t.db, { orderId: o, payment: { method: 'card', amountCents: 108_000, tenderedCents: null } }, CASHIER);
+    expect(done).toMatchObject({ status: 'sent_to_kitchen', totalCents: 108_000, taxCents: 8_000 });
+    expect(done.paidAt).not.toBeNull();
+    expect(t.row(o)).toMatchObject({ tax: 8_000, total: 108_000, cardNet: 100_000, cardTax: 8_000 });
+    // The card bill, not the cash one: the cash bill on a card is refused, as Pay refuses it.
+    const other = t.ring(t.cardPlate);
+    t.r.sendOrderToKitchen(t.db, other, CASHIER);
+    expect(() => t.r.payBeforePickup(t.db, { orderId: other, payment: { method: 'card', amountCents: 115_000, tenderedCents: null } }, CASHIER)).toThrow(
+      'Rs 1,150 on the card is more than the bill by card (Rs 1,080)',
+    );
+    // A second payment is refused; Picked up then closes it with no money.
+    expect(() => t.r.payBeforePickup(t.db, { orderId: o, payment: { method: 'cash', amountCents: 115_000, tenderedCents: 115_000 } }, CASHIER)).toThrow(
+      'Order is already paid',
+    );
+    t.db.prepare(`UPDATE orders SET status = 'ready' WHERE id = ?`).run(o);
+    expect(t.r.markOrderServed(t.db, { orderId: o }, CASHIER)).toMatchObject({ status: 'paid', totalCents: 108_000 });
+    expect(t.db.prepare(`SELECT COUNT(*) AS n FROM payments WHERE order_id = ?`).get(o)).toEqual({ n: 1 });
+  });
+
+  it('cash opens the drawer for its cash; a delivery, an order not sent yet and a closed one are refused in plain words', () => {
+    const o = t.ring(t.cardPlate);
+    t.r.sendOrderToKitchen(t.db, o, CASHIER);
+    const done = t.r.payBeforePickup(t.db, { orderId: o, payment: { method: 'cash', amountCents: 115_000, tenderedCents: 120_000 } }, CASHIER);
+    expect(done.drawerOpenId).toEqual(expect.any(String));
+    expect(t.db.prepare(`SELECT kind, amount_cents AS amount FROM drawer_opens WHERE id = ?`).get(done.drawerOpenId)).toEqual({ kind: 'sale', amount: 115_000 });
+
+    const notSent = t.ring(t.cardPlate);
+    expect(() => t.r.payBeforePickup(t.db, { orderId: notSent, payment: { method: 'cash', amountCents: 115_000 } }, CASHIER)).toThrow(t.r.PAY_BEFORE_PICKUP_NOT_IN_KITCHEN);
+
+    const d = t.r.createOrder(t.db, { mode: 'delivery' }, CASHIER);
+    t.r.addOrderItem(t.db, { orderId: d.id, menuItemId: t.cardPlate, quantity: 1, modifierIds: [], notes: null }, CASHIER);
+    t.db.prepare(`UPDATE orders SET status = 'sent_to_kitchen' WHERE id = ?`).run(d.id);
+    expect(() => t.r.payBeforePickup(t.db, { orderId: d.id, payment: { method: 'cash', amountCents: 115_000 } }, CASHIER)).toThrow(t.r.PAY_BEFORE_PICKUP_TAKEAWAY_ONLY);
+  });
+});

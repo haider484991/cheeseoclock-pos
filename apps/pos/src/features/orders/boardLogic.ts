@@ -152,6 +152,18 @@ export function nextBoardAction(status: OrderStatus, mode: OrderMode, paid: bool
   }
 }
 
+/**
+ * Take payment before it is picked up (0.7.45; the owner, 12 Oct 2026: a
+ * takeaway "sent to the kitchen" before the customer paid): an unpaid
+ * takeaway the kitchen has, New or Preparing — its NOT PAID chip takes the
+ * money. Ready has Picked up + Pay; a delivery is paid when it is delivered.
+ */
+export function offersTakePayment(order: Pick<Order, 'mode' | 'status' | 'paidAt'>): boolean {
+  return (
+    order.paidAt === null && (order.mode === 'takeaway' || order.mode === 'dine_in') && (order.status === 'sent_to_kitchen' || order.status === 'preparing')
+  );
+}
+
 /** A card's second button, beside the big one. */
 export type SecondaryBoardAction = { kind: 'rider_paid'; label: string };
 

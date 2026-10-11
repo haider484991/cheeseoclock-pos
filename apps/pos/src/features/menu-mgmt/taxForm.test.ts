@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { STARTING_TAX_CATEGORIES, STARTING_TAX_RATE_BPS, taxRatePercentText } from '@cheeseoclock/shared-types';
-import { cardRateFieldStart, rateBpsOf, startingTaxRows, taxRateFieldStart, taxRatesText } from './taxForm';
+import { rateBpsOf, startingTaxRows, taxRateFieldStart, taxRatesText, wayRateFieldsStart, wayRatesOf } from './taxForm';
 
 const FEATURES = join(dirname(fileURLToPath(import.meta.url)), '..');
 const source = (path: string) => readFileSync(join(FEATURES, path), 'utf8');
@@ -46,12 +46,21 @@ describe('one starting tax rate', () => {
     expect(taxRatePercentText(1_250)).toBe('12.5%');
   });
 
-  it('the card box (0052) starts empty — no card rate — unless the category has one; a box reads as basis points, empty as none', () => {
-    expect(cardRateFieldStart(null)).toBe('');
-    expect(cardRateFieldStart({ rateBps: 1_500 })).toBe('');
-    expect(cardRateFieldStart({ rateBps: 1_500, digitalRateBps: null })).toBe('');
-    expect(cardRateFieldStart({ rateBps: 1_500, digitalRateBps: 800 })).toBe('8');
-    expect(cardRateFieldStart({ rateBps: 1_500, digitalRateBps: 1_250 })).toBe('12.5');
+  it('the boxes by way of paying start empty — the cash rate — unless the category charges another; a box reads as basis points, empty as none', () => {
+    const empty = { card: '', easypaisa: '', jazzcash: '', bank_transfer: '' };
+    expect(wayRateFieldsStart(null)).toEqual(empty);
+    expect(wayRateFieldsStart({ rateBps: 1_500 })).toEqual(empty);
+    expect(wayRateFieldsStart({ rateBps: 1_500, digitalRateBps: null })).toEqual(empty);
+    // A card rate (0052): every way but cash pays it.
+    expect(wayRateFieldsStart({ rateBps: 1_500, digitalRateBps: 800 })).toEqual({ card: '8', easypaisa: '8', jazzcash: '8', bank_transfer: '8' });
+    expect(wayRateFieldsStart({ rateBps: 1_500, digitalRateBps: 1_250 })).toEqual({ card: '12.5', easypaisa: '12.5', jazzcash: '12.5', bank_transfer: '12.5' });
+    // Ways of their own (0.7.45): JazzCash at the cash rate reads empty.
+    expect(wayRateFieldsStart({ rateBps: 1_500, digitalRateBps: 800, methodRatesBps: { jazzcash: 1_500, bank_transfer: 1_000 } })).toEqual({
+      card: '8',
+      easypaisa: '8',
+      jazzcash: '',
+      bank_transfer: '10',
+    });
     expect(rateBpsOf('8')).toBe(800);
     expect(rateBpsOf(' 12.5 ')).toBe(1_250);
     expect(rateBpsOf('0')).toBe(0);
@@ -67,6 +76,26 @@ describe('one starting tax rate', () => {
     expect(taxRatesText({ rateBps: 1_500, digitalRateBps: 1_500 })).toBe('15%');
     expect(taxRatesText({ rateBps: 1_500, digitalRateBps: 800 })).toBe('15% · card 8%');
     expect(taxRatesText({ rateBps: 1_250, digitalRateBps: 0 })).toBe('12.5% · card 0%');
+  });
+
+  it('the Tax list names the ways at rates of their own, by rate; a way at the cash rate is left out', () => {
+    expect(taxRatesText({ rateBps: 1_500, digitalRateBps: 800, methodRatesBps: { jazzcash: 1_500, bank_transfer: 1_000 } })).toBe(
+      '15% · card, EasyPaisa 8% · bank 10%',
+    );
+    expect(taxRatesText({ rateBps: 1_500, digitalRateBps: null, methodRatesBps: { jazzcash: 800 } })).toBe('15% · JazzCash 8%');
+  });
+
+  it('the boxes saved: the card box is the card rate, an empty box the cash rate', () => {
+    expect(wayRatesOf(1_500, { card: '8', easypaisa: '8', jazzcash: '', bank_transfer: '10' })).toEqual({
+      digitalRateBps: 800,
+      methodRatesBps: { easypaisa: 800, jazzcash: 1_500, bank_transfer: 1_000 },
+    });
+    // No card box: no card rate; the cash rate typed into it is none too.
+    expect(wayRatesOf(1_500, { card: '', easypaisa: '', jazzcash: '8', bank_transfer: '' })).toEqual({
+      digitalRateBps: null,
+      methodRatesBps: { easypaisa: 1_500, jazzcash: 800, bank_transfer: 1_500 },
+    });
+    expect(wayRatesOf(1_500, { card: '15', easypaisa: '', jazzcash: '', bank_transfer: '' }).digitalRateBps).toBeNull();
   });
 
   it('setup and the Tax tab both use it; neither types a rate of its own any more', () => {

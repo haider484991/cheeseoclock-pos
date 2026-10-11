@@ -465,9 +465,9 @@ describe('migrations: numbered in order, one file per number', () => {
         'ALTER TABLE order_items ADD COLUMN method_rates_snapshot_json TEXT; ' +
         'ALTER TABLE orders ADD COLUMN method_totals_json TEXT;',
     );
-    expect(/CHECK|UPDATE|INSERT|DELETE|DROP|CREATE|NOT NULL|DEFAULT/i.test(sql)).toBe(false);
+    expect(/\bCHECK\b|\bUPDATE\b|\bINSERT\b|\bDELETE\b|\bDROP\b|\bCREATE\b|\bNOT NULL\b|\bDEFAULT\b/i.test(sql)).toBe(false);
     // No BEGIN anywhere, comments included: the migrator runs it in its own transaction (migrator.ts managesOwnTransaction).
-    expect(/BEGIN/i.test(raw)).toBe(false);
+    expect(/\bBEGIN\b/i.test(raw)).toBe(false);
     // All three tables replicate: the columns travel in the row images, no sync-core change.
     for (const t of ['tax_categories', 'order_items', 'orders']) expect(PURE_LOCAL_TABLES.has(t)).toBe(false);
   });

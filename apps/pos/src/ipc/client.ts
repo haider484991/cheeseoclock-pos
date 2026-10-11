@@ -209,6 +209,7 @@ export const ipc = {
       unwrap(window.api.orders.unassignRider({ orderId })),
     markServed: (input: IpcRequest<'orders:markServed'>) =>
       unwrap(window.api.orders.markServed(input)),
+    takePayment: (input: IpcRequest<'orders:takePayment'>) => unwrap(window.api.orders.takePayment(input)),
     markDelivered: (input: IpcRequest<'orders:markDelivered'>) =>
       unwrap(window.api.orders.markDelivered(input)),
     /** Rider paid: an outside rider pays the shop while still out (riderKeepsCents as the window showed it). */
