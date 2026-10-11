@@ -385,6 +385,15 @@ export interface OrderSnapshot {
 export const CHANGEABLE_PAYMENT_METHODS = ['cash', 'card', 'easypaisa', 'jazzcash', 'bank_transfer'] as const;
 export type ChangeablePaymentMethod = (typeof CHANGEABLE_PAYMENT_METHODS)[number];
 
+/**
+ * One other way a payment could have been paid, before it is changed (0.7.45:
+ * Change payment shows it on its buttons): the payment's amount and the
+ * order's total that way — or why it can't be.
+ */
+export type PaymentChangeOption =
+  | { method: ChangeablePaymentMethod; amountCents: number; totalCents: number }
+  | { method: ChangeablePaymentMethod; refusal: string };
+
 /** A payment's method changed: the order as it is now, and the closed shift whose drawer followed. */
 export interface PaymentMethodChanged {
   snapshot: OrderSnapshot;

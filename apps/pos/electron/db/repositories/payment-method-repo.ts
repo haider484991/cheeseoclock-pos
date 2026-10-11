@@ -14,6 +14,8 @@ import {
   paysOwnRate,
   RATED_METHOD_LABEL,
   type ChangeablePaymentMethod,
+  type Order,
+  type PaymentChangeOption,
   type PaymentMethod,
   type PaymentMethodChanged,
 } from '@cheeseoclock/shared-types';
@@ -126,6 +128,97 @@ export function paymentShiftOf(db: AppDatabase, orderId: string, paymentId: stri
   return row ? { found: true, shiftId: row.shiftId ?? row.orderShiftId ?? null } : { found: false, shiftId: null };
 }
 
+/** The bill as the payments settle it, written on the order when a change works it out again. */
+interface SettledBill {
+  totalCents: number;
+  taxCents: number;
+  digitalNetCents: number;
+  digitalTaxCents: number;
+}
+
+/** What moving one payment to another way would do: its amount then, and the bill when that changes. */
+interface PaymentChangePlan {
+  order: Order;
+  row: PaymentRow;
+  /** The payment's amount after the change. */
+  amountCents: number;
+  /** The order's bill after it; null = it stays as it is (only the method changes). */
+  settled: SettledBill | null;
+}
+
+/**
+ * Work out a change without writing anything: the order and the payment as
+ * they are, the payment's amount at the new way, and the bill after it when
+ * that changes — or the refusal, thrown in plain words. `unchanged` (null):
+ * the payment is already paid that way.
+ */
+function planPaymentChange(db: AppDatabase, input: { orderId: string; paymentId: string; method: ChangeablePaymentMethod }): PaymentChangePlan | null {
+  const order = findOrder(db, input.orderId);
+  if (!order) throw new Error('Order not found');
+  if (order.mode === 'foodpanda') throw new Error(PAYMENT_METHOD_FOODPANDA);
+  if (!(CHANGEABLE_PAYMENT_METHODS as readonly string[]).includes(input.method)) throw new Error(PAYMENT_METHOD_PICK);
+  const row = db.prepare(`SELECT ${PAYMENT_SELECT} FROM payments WHERE id = ? AND order_id = ?`).get(input.paymentId, input.orderId) as
+    | PaymentRow
+    | undefined;
+  if (!row || row.deleted_at) throw new Error(PAYMENT_METHOD_NOT_ON_ORDER);
+  if (row.method === 'foodpanda') throw new Error(PAYMENT_METHOD_FOODPANDA);
+  if (row.method === input.method) return null;
+  if (!orderHasPaymentRates(order)) return { order, row, amountCents: row.amount_cents, settled: null };
+
+  // The bill by each way of paying: the new amount and the new totals.
+  const quote = orderBillQuote(db, order.id);
+  if (!quote) throw new Error('Order not found');
+  // The old and the new way pay the same bill: the amount stays (card to JazzCash at one card rate).
+  const sameBill =
+    billByMethod(quote, row.method) === billByMethod(quote, input.method) && paysOwnRate(quote, row.method) === paysOwnRate(quote, input.method);
+  if (sameBill) return { order, row, amountCents: row.amount_cents, settled: null };
+  const legs = db
+    .prepare(`SELECT id, method, amount_cents AS amountCents FROM payments WHERE order_id = ? AND deleted_at IS NULL ORDER BY paid_at, id`)
+    .all(order.id) as Array<{ id: string; method: PaymentMethod; amountCents: number }>;
+  if (row.amount_cents < 0 || legs.some((l) => l.amountCents < 0)) throw new Error(PAYMENT_METHOD_HAS_REFUND);
+  const cashPaid = (ls: ReadonlyArray<{ method: string; amountCents: number }>) =>
+    ls.filter((l) => !isRatedPaymentMethod(l.method)).reduce((n, l) => n + l.amountCents, 0);
+  // The legs must settle the bill exactly as it was stored: else the order is not what it was.
+  const asPaid = settleLegs(quote, legs);
+  if (!asPaid.ok || asPaid.totalCents !== order.totalCents || asPaid.cashDueCents !== cashPaid(legs)) throw new Error(PAYMENT_METHOD_CANT_REWORK);
+  const index = legs.findIndex((l) => l.id === row.id);
+  const moved = movedLegAmount(quote, legs, index, input.method);
+  if (moved === null) throw new Error(PAYMENT_METHOD_CANT_REWORK);
+  const next = settleLegs(
+    quote,
+    legs.map((l, i) => (i === index ? { method: input.method, amountCents: moved } : l)),
+  );
+  if (!next.ok) throw new Error(PAYMENT_METHOD_CANT_REWORK);
+  // A tax FBR already took (production) is never changed behind its back.
+  const fbr = getFbrRowByOrder(db, order.id);
+  if (fbr && fbr.status === 'sent' && fbr.modeAtEnqueue === 'production' && (next.totalCents !== order.totalCents || next.taxCents !== order.taxCents)) {
+    throw new Error(PAYMENT_METHOD_FBR_SENT);
+  }
+  const settled = { totalCents: next.totalCents, taxCents: next.taxCents, digitalNetCents: next.digitalNetCents, digitalTaxCents: next.digitalTaxCents };
+  return { order, row, amountCents: moved, settled };
+}
+
+/**
+ * What each other way of paying would make of one payment, before anything
+ * is saved (Change payment shows it on its buttons): its amount and the
+ * order's total that way, or why it can't be. Writes nothing.
+ */
+export function previewPaymentMethodChange(db: AppDatabase, orderId: string, paymentId: string): PaymentChangeOption[] {
+  const out: PaymentChangeOption[] = [];
+  for (const method of CHANGEABLE_PAYMENT_METHODS) {
+    try {
+      const plan = planPaymentChange(db, { orderId, paymentId, method });
+      if (plan === null) continue;
+      out.push({ method, amountCents: plan.amountCents, totalCents: plan.settled ? plan.settled.totalCents : plan.order.totalCents });
+    } catch (e) {
+      // A payment that is not there: nothing to offer at all.
+      if (e instanceof Error && (e.message === PAYMENT_METHOD_NOT_ON_ORDER || e.message === 'Order not found')) throw e;
+      out.push({ method, refusal: e instanceof Error ? e.message : 'Can’t change to this' });
+    }
+  }
+  return out;
+}
+
 export function changePaymentMethod(
   db: AppDatabase,
   input: { orderId: string; paymentId: string; method: ChangeablePaymentMethod },
@@ -134,56 +227,15 @@ export function changePaymentMethod(
 ): PaymentMethodChangeDone {
   let result!: PaymentMethodChangeDone;
   db.transaction(() => {
-    const order = findOrder(db, input.orderId);
-    if (!order) throw new Error('Order not found');
-    if (order.mode === 'foodpanda') throw new Error(PAYMENT_METHOD_FOODPANDA);
-    if (!(CHANGEABLE_PAYMENT_METHODS as readonly string[]).includes(input.method)) throw new Error(PAYMENT_METHOD_PICK);
-    const row = db.prepare(`SELECT ${PAYMENT_SELECT} FROM payments WHERE id = ? AND order_id = ?`).get(input.paymentId, input.orderId) as
-      | PaymentRow
-      | undefined;
-    if (!row || row.deleted_at) throw new Error(PAYMENT_METHOD_NOT_ON_ORDER);
-    if (row.method === 'foodpanda') throw new Error(PAYMENT_METHOD_FOODPANDA);
-    if (row.method === input.method) {
-      result = { from: row.method, to: row.method, unchanged: true, closedShift: null, rebilled: null, drawerOpenId: null };
+    const plan = planPaymentChange(db, input);
+    if (plan === null) {
+      const method = input.method as PaymentMethod;
+      result = { from: method, to: method, unchanged: true, closedShift: null, rebilled: null, drawerOpenId: null };
       return;
     }
-
-    // The bill by each way of paying, when it depends on how it is paid: the new amount and the new totals.
-    let amount = row.amount_cents;
-    let settled: { totalCents: number; taxCents: number; digitalNetCents: number; digitalTaxCents: number } | null = null;
-    if (orderHasPaymentRates(order)) {
-      const quote = orderBillQuote(db, order.id);
-      if (!quote) throw new Error('Order not found');
-      const legs = db
-        .prepare(`SELECT id, method, amount_cents AS amountCents FROM payments WHERE order_id = ? AND deleted_at IS NULL ORDER BY paid_at, id`)
-        .all(order.id) as Array<{ id: string; method: PaymentMethod; amountCents: number }>;
-      // The ways of paying the old and the new method pay the same bill: the amount stays (card to JazzCash at one card rate).
-      const sameBill =
-        billByMethod(quote, row.method) === billByMethod(quote, input.method) && paysOwnRate(quote, row.method) === paysOwnRate(quote, input.method);
-      if (!sameBill) {
-        if (row.amount_cents < 0 || legs.some((l) => l.amountCents < 0)) throw new Error(PAYMENT_METHOD_HAS_REFUND);
-        const cashPaid = (ls: ReadonlyArray<{ method: string; amountCents: number }>) =>
-          ls.filter((l) => !isRatedPaymentMethod(l.method)).reduce((n, l) => n + l.amountCents, 0);
-        // The legs must settle the bill exactly as it was stored: else the order is not what it was.
-        const now = settleLegs(quote, legs);
-        if (!now.ok || now.totalCents !== order.totalCents || now.cashDueCents !== cashPaid(legs)) throw new Error(PAYMENT_METHOD_CANT_REWORK);
-        const index = legs.findIndex((l) => l.id === row.id);
-        const moved = movedLegAmount(quote, legs, index, input.method);
-        if (moved === null) throw new Error(PAYMENT_METHOD_CANT_REWORK);
-        const next = settleLegs(
-          quote,
-          legs.map((l, i) => (i === index ? { method: input.method, amountCents: moved } : l)),
-        );
-        if (!next.ok) throw new Error(PAYMENT_METHOD_CANT_REWORK);
-        // A tax FBR already took (production) is never changed behind its back.
-        const fbr = getFbrRowByOrder(db, order.id);
-        if (fbr && fbr.status === 'sent' && fbr.modeAtEnqueue === 'production' && (next.totalCents !== order.totalCents || next.taxCents !== order.taxCents)) {
-          throw new Error(PAYMENT_METHOD_FBR_SENT);
-        }
-        amount = moved;
-        settled = next;
-      }
-    }
+    const { order, row } = plan;
+    const amount = plan.amountCents;
+    const settled = plan.settled;
 
     const now = nowIso();
     db.prepare(`UPDATE payments SET method = ?, amount_cents = ?, tendered_cents = NULL, updated_at = ?, version = version + 1 WHERE id = ?`).run(

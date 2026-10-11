@@ -5,6 +5,9 @@ import {
   SHIFT_REPORT_SECTIONS,
   isDeliveryChargeLine,
   isDeliveryChargeName,
+  lineRateByMethod,
+  parseMethodRates,
+  RATED_PAYMENT_METHODS,
   shiftReportRules,
 } from '@cheeseoclock/shared-types';
 import type {
@@ -145,6 +148,8 @@ interface LineRow {
   rate: number;
   /** The line's card rate (0052); null = none. */
   cardRate: number | null;
+  /** The line's rates for the ways with a rate of their own (0054); null = none. */
+  methodRates: string | null;
   /** The order's part before tax paid by card / wallet / bank (0052); 0 = none. */
   cardNet: number | null;
 }
@@ -231,7 +236,7 @@ function readLines(
       `SELECT oi.order_id AS orderId, oi.menu_item_id AS menuItemId, oi.menu_item_name AS soldName,
               mi.name AS menuName, mi.category_id AS categoryId, c.name AS categoryName,
               oi.quantity AS quantity, oi.line_total_cents AS lineTotal, oi.tax_rate_bps_snapshot AS rate,
-              oi.digital_rate_bps_snapshot AS cardRate, o.digital_net_cents AS cardNet
+              oi.digital_rate_bps_snapshot AS cardRate, oi.method_rates_snapshot_json AS methodRates, o.digital_net_cents AS cardNet
          FROM order_items oi
          JOIN orders o ON o.id = oi.order_id
          LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
@@ -249,6 +254,8 @@ function readLines(
     ).map((c, i) => [c.id, i] as const),
   );
   const feeItemIds = readDeliveryFeeItemIds(db);
+  // How each order was paid: the part at a rate of its own reads the rate of the way it went by (0.7.45).
+  const paidBy = readMethods(db, orderIds);
   for (const r of rows) {
     const isCharge =
       isDeliveryChargeLine({ menuItemName: r.soldName, menuItemId: r.menuItemId }, feeItemIds) ||
@@ -267,13 +274,28 @@ function readLines(
         categoryName !== null && r.categoryId !== null ? (rank.get(r.categoryId) ?? null) : null,
       quantity: Number(r.quantity),
       lineTotalCents: Number(r.lineTotal),
-      // A line of an order paid (in part) by card / wallet / bank at a card
-      // rate (0052) reads that rate: a shift with such sales beside cash ones
-      // has mixed rates, and its report says "Tax" with no one rate.
-      taxRateBps: Number(r.cardNet ?? 0) > 0 && r.cardRate !== null ? Number(r.cardRate) : Number(r.rate),
+      // A line of an order paid (in part) by card / wallet / bank at a rate of
+      // its own (0052; 0.7.45 that way's rate) reads that rate: a shift with
+      // such sales beside cash ones has mixed rates, and its report says "Tax"
+      // with no one rate.
+      taxRateBps: lineRateOfShift(r, paidBy.get(r.orderId) ?? []),
     });
   }
   return { lines, chargeCents };
+}
+
+/**
+ * The rate a line reads in the shift report: its cash rate, or — its order
+ * paid in part at a rate of its own — the rate of the first way of paying
+ * (card, EasyPaisa, JazzCash, bank) the order's money came by; its card rate
+ * when none is named, as since 0052.
+ */
+function lineRateOfShift(r: LineRow, methods: readonly string[]): number {
+  if (!(Number(r.cardNet ?? 0) > 0)) return Number(r.rate);
+  const line = { taxRateBps: Number(r.rate), digitalRateBps: r.cardRate === null ? null : Number(r.cardRate), methodRatesBps: parseMethodRates(r.methodRates) };
+  const way = RATED_PAYMENT_METHODS.find((m) => methods.includes(m) && lineRateByMethod(line, m) !== line.taxRateBps);
+  if (way) return lineRateByMethod(line, way);
+  return r.cardRate !== null ? Number(r.cardRate) : Number(r.rate);
 }
 
 /** Each order's payment methods: those of its live positive payments, each once. */

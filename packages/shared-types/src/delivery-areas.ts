@@ -29,6 +29,7 @@
  * when a road crosses phases or we are not sure — the till then asks which.
  * Never guess a single zone: the zone decides the fee and where the rider goes.
  */
+import { ownRatesOf, ownRateWaysOf, type LineRates, type MethodRatesBps } from './tax-by-method.js';
 import { NOT_ON_VALUE_DEALS } from './web-bridge.js';
 
 export type ZoneGroup = 'DHA' | 'Clifton';
@@ -483,6 +484,20 @@ export interface DeliveryBill {
 }
 
 /** The one tax rate on these lines; null when they differ, there are none, or one has no whole-number rate. */
+/**
+ * The lines' rates for a bill paid entirely at a rate of its own: the way it
+ * was paid (0.7.45), else — no payment named — the card rates, as since 0052.
+ */
+function paidAtOwnRates(
+  items: ReadonlyArray<LineRates>,
+  payments: ReadonlyArray<{ readonly method: string; readonly amountCents: number }>,
+): Array<{ taxRateBps?: number }> {
+  if (ownRateWaysOf(items, payments).length === 0) return items.map((l) => ({ taxRateBps: l.digitalRateBps ?? l.taxRateBps }));
+  const rates = ownRatesOf(items, payments);
+  // Ways that tax a line differently: no one rate (a rate that is not a whole number reads as none).
+  return rates ? rates.map((r) => ({ taxRateBps: r })) : [{ taxRateBps: Number.NaN }];
+}
+
 function oneTaxRate(lines: ReadonlyArray<{ readonly taxRateBps?: number }>): number | null {
   let rate: number | null = null;
   for (const l of lines) {
@@ -532,7 +547,11 @@ export function deliveryBillOf(s: {
     readonly taxRateBps?: number;
     /** The line's card rate (0052); absent / null = none. */
     readonly digitalRateBps?: number | null;
+    /** The line's rates for the ways with a rate of their own (0.7.45); absent / null = none. */
+    readonly methodRatesBps?: MethodRatesBps | null;
   }>;
+  /** The money taken (0.7.45: the way it was paid names the rate of a bill paid at its own); absent = the card rates. */
+  readonly payments?: ReadonlyArray<{ readonly method: string; readonly amountCents: number }>;
   readonly discounts: ReadonlyArray<{
     readonly alsoOffDeliveryCharge?: boolean;
     readonly amountCents?: number;
@@ -582,7 +601,7 @@ export function deliveryBillOf(s: {
     foodTaxCents: order.taxCents - (deliveryTaxCents ?? 0),
     foodTaxBps: byCard
       ? allByCard
-        ? oneTaxRate(s.items.map((l) => ({ taxRateBps: l.digitalRateBps ?? l.taxRateBps })))
+        ? oneTaxRate(paidAtOwnRates(s.items, s.payments ?? []))
         : null
       : oneTaxRate(split ? foodLines : s.items),
     deliveryTaxCents,

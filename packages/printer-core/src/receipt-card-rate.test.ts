@@ -187,3 +187,49 @@ describe('the delivery bill (0052)', () => {
     expect(rows(mixed).filter((t) => t.startsWith('Sales tax'))).toEqual([expect.stringMatching(/^Sales tax\s+138\.00$/)]);
   });
 });
+
+describe('a rate for each way of paying (0.7.45)', () => {
+  /** 15% in cash, 8% by card and EasyPaisa, JazzCash at the cash rate, a bank transfer 10%. */
+  const wayPlate = (): Line => ({ ...plate(), methodRatesBps: { jazzcash: 1500, bank_transfer: 1000 } });
+  const byWay = (stored: Parameters<typeof order>[1], paidBy?: Array<{ method: 'card' | 'cash' | 'jazzcash' | 'bank_transfer'; cents: number }>): OrderSnapshot => {
+    const s = order([wayPlate()], stored);
+    return {
+      ...s,
+      order: { ...s.order, methodTotalsCents: { jazzcash: cents(115_000), bank_transfer: cents(110_000) } },
+      payments: paidBy
+        ? paidBy.map((p, i) => ({ ...s.payments[0]!, id: id(`p${i}`), method: p.method, amountCents: cents(p.cents) }))
+        : s.payments,
+    };
+  };
+
+  it('unpaid: a line for each bill not the total — the way at the cash rate has none', () => {
+    const text = rows(byWay({ tax: 15_000, total: 115_000, byCard: 108_000 }));
+    const total = text.findIndex((t) => t.startsWith('TOTAL'));
+    expect(text.slice(total + 1, total + 3)).toEqual([
+      expect.stringMatching(/^By card \/ EasyPaisa\s+Rs 1,080\.00$/),
+      expect.stringMatching(/^By bank\s+Rs 1,100\.00$/),
+    ]);
+    expect(text.some((t) => t.includes('JazzCash'))).toBe(false);
+  });
+
+  it('paid by bank transfer: one "Tax (10%)" line at that way’s rate', () => {
+    const s = byWay({ tax: 10_000, total: 110_000, byCard: 108_000, cardNet: 100_000, cardTax: 10_000, paid: true }, [{ method: 'bank_transfer', cents: 110_000 }]);
+    expect(rows(s).filter((t) => t.startsWith('Tax'))).toEqual([expect.stringMatching(/^Tax \(10%\)\s+100\.00$/)]);
+  });
+
+  it('half by bank, half in cash: the cash part at 15% and the bank part at 10%', () => {
+    const s = byWay({ tax: 12_500, total: 112_500, byCard: 108_000, cardNet: 50_000, cardTax: 5_000, paid: true }, [
+      { method: 'bank_transfer', cents: 55_000 },
+      { method: 'cash', cents: 57_500 },
+    ]);
+    expect(rows(s).filter((t) => t.startsWith('Tax'))).toEqual([
+      expect.stringMatching(/^Tax 15% \(cash part\)\s+75\.00$/),
+      expect.stringMatching(/^Tax 10% \(bank part\)\s+50\.00$/),
+    ]);
+  });
+
+  it('paid by JazzCash at the cash rate: the cash sale’s one "Tax (15%)" line', () => {
+    const s = byWay({ tax: 15_000, total: 115_000, byCard: 108_000, paid: true }, [{ method: 'jazzcash', cents: 115_000 }]);
+    expect(rows(s).filter((t) => t.startsWith('Tax'))).toEqual([expect.stringMatching(/^Tax \(15%\)\s+150\.00$/)]);
+  });
+});

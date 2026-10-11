@@ -118,7 +118,7 @@ import { fbrWorker } from '../../services/fbr-worker.js';
 import { getReceiptPrinterConfig } from '../../services/printer-config.js';
 import { decrementForOrder } from '../../db/repositories/stock-movement-repo.js';
 import { getOrderStockStatus } from '../../db/repositories/order-stock-repo.js';
-import { changePaymentMethod, paymentShiftOf } from '../../db/repositories/payment-method-repo.js';
+import { changePaymentMethod, paymentShiftOf, previewPaymentMethodChange } from '../../db/repositories/payment-method-repo.js';
 import { findShift } from '../../db/repositories/shift-repo.js';
 import { setTypedDeliveryCharge } from '../../db/repositories/typed-delivery-charge-repo.js';
 import { kitchenTicketsNotPrinted } from '../../db/repositories/print-queue-repo.js';
@@ -1248,6 +1248,21 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   // ---- How a paid order was paid, put right by the owner (v0.7.42) ----
   // The owner (admin) login only: a payment typed in as Cash that came by
   // JazzCash leaves the drawer short at the close (payment-method-repo.ts).
+
+  // What each other way would make of the payment: the counter may look at what it may change.
+  defineHandler('orders:paymentChangePreview', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    const orderId = typeof payload?.orderId === 'string' ? payload.orderId : '';
+    const paymentId = typeof payload?.paymentId === 'string' ? payload.paymentId : '';
+    const order = findOrder(ctx.db, orderId);
+    if (!order) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    if (s.role !== 'admin') assertCounterMaySee(ctx.db, s, order, 'open');
+    try {
+      return ok(previewPaymentMethodChange(ctx.db, orderId, paymentId));
+    } catch (e) {
+      throw new IpcGuardError({ code: 'precondition_failed', message: e instanceof Error ? e.message : 'Could not work it out' });
+    }
+  });
 
   defineHandler('orders:changePaymentMethod', ctx, async (_ctx, payload) => {
     const s = requireOrderCreate();

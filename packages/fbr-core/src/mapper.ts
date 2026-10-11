@@ -9,7 +9,7 @@
  * compute the line's net (after-discount) and tax exactly the same way.
  */
 
-import { isDeliveryChargeLine, type OrderSnapshot } from '@cheeseoclock/shared-types';
+import { isDeliveryChargeLine, type OrderSnapshot, ownRateWaysOf, ownRatesOf } from '@cheeseoclock/shared-types';
 import type { FbrInvoicePayload, FbrInvoiceItem } from './index.js';
 
 export interface FbrSellerInfo {
@@ -75,6 +75,10 @@ export function mapOrderToFbrPayload(
   const shares = severalRows
     ? sharesOfRows(items, discounts, orderDiscount)
     : allocateDiscount(Math.round(orderDiscount) > carry ? totals : masked, orderDiscount);
+  // Paid entirely at a rate of its own (0052; 0.7.45 the way it was paid): each line at that way's
+  // rate when the ways tax it alike — null when they don't, or the snapshot names no payment.
+  const paidRates = ownRatesOf(items, snapshot.payments ?? []);
+  const named = ownRateWaysOf(items, snapshot.payments ?? []).length > 0;
   const fbrItems: FbrInvoiceItem[] = items.map((line, i) => {
     const lineDiscount = shares[i] ?? 0;
     const netCents = Math.max(0, line.lineTotalCents - lineDiscount);
@@ -90,7 +94,7 @@ export function mapOrderToFbrPayload(
     const allByCard =
       typeof order.digitalNetCents === 'number' && order.digitalNetCents > 0 && order.digitalNetCents >= subtotal - discount;
     const lineRateBps =
-      (allByCard ? (line.digitalRateBps ?? line.taxRateBps) : line.taxRateBps) ??
+      (allByCard ? (named ? (paidRates?.[i] ?? line.taxRateBps) : (line.digitalRateBps ?? line.taxRateBps)) : line.taxRateBps) ??
       Math.round((order.taxCents / Math.max(1, subtotal - discount)) * 10_000);
     const lineTaxCents = Math.round((netCents * lineRateBps) / 10_000);
 

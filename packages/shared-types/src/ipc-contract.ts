@@ -30,6 +30,7 @@ import type {
   OrderSnapshot,
   OrderStatus,
   PaymentMethod,
+  PaymentChangeOption,
   PaymentMethodChanged,
   Rider,
 } from './order.js';
@@ -1044,6 +1045,11 @@ export interface IpcContract {
    * right too. Audited. Never foodpanda; on an order whose bill depends on
    * how it was paid (the card tax rate) cash and card cannot be swapped.
    */
+  /** What each other way of paying would make of one payment (0.7.45), before Change payment saves anything. */
+  'orders:paymentChangePreview': {
+    request: { orderId: string; paymentId: string };
+    response: ApiResult<PaymentChangeOption[]>;
+  };
   'orders:changePaymentMethod': {
     /** `approverPin`: a manager's (or the owner's) PIN or password — a cashier's change needs one (0.7.45). */
     request: { orderId: string; paymentId: string; method: ChangeablePaymentMethod; approverPin?: string };

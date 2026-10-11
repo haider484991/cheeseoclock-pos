@@ -68,12 +68,15 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   // Collect payment with "Customer refused an item" (outside rider, order-edit #5): the Refund box next, on the order as now paid.
   const [refusedItemSnap, setRefusedItemSnap] = useState<OrderSnapshot | null>(null);
-  // Money → Change (v0.7.42): the owner puts right how one payment was paid.
+  // Money → Change (v0.7.42; 0.7.45 the counter too while its shift is open): how one payment was paid.
   const [changing, setChanging] = useState<OrderSnapshot['payments'][number] | null>(null);
   const dialogOpen = voidOpen || refundOpen || collectOpen || deleteOpen || refusedItemSnap !== null || changing !== null;
   // "Delete test order…" is the owner's alone (the main process checks again,
   // and asks for the owner's PIN or password in the dialog).
   const role = useSessionStore((st) => st.user?.role ?? null);
+  // The shift open on this till: its orders' payments may be changed at the counter (0.7.45).
+  const shiftQ = useQuery({ queryKey: ['shifts', 'current'], queryFn: () => ipc.shifts.current() });
+  const openShiftId = shiftQ.data && shiftQ.data.closedAt === null ? shiftQ.data.id : null;
   // Edit order (v0.7.36): the order opens at Checkout, and this list comes back after Save or Cancel.
   const startEdit = useStartEdit();
 
@@ -381,7 +384,7 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                               {refund ? `Refund · ${PAYMENT_LABELS[p.method]}` : PAYMENT_LABELS[p.method]}
                             </span>
                             <span className="flex items-baseline gap-2">
-                              {mayChangeMethod(role, o.mode, p.method) && (
+                              {mayChangeMethod(role, o.mode, p.method, openShiftId !== null && o.shiftId === openShiftId) && (
                                 <button
                                   type="button"
                                   onClick={() => setChanging(p)}
@@ -574,6 +577,8 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
           orderId={snap.order.id}
           orderLabel={`Order ${shortOrderNumber(snap.order.orderNumber)}`}
           payment={changing}
+          // A cashier: a manager's PIN or password first (the main process asks again).
+          needsManager={role === 'cashier'}
           onClose={() => setChanging(null)}
         />
       )}

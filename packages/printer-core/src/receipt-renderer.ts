@@ -113,6 +113,11 @@ import {
   paperDayMonthClock,
   riderKeepsNothingWhy,
   salesTaxLabel,
+  billsByMethod,
+  ownRateWaysOf,
+  ownRatesOf,
+  RATED_PAYMENT_METHODS,
+  waysOnPaper,
 } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode, toPrinterAscii } from './escpos.js';
 import { paperMoney } from './paper-money.js';
@@ -835,14 +840,20 @@ function appendDeliveryTotals(
 /**
  * An unpaid bill whose lines charge less by card / wallet / bank (0052: the
  * order's bill by card beside its total): that bill under the total, so the
- * customer can choose how to pay. Nothing on a paid receipt, or on an order
- * with no card rate.
+ * customer can choose how to pay. With ways of paying at rates of their own
+ * (0.7.45) one line for each bill: "By card / EasyPaisa", "By bank"; every
+ * way at one bill reads "By card / wallet", as before. A way that pays the
+ * cash bill needs no line. Nothing on a paid receipt, or on an order with no
+ * card rate.
  */
 function appendByCardLine(b: EscPosBuilder, snapshot: OrderSnapshot): void {
   const { order } = snapshot;
-  const byCard = order.digitalTotalCents;
-  if (order.paidAt !== null || typeof byCard !== 'number' || byCard === order.totalCents) return;
-  b.line('By card / wallet', `Rs ${money(byCard)}`);
+  if (order.paidAt !== null) return;
+  const groups = billsByMethod(order);
+  for (const g of groups) {
+    const label = g.methods.length === RATED_PAYMENT_METHODS.length ? 'By card / wallet' : `By ${waysOnPaper(g.methods)}`;
+    b.line(label, `Rs ${money(g.totalCents)}`);
+  }
 }
 
 /** PAID - CASH, PART REFUNDED, or REFUNDED IN FULL — and what the rider collects. */
@@ -1225,24 +1236,30 @@ function taxLabel(snapshot: OrderSnapshot): string {
  * paid entirely by card / wallet / bank "Tax (8%)" at its card rate; one paid
  * part by card, part in cash two lines — "Tax 15% (cash part)" and "Tax 8%
  * (card part)" — so each rate's tax reads off the paper, as the SRB return
- * wants it. The amounts are the stored figures (digitalTaxCents is the card
- * part's), never worked out again.
+ * wants it. Since 0.7.45 the part is named for the way it was paid and at
+ * that way's rate ("Tax 10% (bank part)"). The amounts are the stored figures
+ * (digitalTaxCents is that part's), never worked out again.
  */
 function taxLinesOf(snapshot: OrderSnapshot): Array<[string, number]> {
   const { order } = snapshot;
   const cardNet = order.digitalNetCents ?? 0;
   const cardTax = order.digitalTaxCents ?? 0;
   if (cardNet <= 0 && cardTax <= 0) return [[taxLabel(snapshot), order.taxCents]];
-  const cardRate = oneRateOf(snapshot.items.map((it) => it.digitalRateBps ?? it.taxRateBps));
+  // The way(s) the part at a rate of its own was paid by, read from the lines and the payments;
+  // a snapshot that names none reads as the card part at the card rates, as before.
+  const ways = ownRateWaysOf(snapshot.items, snapshot.payments);
+  const rates = ways.length > 0 ? ownRatesOf(snapshot.items, snapshot.payments) : snapshot.items.map((it) => it.digitalRateBps ?? it.taxRateBps);
+  const cardRate = rates ? oneRateOf(rates) : null;
+  const who = ways.length > 0 ? waysOnPaper(ways) : 'card';
   const cashTax = order.taxCents - cardTax;
   if (cardNet >= order.subtotalCents - order.discountCents || cashTax <= 0) {
     return [[cardRate === null ? 'Tax' : `Tax (${pctText(cardRate)}%)`, order.taxCents]];
   }
   const cashRate = oneRateOf(snapshot.items.map((it) => it.taxRateBps));
-  const part = (bps: number | null, who: string) => (bps === null ? `Tax (${who} part)` : `Tax ${pctText(bps)}% (${who} part)`);
+  const part = (bps: number | null, whose: string) => (bps === null ? `Tax (${whose} part)` : `Tax ${pctText(bps)}% (${whose} part)`);
   return [
     [part(cashRate, 'cash'), cashTax],
-    [part(cardRate, 'card'), cardTax],
+    [part(cardRate, who), cardTax],
   ];
 }
 

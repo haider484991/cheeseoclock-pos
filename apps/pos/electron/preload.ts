@@ -103,6 +103,7 @@ const api: RendererApi = {
     resumeDraft: () => invoke('orders:resumeDraft', undefined),
     discardDraft: (req) => invoke('orders:discardDraft', req),
     tender: (req) => invoke('orders:tender', req),
+    paymentChangePreview: (req) => invoke('orders:paymentChangePreview', req),
     changePaymentMethod: (req) => invoke('orders:changePaymentMethod', req),
     void: (req) => invoke('orders:void', req),
     refund: (req) => invoke('orders:refund', req),

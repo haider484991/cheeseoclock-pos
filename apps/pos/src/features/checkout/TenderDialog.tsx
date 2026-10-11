@@ -1,7 +1,7 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn, NumberPad } from '@cheeseoclock/ui';
-import { formatCents, splitTender } from '@cheeseoclock/pos-domain';
+import { formatCents, settleLegs } from '@cheeseoclock/pos-domain';
 import { FOODPANDA_ORDER_CODE_MAX } from '@cheeseoclock/shared-types';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { useCheckoutRules } from '../settings/shop-rules/useShopSetting';
@@ -13,6 +13,7 @@ import { ownsEnter } from './keys';
 import { foodpandaDealLine } from './foodpandaDealLine';
 import { offerOnOrder, payDiscountLabel, severalOffersOn } from './discountWords';
 import { foodpandaPayStep } from './tabletAtPay';
+import { billFor, billsLine, dependsOnWay, quoteOf, wayRateNote } from './billByWay';
 
 interface Props {
   snapshot: OrderSnapshot;
@@ -48,20 +49,22 @@ const SPLIT_METHODS = METHODS.filter((m) => m.id !== 'cash' && m.id !== 'foodpan
  * bank (Menu → Tax) carries its bill by card beside its total. Card, the
  * wallets and Bank charge that bill; "Card + cash" takes a part on the card
  * and works out the cash due from it — the card part at the card rate, the
- * cash part at the cash rate (pos-domain splitTender, the rule the till
- * applies). An order with no card rate pays its total however it is paid,
- * exactly as before.
+ * cash part at the cash rate (pos-domain settleLegs, the rule the till
+ * applies). Since 0.7.45 each way of paying may have its own rate: each
+ * button shows what the bill comes to that way, and that is what it charges.
+ * An order with no card rate pays its total however it is paid, exactly as
+ * before.
  */
 export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   const total = snapshot.order.totalCents;
   // A foodpanda order is paid through Foodpanda only (it used to default to Cash and inflate the
   // drawer's expected cash every night); every other order can't use that method.
   const isFoodpanda = snapshot.order.mode === 'foodpanda';
-  // The same bill by card / wallet / bank: its lines at their card rates — the
-  // total itself when the order has no card rate, or is foodpanda's.
-  const cardTotal = isFoodpanda ? total : (snapshot.order.digitalTotalCents ?? total);
-  const hasCardRate = cardTotal !== total;
-  const netCents = snapshot.order.subtotalCents - snapshot.order.discountCents;
+  // The bill by each way of paying: its lines at that way's rates — the total
+  // itself when the order has no card rate, or is foodpanda's.
+  const quote = quoteOf(snapshot.order);
+  const byWay = dependsOnWay(quote, isFoodpanda);
+  const netCents = quote.netCents;
   const methods = METHODS.filter((m) => (m.id === 'foodpanda') === isFoodpanda);
   const [method, setMethod] = useState<PaymentMethod>(isFoodpanda ? 'foodpanda' : 'cash');
   // Card + cash: the card amount typed, the cash due worked out from it; the
@@ -94,9 +97,11 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   const methodSpec = methods.find((m) => m.id === method) ?? methods[0]!;
   const splitSpec = SPLIT_METHODS.find((m) => m.id === splitMethod) ?? SPLIT_METHODS[0]!;
   const onCardCents = split ? parseTenderedCents(onCard) : 0;
-  // The bill as it is being settled: the split's card part at the card rate
+  // The bill as it is being settled: the split's card part at its way's rate
   // and its cash part at the cash rate — the one rule the till applies too.
-  const settlement = split ? splitTender({ totalCents: total, digitalTotalCents: hasCardRate ? cardTotal : null, netCents }, onCardCents) : null;
+  const settlement = split ? settleLegs(quote, [{ method: splitMethod, amountCents: onCardCents }]) : null;
+  // What the chosen way charges for the whole bill.
+  const chargeCents = billFor(quote, method, isFoodpanda);
   const splitProblem = settlement && !settlement.ok ? settlement.reason : null;
   // What is collected in cash: the whole bill (Cash), or the cash part of a split.
   const cashDue = split ? (settlement?.ok ? settlement.cashDueCents : 0) : methodSpec.showTendered ? total : 0;
@@ -104,7 +109,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
     split && settlement?.ok
       ? { totalCents: settlement.totalCents, taxCents: settlement.taxCents }
       : !split && !methodSpec.showTendered
-        ? { totalCents: cardTotal, taxCents: cardTotal - netCents }
+        ? { totalCents: chargeCents, taxCents: chargeCents - netCents }
         : { totalCents: total, taxCents: snapshot.order.taxCents };
   const collectsCash = split ? cashDue > 0 : methodSpec.showTendered;
   const tenderedCents = exact ? cashDue : parseTenderedCents(tendered);
@@ -165,7 +170,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
       tabletTotalCents = step.tabletTotalCents;
     }
     // The legs: the card part and the cash due of a split (a part of Rs 0 is
-    // no leg), else the one method — Cash the total, the others the bill by card.
+    // no leg), else the one method — Cash the total, the others their own bill.
     const legs = nothingToPay
       ? []
       : split
@@ -176,7 +181,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
         : [
             {
               method,
-              amountCents: methodSpec.showTendered ? total : cardTotal,
+              amountCents: methodSpec.showTendered ? total : chargeCents,
               tenderedCents: methodSpec.showTendered ? tenderedCents : null,
               ...(isFoodpanda ? { referenceNo: fpCode.trim() || null } : {}),
             },
@@ -275,6 +280,8 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                     >
                       <Icon className="h-6 w-6" />
                       <span className="text-sm font-semibold">{m.label}</span>
+                      {/* What the bill comes to this way, when that depends on the way (0.7.45). */}
+                      {byWay && <span className="font-mono text-xs text-stone-500">{formatCents(billFor(quote, m.id))}</span>}
                     </button>
                   );
                 })}
@@ -341,11 +348,10 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                     <dt>Total</dt>
                     <dd className="font-mono">{formatCents(due.totalCents)}</dd>
                   </div>
-                  {hasCardRate && (
-                    // The two bills, so the cashier can tell the customer before they choose.
-                    <div className="flex justify-between text-xs text-stone-500" data-testid="two-bills">
-                      <dt>By card {formatCents(cardTotal)}</dt>
-                      <dd className="font-mono">in cash {formatCents(total)}</dd>
+                  {byWay && (
+                    // The bills by each way, so the cashier can tell the customer before they choose.
+                    <div className="text-xs text-stone-500" data-testid="two-bills">
+                      {billsLine(quote)}
                     </div>
                   )}
                 </dl>
@@ -520,9 +526,9 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                     <div className="mb-2 text-sm text-stone-500">
                       {nothingToPay ? 'Nothing to collect' : `Charge to ${methodSpec.label}`}
                     </div>
-                    <div className="font-mono text-4xl font-bold">{formatCents(cardTotal)}</div>
-                    {hasCardRate && !nothingToPay && (
-                      <div className="mt-2 text-xs text-stone-500">Tax at the card rate · {formatCents(total)} in cash</div>
+                    <div className="font-mono text-4xl font-bold">{formatCents(chargeCents)}</div>
+                    {byWay && !nothingToPay && wayRateNote(quote, method) && (
+                      <div className="mt-2 text-xs text-stone-500">{wayRateNote(quote, method)}</div>
                     )}
                   </div>
                   {isFoodpanda && (

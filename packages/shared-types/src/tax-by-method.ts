@@ -203,3 +203,52 @@ export function billsByMethod(order: BillByMethod): Array<{ methods: RatedPaymen
   }
   return out;
 }
+
+/** A line's rates as it froze them (the order_items snapshots). */
+export interface LineRates {
+  readonly taxRateBps?: number;
+  readonly digitalRateBps?: number | null;
+  readonly methodRatesBps?: MethodRatesBps | null;
+}
+
+/** The rate a line charges when the bill is paid `method`. */
+export function lineRateByMethod(line: LineRates, method: PaymentMethod | string): number {
+  return rateByMethod({ rateBps: line.taxRateBps ?? 0, digitalRateBps: line.digitalRateBps, methodRatesBps: line.methodRatesBps }, method);
+}
+
+/**
+ * The ways an order's money came in by (its payments, refunds left out) that
+ * tax some line at a rate other than its cash rate — the part the receipt,
+ * Reports and the FBR invoice call the card part — in the ways' own order.
+ * Read from the lines, never from the stored total (a paid order's total is
+ * the bill as it was settled).
+ */
+export function ownRateWaysOf(
+  items: ReadonlyArray<LineRates>,
+  payments: ReadonlyArray<{ readonly method: string; readonly amountCents: number }>,
+): RatedPaymentMethod[] {
+  return RATED_PAYMENT_METHODS.filter(
+    (m) => payments.some((p) => p.method === m && p.amountCents > 0) && items.some((l) => lineRateByMethod(l, m) !== (l.taxRateBps ?? 0)),
+  );
+}
+
+/**
+ * Each line's rate for the part of an order paid at a rate of its own: the
+ * one way it went by, or ways that tax every line alike. Null when they tax
+ * a line differently (no one rate per line) or no such way paid.
+ */
+export function ownRatesOf(
+  items: ReadonlyArray<LineRates>,
+  payments: ReadonlyArray<{ readonly method: string; readonly amountCents: number }>,
+): number[] | null {
+  const ways = ownRateWaysOf(items, payments);
+  const first = ways[0];
+  if (first === undefined) return null;
+  const rates = items.map((l) => lineRateByMethod(l, first));
+  return ways.every((m) => items.every((l, i) => lineRateByMethod(l, m) === rates[i])) ? rates : null;
+}
+
+/** "card", "JazzCash", "card / EasyPaisa", "bank": ways of paying on paper. */
+export function waysOnPaper(ways: ReadonlyArray<RatedPaymentMethod>): string {
+  return ways.map((m) => (m === 'card' ? 'card' : m === 'bank_transfer' ? 'bank' : RATED_METHOD_LABEL[m])).join(' / ');
+}

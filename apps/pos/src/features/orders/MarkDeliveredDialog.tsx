@@ -9,6 +9,7 @@ import { useToast } from '../../components/toast/ToastProvider';
 import { isOutsideRiderOrder, riderKeepsNothingWhy, type OrderSnapshot, type PaymentMethod } from '@cheeseoclock/shared-types';
 import { parseRupeesToCents, tripPaidToast, type PaidNowAtSendOut } from './boardLogic';
 import { quickCashRupees } from '../checkout/tenderAmounts';
+import { billFor, dependsOnWay, quoteOf, wayRateNote } from '../checkout/billByWay';
 
 /**
  * What the dialog's onDone hears after Delivered + Pay with "Customer refused
@@ -63,7 +64,12 @@ interface Props {
  * An order already paid skips the payment part.
  *
  * Cash asks what the customer gave (tap a note or type it) and shows the
- * change. Enter confirms.
+ * change. Enter confirms. A bill that depends on how it is paid (a card
+ * rate, a way of paying with a rate of its own) is collected at the chosen
+ * way's bill (0.7.45; the owner, 12 Oct 2026: a takeaway sent to the kitchen
+ * unpaid, "first the cashier thought it will paid cash then customer decided
+ * to pay on card"): Card shows and takes the bill by card, Cash the bill in
+ * cash — before, Card was sent the cash bill and the till refused it.
  *
  * An order sent out with an outside rider (Send out) and not paid yet: the
  * rider keeps the delivery charge frozen at Send out, so the dialog takes
@@ -89,11 +95,15 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: ride
   const keepCents = sendOutFirst ? sendOutFirst.keepsCents : outside ? (order.riderKeepsCents ?? 0) : 0;
   // What the rider hands the shop: the food total.
   const takeCents = order.totalCents - keepCents;
-  // What this dialog takes: the food total from an outside rider, else the whole bill.
-  const dueCents = outside ? takeCents : order.totalCents;
   // Foodpanda settles its own orders: the only method for one, and never offered for anything else.
   const isFoodpanda = order.mode === 'foodpanda';
   const [method, setMethod] = useState<PaymentMethod>(isFoodpanda ? 'foodpanda' : 'cash');
+  // The bill by each way of paying (0052, 0.7.45). An outside rider's money is the food total
+  // whatever he pays the shop by: the customer paid HIM, in cash, at the cash bill.
+  const quote = quoteOf(order);
+  const byWay = !outside && !alreadyPaid && dependsOnWay(quote, isFoodpanda);
+  // What this dialog takes: the food total from an outside rider, else the bill the chosen way.
+  const dueCents = outside ? takeCents : billFor(quote, method, isFoodpanda);
   // Starts at the exact amount due (with paisa) so Enter straight away is right for exact cash.
   const [tendered, setTendered] = useState(rupeesText(dueCents));
   const [reference, setReference] = useState('');
@@ -135,7 +145,8 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: ride
         ? undefined
         : {
             method,
-            amountCents: order.totalCents,
+            // The bill this way (the cash bill for Cash, the bill by card for Card).
+            amountCents: dueCents,
             tenderedCents: method === 'cash' ? tenderedCents : null,
             referenceNo,
           };
@@ -301,6 +312,11 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: ride
                 {formatCents(dueCents)}
               </span>
             </div>
+            {byWay && wayRateNote(quote, method) && (
+              <p className="-mt-3 mb-3 px-1 text-xs text-stone-500" data-testid="way-rate-note">
+                {wayRateNote(quote, method)}
+              </p>
+            )}
 
             {!alreadyPaid && (
               <>
@@ -332,6 +348,8 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: ride
                         >
                           <Icon className="h-4 w-4" />
                           {m.label}
+                          {/* What the bill comes to this way, when that depends on the way. */}
+                          {byWay && <span className="font-mono text-[11px] font-normal text-stone-500">{formatCents(billFor(quote, m.key))}</span>}
                         </button>
                       );
                     })}
