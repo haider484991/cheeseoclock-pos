@@ -412,6 +412,8 @@ export const ipc = {
     useSheetPrice: (ingredientId: string) => unwrap(window.api.inventory.useSheetPrice({ ingredientId })),
     getRecipe: (menuItemId: string) =>
       unwrap(window.api.inventory.getRecipe({ menuItemId })),
+    /** Its links to other items' recipes (0.7.47): a deal's burgers and fries. */
+    getRecipeLinks: (menuItemId: string) => unwrap(window.api.inventory.getRecipeLinks({ menuItemId })),
     setRecipe: (input: IpcRequest<'inventory:setRecipe'>) =>
       unwrap(window.api.inventory.setRecipe(input)),
     listRecipeLineCounts: () => unwrap(window.api.inventory.listRecipeLineCounts()),

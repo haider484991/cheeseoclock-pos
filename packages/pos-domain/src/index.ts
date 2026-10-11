@@ -18,6 +18,7 @@ export * from './order-edit.js';
 export * from './choice-validation.js';
 export * from './ingredient-price.js';
 export * from './recipe-expand.js';
+export * from './recipe-links.js';
 export * from './plate-cost.js';
 export * from './cost-targets.js';
 export * from './batch-scale.js';

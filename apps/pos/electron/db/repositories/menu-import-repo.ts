@@ -15,6 +15,7 @@ import {
   setRecipeForItem,
   type PriceMeta,
 } from './ingredient-repo.js';
+import { loadRecipeLinks, setRecipeLinksForItem } from './recipe-link-repo.js';
 import { importPriceRowId, rollUpBatches, setSheetPrice } from './ingredient-cost-repo.js';
 import { raiseBatchUnpricedAlerts } from './cost-alert-repo.js';
 import { loadPriceBook } from '../price-book.js';
@@ -47,7 +48,7 @@ import {
   type ModifierRef,
 } from '../menu-import-plan.js';
 import type { MenuImportFile } from '@cheeseoclock/shared-schemas';
-import { toPriceKind } from '@cheeseoclock/pos-domain';
+import { flattenRecipe, toPriceKind, type RecipeLine, type RecipeLink } from '@cheeseoclock/pos-domain';
 import {
   categoryNeverDiscounted,
   isDeliveryChargeMenuItem,
@@ -63,6 +64,13 @@ export class MenuImportRefusedError extends Error {}
 function groupBy<T, K, V>(rows: T[], key: (r: T) => K, value: (r: T) => V): Map<K, V[]> {
   const out = new Map<K, V[]>();
   for (const r of rows) out.set(key(r), [...(out.get(key(r)) ?? []), value(r)]);
+  return out;
+}
+
+/** The recipes of the items with links to other items' recipes (0.7.47), opened up as the stock takes them. */
+function linkedRecipesOf(own: ReadonlyMap<string, RecipeLine[]>, links: ReadonlyMap<string, RecipeLink[]>): Map<string, RecipeLine[]> {
+  const out = new Map<string, RecipeLine[]>();
+  for (const id of links.keys()) out.set(id, flattenRecipe(id, (x) => own.get(x), (x) => links.get(x)));
   return out;
 }
 
@@ -94,15 +102,17 @@ export function readMenuSnapshot(db: AppDatabase): MenuSnapshot {
       { packSize: Number(r.sheet_pack_size), packPriceCents: Number(r.sheet_pack_price_cents), priceKind: toPriceKind(r.sheet_price_kind) },
     ]),
   );
+  const own = groupBy(recipes, (r) => r.menu_item_id, (r) => ({
+    ingredientId: r.ingredient_id,
+    qtyPerUnit: r.qty_per_unit,
+    modifierId: r.modifier_id,
+  }));
   return {
     categories: listCategories(db),
     items: listMenuItems(db),
     ingredients: listIngredients(db).map((i) => ({ ...i, priceSource: tags.get(i.id)?.source ?? null, sheet: sheets.get(i.id) ?? null })),
-    recipes: groupBy(recipes, (r) => r.menu_item_id, (r) => ({
-      ingredientId: r.ingredient_id,
-      qtyPerUnit: r.qty_per_unit,
-      modifierId: r.modifier_id,
-    })),
+    recipes: own,
+    linkedRecipes: linkedRecipesOf(own, loadRecipeLinks(db)),
     taxCategories: listTaxCategories(db),
     modifierGroups: listModifierGroups(db).map((g) => ({ ...g, modifiers: listModifiersByGroup(db, g.id) })),
     itemGroups: groupBy(attachments, (a) => a.menu_item_id, (a) => ({ groupId: a.modifier_group_id, sortOrder: a.sort_order })),
@@ -368,6 +378,14 @@ function clearMenu(db: AppDatabase, actor: Actor, feeItemIds: ReadonlySet<string
   const keptCategories = new Set(fees.map((i) => i.category_id));
   for (const id of ids(`SELECT DISTINCT menu_item_id AS id FROM recipes WHERE deleted_at IS NULL`)) {
     setRecipeForItem(db, id, [], actor);
+  }
+  // The links to other items' recipes (0.7.47) first: an item a deal links can't be deleted while it does.
+  for (const id of ids(
+    `SELECT DISTINCT l.menu_item_id AS id FROM recipe_links l
+       JOIN menu_items i ON i.id = l.menu_item_id AND i.deleted_at IS NULL
+      WHERE l.deleted_at IS NULL`,
+  )) {
+    setRecipeLinksForItem(db, id, [], actor);
   }
   for (const id of ids(`SELECT DISTINCT menu_item_id AS id FROM menu_item_modifier_groups WHERE deleted_at IS NULL`)) {
     setItemModifierGroups(db, id, [], actor);
@@ -714,6 +732,10 @@ export function applyMenuImport(
           })),
           actor,
         );
+        // The file's recipe is the item's whole recipe: links the till added (0.7.47) would count it twice.
+        if (db.prepare(`SELECT 1 FROM recipe_links WHERE menu_item_id = ? AND deleted_at IS NULL LIMIT 1`).get(itemId)) {
+          setRecipeLinksForItem(db, itemId, [], actor);
+        }
       }
     }
 

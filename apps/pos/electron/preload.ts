@@ -269,6 +269,7 @@ const api: RendererApi = {
     priceHistory: (req) => invoke('inventory:priceHistory', req),
     useSheetPrice: (req) => invoke('inventory:useSheetPrice', req),
     getRecipe: (req) => invoke('inventory:getRecipe', req),
+    getRecipeLinks: (req) => invoke('inventory:getRecipeLinks', req),
     setRecipe: (req) => invoke('inventory:setRecipe', req),
     listRecipeLineCounts: () => invoke('inventory:listRecipeLineCounts', undefined),
     getBatchRecipe: (req) => invoke('inventory:getBatchRecipe', req),

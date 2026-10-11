@@ -125,7 +125,7 @@ export function registerCostingHandlers(ctx: HandlerContext, deps: CostingHandle
     requireCosts();
     const parsed = recipeCostInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
-    return ok(previewRecipeCost(ctx.db, parsed.data.menuItemId, parsed.data.lines));
+    return ok(previewRecipeCost(ctx.db, parsed.data.menuItemId, parsed.data.lines, undefined, parsed.data.links));
   });
 
   // What if on one dish (0.7.46): costs for anyone who may see them; what the price leaves is profit.view's.

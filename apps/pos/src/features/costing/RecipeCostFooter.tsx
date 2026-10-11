@@ -8,23 +8,33 @@ import { FoodCostChip } from './CostChip';
 import { formatBps, noPriceText } from './costingFormat';
 
 type Line = { ingredientId: string; qtyPerUnit: number; modifierId: string | null };
+type Link = { componentItemId: string; qtyPerUnit: number; modifierId: string | null; componentModifierIds: string[] };
 
 /**
  * The recipe editor's live footer (costing spec Phase 1): the recipe as
  * typed — not yet saved — costed at today's prices: "This costs Rs 388 to
  * make — 25.9% of its Rs 1,500 price". Only for logins that may see costs.
  */
-export function RecipeCostFooter({ menuItemId, lines }: { menuItemId: string; lines: readonly Line[] }) {
+export function RecipeCostFooter({
+  menuItemId,
+  lines,
+  links,
+}: {
+  menuItemId: string;
+  lines: readonly Line[];
+  /** Its links to other items' recipes as typed (0.7.47); absent = the ones it has. */
+  links?: readonly Link[];
+}) {
   const canCost = useCanSeeCosts();
   // Debounced as text, so an unchanged recipe is the same value between renders.
   const typedText = useDebouncedValue(
-    JSON.stringify(lines.filter((l) => l.ingredientId && l.qtyPerUnit > 0)),
+    JSON.stringify({ lines: lines.filter((l) => l.ingredientId && l.qtyPerUnit > 0), links: links ?? null }),
     300,
   );
-  const typed = useMemo(() => JSON.parse(typedText) as Line[], [typedText]);
+  const typed = useMemo(() => JSON.parse(typedText) as { lines: Line[]; links: Link[] | null }, [typedText]);
   const q = useQuery({
     queryKey: [...COSTING_KEY, 'recipeCost', menuItemId, typed],
-    queryFn: () => ipc.costing.recipeCost({ menuItemId, lines: typed }),
+    queryFn: () => ipc.costing.recipeCost({ menuItemId, lines: typed.lines, ...(typed.links ? { links: typed.links } : {}) }),
     enabled: canCost,
     staleTime: 0,
     placeholderData: keepPreviousData,
@@ -32,7 +42,7 @@ export function RecipeCostFooter({ menuItemId, lines }: { menuItemId: string; li
   if (!canCost) return null;
   const c = q.data;
   if (!c) return <div className="text-xs text-stone-400">Working out the cost…</div>;
-  if (!c.hasRecipe) return <div className="text-xs text-stone-500">Add ingredients to see what it costs to make.</div>;
+  if (!c.hasRecipe) return <div className="text-xs text-stone-500">Add ingredients or link items to see what it costs to make.</div>;
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm" aria-live="polite">
       {c.missingLines > 0 ? (

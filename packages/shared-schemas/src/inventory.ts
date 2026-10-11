@@ -108,11 +108,21 @@ export const priceHistoryInputSchema = z.object({
   limit: z.number().int().positive().max(500).optional(),
 });
 
+/** A link from an item's recipe to another item's (0.7.47): 1–99 of it, on every sale or with one choice. */
+export const recipeLinkInputSchema = z.object({
+  componentItemId: idSchema,
+  qtyPerUnit: z.number().int().min(1).max(99),
+  modifierId: idSchema.nullable().optional(),
+  componentModifierIds: z.array(idSchema).max(30).optional(),
+});
+
 export const setRecipeInputSchema = z.object({
   menuItemId: idSchema,
   lines: z.array(
     z.object({ ingredientId: idSchema, qtyPerUnit: lineQtySchema, modifierId: idSchema.nullable().optional() }),
   ),
+  /** Absent = keep the links it has (0.7.47). */
+  links: z.array(recipeLinkInputSchema).max(50).optional(),
 });
 
 /**
@@ -209,6 +219,8 @@ export const recipeCostInputSchema = z.object({
       }),
     )
     .max(500),
+  /** Its links as typed (0.7.47); absent = the ones it has. */
+  links: z.array(recipeLinkInputSchema).max(50).optional(),
 });
 
 /** What if on one dish (0.7.46): the lines as tried, and another price before tax (up to Rs 1,000,000) if typed. */

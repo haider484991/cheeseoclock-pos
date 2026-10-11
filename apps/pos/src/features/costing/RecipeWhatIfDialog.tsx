@@ -7,7 +7,8 @@
  * cost against the target and, for the owner, what the price leaves after
  * it (costing:recipeWhatIf: the plate the recipe editor's footer and the cost
  * sheet work out). Nothing changes until Save these amounts, which saves the
- * amounts (never the price: that is Menu → Items).
+ * amounts (never the price: that is Menu → Items). A deal's links to other
+ * items' recipes (0.7.47) are rows too: try 3 burgers instead of 2.
  */
 import { useEffect, useMemo, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -15,7 +16,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { Button, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { MenuItem, RecipeWhatIfSide } from '@cheeseoclock/shared-types';
-import { Minus, Plus, RotateCcw, X } from 'lucide-react';
+import { Link2, Minus, Plus, RotateCcw, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useDebouncedValue } from '../../components/list';
@@ -23,6 +24,7 @@ import { COSTING_KEY } from './costingQueries';
 import { FoodCostChip } from './CostChip';
 import { formatBps } from './costingFormat';
 import { amountsChanged, bpsDiff, linesToSave, moneyDiff, priceCentsOf, stepAmount } from './whatIfAmounts';
+import { linkKey, linksToSave, MAX_TIMES, type DraftLink } from '../inventory/recipeFromItems';
 
 type TryLine = { ingredientId: string; qtyPerUnit: number; modifierId: string | null };
 
@@ -41,28 +43,51 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
       ),
     [recipeQ.data],
   );
+  // Its links to other items' recipes (0.7.47): how many of each is tried too.
+  const linksQ = useQuery({ queryKey: ['inventory', 'recipeLinks', item.id], queryFn: () => ipc.inventory.getRecipeLinks(item.id) });
+  const savedLinks = useMemo<DraftLink[]>(
+    () =>
+      (linksQ.data ?? []).map((l) => ({
+        componentItemId: l.componentItemId,
+        qtyPerUnit: l.qtyPerUnit,
+        modifierId: l.modifierId,
+        componentModifierIds: [...l.componentModifierIds],
+        componentName: l.componentName,
+        componentModifierNames: [...l.componentModifierNames],
+      })),
+    [linksQ.data],
+  );
+  const linkChoice = useMemo(() => new Map((linksQ.data ?? []).map((l) => [linkKey(l), l.modifierName])), [linksQ.data]);
   const [tried, setTried] = useState<TryLine[]>([]);
+  const [triedLinks, setTriedLinks] = useState<DraftLink[]>([]);
   const [priceText, setPriceText] = useState(String(item.basePriceCents / 100));
   useEffect(() => setTried(saved), [saved]);
+  useEffect(() => setTriedLinks(savedLinks), [savedLinks]);
 
   const priceCents = priceCentsOf(priceText);
   // Asked again a moment after the last tap, the amounts as text so the same amounts are the same question.
-  const asked = useDebouncedValue(JSON.stringify({ lines: tried, priceCents }), 250);
+  const asked = useDebouncedValue(JSON.stringify({ lines: tried, links: linksToSave(triedLinks), priceCents }), 250);
   const whatIfQ = useQuery({
     queryKey: [...COSTING_KEY, 'recipeWhatIf', item.id, asked],
-    queryFn: () => ipc.costing.recipeWhatIf({ menuItemId: item.id, ...(JSON.parse(asked) as { lines: TryLine[]; priceCents: number | null }) }),
-    enabled: recipeQ.isSuccess,
+    queryFn: () =>
+      ipc.costing.recipeWhatIf({
+        menuItemId: item.id,
+        ...(JSON.parse(asked) as { lines: TryLine[]; links: ReturnType<typeof linksToSave>; priceCents: number | null }),
+      }),
+    enabled: recipeQ.isSuccess && linksQ.isSuccess,
     placeholderData: keepPreviousData,
     staleTime: 0,
   });
   const w = whatIfQ.data;
-  const changed = amountsChanged(saved, tried);
+  const changed = amountsChanged(saved, tried) || amountsChanged(savedLinks, triedLinks);
+  const hasRecipe = saved.length > 0 || savedLinks.length > 0;
 
   const saveMut = useMutation({
-    mutationFn: () => ipc.inventory.setRecipe({ menuItemId: item.id, lines: linesToSave(tried) }),
+    mutationFn: () => ipc.inventory.setRecipe({ menuItemId: item.id, lines: linesToSave(tried), links: linksToSave(triedLinks) }),
     onSuccess: () => {
       toast({ title: `${item.name}: new amounts saved`, variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['inventory', 'recipe', item.id] });
+      void qc.invalidateQueries({ queryKey: ['inventory', 'recipeLinks', item.id] });
       void qc.invalidateQueries({ queryKey: ['inventory', 'recipeLineCounts'] });
       void qc.invalidateQueries({ queryKey: COSTING_KEY });
       onClose();
@@ -71,9 +96,16 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
   });
 
   const setQty = (i: number, qty: number) => setTried((prev) => prev.map((l, j) => (j === i ? { ...l, qtyPerUnit: Math.max(0, Math.round(qty)) } : l)));
+  const setLinkQty = (i: number, qty: number) =>
+    setTriedLinks((prev) => prev.map((l, j) => (j === i ? { ...l, qtyPerUnit: Math.max(0, Math.min(MAX_TIMES, Math.round(qty))) } : l)));
   // Each side's lines by ingredient and choice: the main process lists the saved recipe in its own order.
   const lineOf = (side: RecipeWhatIfSide | undefined, l: TryLine) =>
     side?.lines.find((x) => x.ingredientId === l.ingredientId && (x.modifierId ?? null) === (l.modifierId ?? null)) ?? null;
+  // A link's cost on each side, by item and choice.
+  const linkCostOf = (side: RecipeWhatIfSide | undefined, l: DraftLink) => {
+    const x = side?.links.find((y) => linkKey(y) === linkKey(l));
+    return x ? { costCents: x.costCents, kind: x.missingLines > 0 ? 'missing-part' : 'priced' } : null;
+  };
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && !saveMut.isPending && onClose()}>
@@ -94,9 +126,9 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
           </header>
 
           <div className="flex-1 overflow-auto p-5">
-            {recipeQ.isLoading ? (
+            {recipeQ.isLoading || linksQ.isLoading ? (
               <p className="py-6 text-center text-sm text-stone-500">Loading the recipe…</p>
-            ) : saved.length === 0 ? (
+            ) : !hasRecipe ? (
               <p className="py-6 text-center text-sm text-stone-500">This item has no recipe yet: add one first.</p>
             ) : (
               <table className="w-full text-sm" data-testid="what-if-lines">
@@ -160,6 +192,60 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
                       </tr>
                     );
                   })}
+                  {triedLinks.map((l, i) => {
+                    const was = savedLinks[i]?.qtyPerUnit ?? 0;
+                    const moved = l.qtyPerUnit !== was;
+                    const choice = linkChoice.get(linkKey(l));
+                    return (
+                      <tr key={`link|${linkKey(l)}`} className={cn('border-t border-stone-100 dark:border-stone-800', moved && 'bg-amber-50 dark:bg-amber-950/30')}>
+                        <td className="py-2 pr-2">
+                          <div className="flex items-center gap-1.5 font-medium">
+                            <Link2 className="h-3.5 w-3.5 text-amber-600" aria-hidden="true" /> {l.componentName}
+                          </div>
+                          <div className="text-xs text-stone-500">
+                            Linked: its recipe as it is now · {choice ? `Only with: ${choice}` : 'Every sale'}
+                          </div>
+                        </td>
+                        <td className="py-2 text-right font-mono text-stone-500">× {was}</td>
+                        <td className="py-2">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setLinkQty(i, l.qtyPerUnit - 1)}
+                              aria-label={`One ${l.componentName} less`}
+                              className="rounded-md border border-stone-300 p-1.5 hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+                            >
+                              <Minus className="h-3.5 w-3.5" />
+                            </button>
+                            <input
+                              type="number"
+                              min={0}
+                              max={MAX_TIMES}
+                              step={1}
+                              inputMode="numeric"
+                              value={l.qtyPerUnit}
+                              onChange={(e) => setLinkQty(i, parseInt(e.target.value, 10) || 0)}
+                              aria-label={`Try how many ${l.componentName}`}
+                              className="w-20 rounded-lg border border-stone-300 px-2 py-1.5 text-right font-mono dark:border-stone-700 dark:bg-stone-800"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setLinkQty(i, l.qtyPerUnit + 1)}
+                              aria-label={`One ${l.componentName} more`}
+                              className="rounded-md border border-stone-300 p-1.5 hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                            </button>
+                            <span className="w-8 text-xs text-stone-500">×</span>
+                          </div>
+                        </td>
+                        <td className="py-2 text-right font-mono text-stone-500">{linkCostText(linkCostOf(w?.saved, savedLinks[i] ?? l), w !== undefined)}</td>
+                        <td className={cn('py-2 text-right font-mono', moved && 'font-semibold')}>
+                          {linkCostText(linkCostOf(w?.tried, l), w !== undefined, l.qtyPerUnit === 0)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                   <tr className="border-t-2 border-stone-200 dark:border-stone-700">
                     <td className="py-2 pr-2 font-medium">Price before tax</td>
                     <td className="py-2 text-right font-mono text-stone-500">{formatCents(item.basePriceCents)}</td>
@@ -183,7 +269,7 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
               </table>
             )}
 
-            {w && saved.length > 0 && (
+            {w && hasRecipe && (
               <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3" data-testid="what-if-summary">
                 <Figure label="Cost to make" now={formatCents(w.saved.costCents)} tried={formatCents(w.tried.costCents)} diff={moneyDiff(w.saved.costCents, w.tried.costCents)} />
                 <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-700">
@@ -214,7 +300,7 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
                   : 'Includes a guessed price.'}
               </p>
             )}
-            {w && saved.some((l) => l.modifierId) && (
+            {w && (saved.some((l) => l.modifierId) || savedLinks.some((l) => l.modifierId)) && (
               <p className="mt-2 text-xs text-stone-500">
                 Lines used only with a choice count as often as customers pick it (the last 4 weeks), as on the cost sheet.
               </p>
@@ -228,6 +314,7 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
               disabled={!changed && priceCents === item.basePriceCents}
               onClick={() => {
                 setTried(saved);
+                setTriedLinks(savedLinks);
                 setPriceText(String(item.basePriceCents / 100));
               }}
             >
@@ -236,7 +323,11 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
             <Button variant="secondary" onClick={onClose} disabled={saveMut.isPending}>
               Close
             </Button>
-            <Button variant="primary" disabled={!changed || saveMut.isPending || linesToSave(tried).length === 0} onClick={() => saveMut.mutate()}>
+            <Button
+              variant="primary"
+              disabled={!changed || saveMut.isPending || (linesToSave(tried).length === 0 && linksToSave(triedLinks).length === 0)}
+              onClick={() => saveMut.mutate()}
+            >
               {saveMut.isPending ? 'Saving…' : 'Save these amounts'}
             </Button>
           </footer>
@@ -244,6 +335,13 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
       </Dialog.Portal>
     </Dialog.Root>
   );
+}
+
+/** A link's cost in the table: "Rs 540", "Rs 400+" when something in it has no price yet; "taken off" at 0; "…" while it is worked out. */
+function linkCostText(link: { costCents: number; kind: string } | null, answered: boolean, takenOff = false): string {
+  if (takenOff) return 'taken off';
+  if (!link) return answered ? '—' : '…';
+  return link.kind === 'missing-part' ? `${formatCents(link.costCents)}+` : formatCents(link.costCents);
 }
 
 /** A line's cost in the table: "Rs 135", "no price", "free"; "taken off" for a line tried at 0; "…" while it is worked out. */

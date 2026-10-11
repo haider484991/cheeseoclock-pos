@@ -6,7 +6,7 @@ import { formatCents, unitCostMc } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { BatchRecipe, Ingredient, MenuItem } from '@cheeseoclock/shared-types';
-import { X, Plus, Trash2, Edit, BookOpen, ChefHat, Soup, Calculator, Scale } from 'lucide-react';
+import { X, Plus, Trash2, Edit, BookOpen, ChefHat, Soup, Calculator, Scale, Link2 } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
   FilterChips,
@@ -26,8 +26,8 @@ import { BatchCalculatorButton } from './BatchPicker';
 import { RecipeCostFooter } from '../costing/RecipeCostFooter';
 import { RecipeWhatIfDialog } from '../costing/RecipeWhatIfDialog';
 import { AddItemRecipeDialog } from './AddItemRecipeDialog';
-import { mergeRecipeLines } from './recipeFromItems';
-import { useCanSeeCosts } from '../costing/costingQueries';
+import { linkKey, linkProblem, linksToSave, mergeLinks, MAX_TIMES, type DraftLink } from './recipeFromItems';
+import { COSTING_KEY, useCanSeeCosts } from '../costing/costingQueries';
 import { formatUnitPrice } from '../costing/costingFormat';
 
 type Mode = 'items' | 'batches';
@@ -192,12 +192,24 @@ function RecipeCard({
     queryKey: ['inventory', 'recipe', item.id],
     queryFn: () => ipc.inventory.getRecipe(item.id),
   });
+  // Its links to other items' recipes (0.7.47): "Zinger Burger × 2 — follows its recipe".
+  const linksQ = useQuery({
+    queryKey: ['inventory', 'recipeLinks', item.id],
+    queryFn: () => ipc.inventory.getRecipeLinks(item.id),
+  });
   const lines = q.data ?? [];
+  const links = linksQ.data ?? [];
+  const has = lines.length > 0 || links.length > 0;
   const always = lines.filter((l) => !l.modifierId);
-  const byChoice = new Map<string, typeof lines>();
+  const alwaysLinks = links.filter((l) => !l.modifierId);
+  const byChoice = new Map<string, string[]>();
   for (const l of lines.filter((x) => x.modifierId)) {
     const key = l.modifierName ?? '?';
-    byChoice.set(key, [...(byChoice.get(key) ?? []), l]);
+    byChoice.set(key, [...(byChoice.get(key) ?? []), `${l.qtyPerUnit} ${l.unit} ${l.ingredientName}`]);
+  }
+  for (const l of links.filter((x) => x.modifierId)) {
+    const key = l.modifierName ?? '?';
+    byChoice.set(key, [...(byChoice.get(key) ?? []), `${l.componentName} × ${l.qtyPerUnit}`]);
   }
   return (
     <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
@@ -214,18 +226,18 @@ function RecipeCard({
           <div className="text-xs text-stone-500">{categoryName}</div>
         </div>
         <div className="flex flex-wrap justify-end gap-1">
-          {onWhatIf && lines.length > 0 && (
+          {onWhatIf && has && (
             <Button variant="secondary" size="sm" onClick={onWhatIf} title="Try other amounts or another price: what it costs to make">
               <Scale className="h-3 w-3" /> What if
             </Button>
           )}
-          {onCalculate && lines.length > 0 && (
+          {onCalculate && has && (
             <Button variant="secondary" size="sm" onClick={onCalculate} title="How much of everything for 10 (or any number)">
               <Calculator className="h-3 w-3" /> Calculate
             </Button>
           )}
           <Button variant="secondary" size="sm" onClick={onEdit}>
-            {lines.length === 0 ? (
+            {!has ? (
               <>
                 <Plus className="h-3 w-3" /> Add recipe
               </>
@@ -237,9 +249,19 @@ function RecipeCard({
           </Button>
         </div>
       </div>
-      {lines.length > 0 ? (
+      {has ? (
         <>
           <ul className="mt-2 space-y-0.5 text-xs">
+            {alwaysLinks.map((l) => (
+              <li key={l.id} className="flex justify-between gap-2" title="Linked: it follows that item's recipe">
+                <span className="flex items-center gap-1">
+                  <Link2 className="h-3 w-3 text-amber-600" aria-hidden="true" />
+                  {l.componentName}
+                  {l.componentModifierNames.length > 0 && <span className="text-stone-500">({l.componentModifierNames.join(', ')})</span>}
+                </span>
+                <span className="font-mono">× {l.qtyPerUnit}</span>
+              </li>
+            ))}
             {always.map((l) => (
               <li key={l.id} className="flex justify-between">
                 <span>{l.ingredientName}</span>
@@ -253,12 +275,10 @@ function RecipeCard({
             <div className="mt-2 rounded bg-amber-50 p-2 text-xs dark:bg-amber-950/40">
               <div className="mb-1 font-semibold text-amber-900 dark:text-amber-200">Only when chosen at the till</div>
               <ul className="space-y-0.5">
-                {[...byChoice.entries()].map(([choice, ls]) => (
+                {[...byChoice.entries()].map(([choice, parts]) => (
                   <li key={choice} className="flex justify-between gap-2">
                     <span>{choice}</span>
-                    <span className="text-right font-mono">
-                      {ls.map((l) => `${l.qtyPerUnit} ${l.unit} ${l.ingredientName}`).join(', ')}
-                    </span>
+                    <span className="text-right font-mono">{parts.join(', ')}</span>
                   </li>
                 ))}
               </ul>
@@ -293,8 +313,15 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
   });
   const choices = (groupsQ.data ?? []).flatMap((g) => g.modifiers.map((m) => ({ id: m.id, label: `${g.name}: ${m.name}` })));
 
+  // Its links to other items' recipes (0.7.47; the owner: "Deal ki recipe bhi link ho, copy nahi").
+  const linksQ = useQuery({
+    queryKey: ['inventory', 'recipeLinks', item.id],
+    queryFn: () => ipc.inventory.getRecipeLinks(item.id),
+  });
+
   const [lines, setLines] = useState<EditLine[]>([]);
-  // "Add another item's recipe" (0.7.46): a deal built from the items on the menu.
+  const [links, setLinks] = useState<DraftLink[]>([]);
+  // "Link another item's recipe" (0.7.46 copied; 0.7.47 links): a deal built from the items on the menu.
   const [addingFromItem, setAddingFromItem] = useState(false);
 
   useEffect(() => {
@@ -304,13 +331,30 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
       );
     }
   }, [existingQ.data]);
+  useEffect(() => {
+    if (linksQ.data) {
+      setLinks(
+        linksQ.data.map((l) => ({
+          componentItemId: l.componentItemId,
+          qtyPerUnit: l.qtyPerUnit,
+          modifierId: l.modifierId,
+          componentModifierIds: [...l.componentModifierIds],
+          componentName: l.componentName,
+          componentModifierNames: [...l.componentModifierNames],
+        })),
+      );
+    }
+  }, [linksQ.data]);
 
   const mut = useMutation({
-    mutationFn: () => ipc.inventory.setRecipe({ menuItemId: item.id, lines }),
+    // Its lines and its links in one go: saving before the links are read would drop them, so Save waits for them.
+    mutationFn: () => ipc.inventory.setRecipe({ menuItemId: item.id, lines, links: linksToSave(links) }),
     onSuccess: () => {
       toast({ title: 'Recipe saved', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['inventory', 'recipe', item.id] });
+      void qc.invalidateQueries({ queryKey: ['inventory', 'recipeLinks', item.id] });
       void qc.invalidateQueries({ queryKey: ['inventory', 'recipeLineCounts'] });
+      void qc.invalidateQueries({ queryKey: COSTING_KEY });
       onClose();
     },
     onError: (e) =>
@@ -341,7 +385,12 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
       ? 'Every line needs an amount.'
       : duplicate
         ? `${ingredientsQ.data?.find((x) => x.id === duplicate.ingredientId)?.name ?? 'An ingredient'} is listed twice for the same choice.`
-        : null;
+        : linkProblem(links);
+  const loaded = existingQ.isSuccess && linksQ.isSuccess;
+
+  function updateLink(i: number, patch: Partial<DraftLink>) {
+    setLinks((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+  }
 
   function updateLine(i: number, patch: Partial<EditLine>) {
     setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
@@ -375,9 +424,62 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
             </Dialog.Close>
           </header>
           <div className="flex-1 space-y-2 overflow-auto p-5">
-            {lines.length === 0 && (
+            {lines.length === 0 && links.length === 0 && (
               <div className="rounded-lg border-2 border-dashed border-stone-200 p-6 text-center text-sm text-stone-500 dark:border-stone-700">
-                No ingredients yet. Click below to add.
+                No ingredients yet. Click below to add, or link the items a deal is made of.
+              </div>
+            )}
+            {links.length > 0 && (
+              <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-900 dark:bg-amber-950/30" data-testid="recipe-links">
+                <div className="text-xs font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-200">
+                  Linked items — they follow their own recipes
+                </div>
+                {links.map((link, i) => (
+                  <div key={linkKey(link) + i} className="flex items-center gap-2">
+                    <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
+                      <Link2 className="h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
+                      <span className="truncate font-medium" title={link.componentName}>
+                        {link.componentName}
+                      </span>
+                      {link.componentModifierNames.length > 0 && (
+                        <span className="truncate text-xs text-stone-500">with {link.componentModifierNames.join(', ')}</span>
+                      )}
+                    </div>
+                    <span className="text-sm text-stone-500">×</span>
+                    <input
+                      type="number"
+                      step="1"
+                      min={1}
+                      max={MAX_TIMES}
+                      inputMode="numeric"
+                      value={link.qtyPerUnit || ''}
+                      aria-label={`How many ${link.componentName}`}
+                      onChange={(e) => updateLink(i, { qtyPerUnit: parseInt(e.target.value, 10) || 0 })}
+                      className="w-16 rounded-lg border border-stone-300 px-2 py-2 text-right font-mono dark:border-stone-700 dark:bg-stone-800"
+                    />
+                    <select
+                      value={link.modifierId ?? ''}
+                      onChange={(e) => updateLink(i, { modifierId: e.target.value || null })}
+                      className="w-52 rounded-lg border border-stone-300 px-2 py-2 text-sm dark:border-stone-700 dark:bg-stone-800"
+                      aria-label={`When ${link.componentName} is used`}
+                    >
+                      <option value="">Always</option>
+                      {choices.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          If {c.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setLinks((prev) => prev.filter((_, idx) => idx !== i))}
+                      className="rounded p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
+                      aria-label={`Unlink ${link.componentName}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
             {lines.map((line, i) => (
@@ -430,15 +532,16 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
               <Button
                 variant="secondary"
                 size="sm"
+                disabled={!loaded}
                 onClick={() => setAddingFromItem(true)}
-                title="Copy the ingredients of items already on the menu — two burgers and a fries for a deal"
+                title="Use the recipes of items already on the menu — two burgers and a fries for a deal. It follows them when they change."
               >
-                <BookOpen className="h-3 w-3" /> Add another item&rsquo;s recipe
+                <Link2 className="h-3 w-3" /> Link another item&rsquo;s recipe
               </Button>
             </div>
           </div>
           <div className="border-t border-stone-200 px-5 py-3 dark:border-stone-800">
-            <RecipeCostFooter menuItemId={item.id} lines={lines} />
+            <RecipeCostFooter menuItemId={item.id} lines={lines} links={loaded ? linksToSave(links.filter((l) => l.qtyPerUnit >= 1 && l.qtyPerUnit <= MAX_TIMES)) : undefined} />
           </div>
           {addingFromItem && (
             <AddItemRecipeDialog
@@ -446,12 +549,20 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
               choices={choices}
               groups={groupsQ.data ?? []}
               ingredients={ingredientsQ.data}
+              currentLines={lines.filter((l) => l.ingredientId !== '' || l.qtyPerUnit > 0)}
               onClose={() => setAddingFromItem(false)}
-              onAdd={(added, summary) => {
-                // Merged as the editor holds lines: an ingredient already there for the same choice gets the amount added.
-                setLines((prev) => mergeRecipeLines(prev.filter((l) => l.ingredientId !== '' || l.qtyPerUnit > 0), added));
+              onAdd={(added) => {
+                // The same item for the same choice gets the amounts added; a copy of it made before came out of the lines.
+                setLinks((prev) => mergeLinks(prev, added.links));
+                setLines(added.lines);
                 setAddingFromItem(false);
-                toast({ title: `Added: ${summary}`, description: 'Check the amounts, then Save recipe.', variant: 'success' });
+                toast({
+                  title: `Linked: ${added.summary}`,
+                  description: added.tookOutCopies
+                    ? 'Its copied lines came out so nothing counts twice. Save recipe to keep it.'
+                    : 'Save recipe to keep it.',
+                  variant: 'success',
+                });
               }}
             />
           )}
@@ -462,7 +573,7 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
             </Button>
             <Button
               variant="primary"
-              disabled={mut.isPending || problem !== null}
+              disabled={mut.isPending || problem !== null || !loaded}
               onClick={() => mut.mutate()}
             >
               {mut.isPending ? 'Saving…' : 'Save recipe'}

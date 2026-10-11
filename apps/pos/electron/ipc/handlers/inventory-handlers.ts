@@ -43,8 +43,9 @@ import {
   convertIngredientToBaseUnit,
   listRecipeForItem,
   listRecipeLineCounts,
-  setRecipeForItem,
+  setRecipeWithLinks,
 } from '../../db/repositories/ingredient-repo.js';
+import { listRecipeLinksForItem, recipeLinkCounts } from '../../db/repositories/recipe-link-repo.js';
 import {
   listMovements,
   recordStockMovement,
@@ -286,11 +287,18 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
     return ok(listRecipeForItem(ctx.db, payload.menuItemId));
   });
 
+  // Its links to other items' recipes (0.7.47): a deal's burgers and fries.
+  defineHandler('inventory:getRecipeLinks', ctx, (_ctx, payload) => {
+    requireStockView();
+    return ok(listRecipeLinksForItem(ctx.db, typeof payload?.menuItemId === 'string' ? payload.menuItemId : ''));
+  });
+
   defineHandler('inventory:setRecipe', ctx, (_ctx, payload) => {
     const s = requireInventoryManage();
     const parsed = setRecipeInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
-    setRecipeForItem(ctx.db, parsed.data.menuItemId, parsed.data.lines, {
+    // Its own lines and — when sent — its links, in one transaction (absent links: kept as they are).
+    setRecipeWithLinks(ctx.db, parsed.data.menuItemId, parsed.data.lines, parsed.data.links, {
       userId: s.id,
       deviceId: ctx.deviceId,
     });
@@ -299,7 +307,11 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   defineHandler('inventory:listRecipeLineCounts', ctx, () => {
     requireStockView();
-    return ok(listRecipeLineCounts(ctx.db));
+    // A link to another item's recipe counts as a line: a deal made only of links has a recipe.
+    const links = recipeLinkCounts(ctx.db);
+    const counts = listRecipeLineCounts(ctx.db).map((c) => ({ ...c, lineCount: c.lineCount + (links.get(c.menuItemId) ?? 0) }));
+    for (const [menuItemId, n] of links) if (!counts.some((c) => c.menuItemId === menuItemId)) counts.push({ menuItemId, lineCount: n });
+    return ok(counts);
   });
 
   // ---- Batch recipes (made in-house) ----

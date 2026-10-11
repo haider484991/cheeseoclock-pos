@@ -371,6 +371,8 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   'shifts:summary': { shiftId: s.earlierShift },
   'inventory:listIngredients': undefined,
   'inventory:getRecipe': { menuItemId: 'no-such-item' },
+  // A recipe's links to other items' recipes (0.7.47), read like its lines.
+  'inventory:getRecipeLinks': { menuItemId: 'no-such-item' },
   'inventory:listRecipeLineCounts': undefined,
   'inventory:getBatchRecipe': { ingredientId: 'no-such-ingredient' },
   'inventory:listMovements': undefined,

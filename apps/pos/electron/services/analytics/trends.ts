@@ -62,7 +62,7 @@ export const RECENT_DAYS = 56;
  * of them (a price filled in, a recipe fixed, from this till or the other)
  * works the months out again; so does a new trading day.
  */
-const COSTING_INPUTS = ['ingredients', 'ingredient_costs', 'batch_recipe_lines', 'recipes', 'menu_items', 'categories', 'business_settings'] as const;
+const COSTING_INPUTS = ['ingredients', 'ingredient_costs', 'batch_recipe_lines', 'recipes', 'recipe_links', 'menu_items', 'categories', 'business_settings'] as const;
 
 /** What the months kept were worked out from: the trading day and the costing inputs as they stand (small tables). */
 function costingStamp(db: AppDatabase, today: number): string {

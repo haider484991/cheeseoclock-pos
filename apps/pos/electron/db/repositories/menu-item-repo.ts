@@ -305,11 +305,30 @@ export function restoreMenuItem(db: AppDatabase, id: string, actor: Actor): Menu
   return item;
 }
 
+/**
+ * Deleting an item another item's recipe uses (0.7.47: a deal linked to the
+ * burger) is refused: the deal would silently stop taking the burger's
+ * ingredients. The words name them.
+ */
+export function usedInRecipesWords(names: readonly string[], itemName: string): string {
+  const who = names.length <= 3 ? names.join(', ') : `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`;
+  return `${who} ${names.length === 1 ? 'uses' : 'use'} the recipe of ${itemName}: take it out of ${names.length === 1 ? 'that recipe' : 'those recipes'} first (Inventory → Recipes).`;
+}
+
 export function deleteMenuItem(db: AppDatabase, id: string, actor: Actor): void {
   const row = db
     .prepare(`SELECT ${SELECT_COLUMNS} FROM menu_items WHERE id = ? AND deleted_at IS NULL`)
     .get(id) as Row | undefined;
   if (!row) throw new Error('Menu item not found');
+  const linking = db
+    .prepare(
+      `SELECT DISTINCT i.name FROM recipe_links l
+         JOIN menu_items i ON i.id = l.menu_item_id AND i.deleted_at IS NULL
+        WHERE l.component_item_id = ? AND l.deleted_at IS NULL AND l.menu_item_id <> ?
+        ORDER BY i.name`,
+    )
+    .all(id, id) as Array<{ name: string }>;
+  if (linking.length > 0) throw new Error(usedInRecipesWords(linking.map((r) => r.name), row.name));
   const now = nowIso();
   writeWithSync({
     db,
@@ -324,10 +343,11 @@ export function deleteMenuItem(db: AppDatabase, id: string, actor: Actor): void 
       db.prepare(
         `UPDATE menu_items SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
       ).run(now, now, id);
-      // Its recipe lines and option-group links go with it. Left behind, the
-      // recipe kept an ingredient "in use" (it couldn't be deleted) and the
-      // links kept a group attached to an item nobody can see.
-      for (const table of ['recipes', 'menu_item_modifier_groups'] as const) {
+      // Its recipe lines, its links to other items' recipes (0.7.47) and its
+      // option-group links go with it. Left behind, the recipe kept an
+      // ingredient "in use" (it couldn't be deleted) and the links kept a
+      // group attached to an item nobody can see.
+      for (const table of ['recipes', 'recipe_links', 'menu_item_modifier_groups'] as const) {
         const rows = db
           .prepare(`SELECT id FROM ${table} WHERE menu_item_id = ? AND deleted_at IS NULL`)
           .all(id) as Array<{ id: string }>;

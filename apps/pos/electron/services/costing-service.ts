@@ -18,6 +18,8 @@ import {
   confirmAll,
   costLines,
   findMissingCosts,
+  flattenRecipe,
+  flattenRecipes,
   foodCostFlag,
   maxBatchAmount,
   mcToCents,
@@ -40,6 +42,7 @@ import {
   type PlateGroup,
   type PriceOf,
   type RecipeLine,
+  type RecipeLink,
   type ResolvedAlertSettings,
   type ResolvedTarget,
   type ResolvedTargets,
@@ -64,6 +67,7 @@ import {
   type MissingCosts,
   type MissingPriceRow,
   type RecipeCostPreview,
+  type RecipeLinkInput,
   type RecipeWhatIf,
   type RecipeWhatIfSide,
   type SetCostingTargetsRequest,
@@ -78,6 +82,7 @@ import { loadPriceBook, type PriceBook } from '../db/price-book.js';
 // "Do this" list works dishes out from it), which must not load the write
 // paths. The owner's settings are saved by costing-settings.ts.
 import { getBusinessSetting } from '../db/business-settings-read.js';
+import { loadRecipeLinks } from '../db/recipe-links-read.js';
 import { COUNTED } from './analytics/sql.js';
 
 /** "Sold in the last 28 days": the window the customers' picks are weighted over. */
@@ -96,7 +101,15 @@ interface MenuItemRow {
 export interface MenuData {
   categories: Array<{ id: string; name: string }>;
   items: MenuItemRow[];
+  /**
+   * Each item's recipe as everything costs it: its own lines with its links
+   * to other items' recipes opened up (0.7.47: a deal costs its burgers'
+   * recipes as they are now).
+   */
   recipes: Map<string, RecipeLine[]>;
+  /** Its own lines and its links as saved: a recipe being edited is opened up with them (the footer, What if). */
+  ownRecipes: Map<string, RecipeLine[]>;
+  links: Map<string, RecipeLink[]>;
   groups: Map<string, PlateGroup[]>;
 }
 
@@ -219,7 +232,9 @@ export function loadMenu(db: AppDatabase): MenuData {
       options: options.get(g.id) ?? [],
     });
   }
-  return { categories, items, recipes, groups };
+  // A recipe linked to other items' recipes (0.7.47), opened up; with no link anywhere, the lines as they are.
+  const links = loadRecipeLinks(db);
+  return { categories, items, recipes: links.size === 0 ? recipes : flattenRecipes(recipes, links), ownRecipes: recipes, links, groups };
 }
 
 /**
@@ -614,19 +629,46 @@ export function itemCostSheetForLogin(sheet: ItemCostSheet | null, canSeeProfit:
   };
 }
 
+/** A link as typed (RecipeLinkInput) or as saved (RecipeLink). */
+type LinkLike = { componentItemId: string; qtyPerUnit: number; modifierId?: string | null; componentModifierIds?: readonly string[] };
+
+/** An item's links as typed (0.7.47), else as saved. */
+function linksOf(ctx: Ctx, itemId: string, links?: ReadonlyArray<LinkLike>): RecipeLink[] {
+  if (!links) return [...(ctx.menu.links.get(itemId) ?? [])];
+  return links.map((l) => ({ componentItemId: l.componentItemId, qtyPerUnit: l.qtyPerUnit, modifierId: l.modifierId ?? null, componentModifierIds: l.componentModifierIds ?? [] }));
+}
+
+/**
+ * A recipe being edited or tried, opened up (0.7.47): `own` its own lines,
+ * `links` its links (absent = the ones it has), every other item's recipe as
+ * saved — so a deal's cost follows its burgers' recipes.
+ */
+function openedUp(ctx: Ctx, itemId: string, own: readonly RecipeLine[], links?: ReadonlyArray<LinkLike>): RecipeLine[] {
+  const itemLinks = linksOf(ctx, itemId, links);
+  if (itemLinks.length === 0) return [...own];
+  return flattenRecipe(
+    itemId,
+    (id) => (id === itemId ? own : ctx.menu.ownRecipes.get(id)),
+    (id) => (id === itemId ? itemLinks : ctx.menu.links.get(id)),
+  );
+}
+
 /** The recipe editor's footer: the lines as typed (not saved), costed against the item. */
 export function previewRecipeCost(
   db: AppDatabase,
   menuItemId: string,
   lines: ReadonlyArray<{ ingredientId: string; qtyPerUnit: number; modifierId?: string | null }>,
   now = new Date(),
+  links?: ReadonlyArray<RecipeLinkInput>,
 ): RecipeCostPreview {
   const ctx = loadCtx(db, now, { kind: 'item', itemId: menuItemId });
   const item = ctx.menu.items.find((i) => i.id === menuItemId);
   if (!item) throw new Error('Menu item not found');
-  const recipe: RecipeLine[] = lines
+  const typed: RecipeLine[] = lines
     .filter((l) => l.ingredientId && l.qtyPerUnit > 0)
     .map((l) => ({ ingredientId: l.ingredientId, qtyPerUnit: l.qtyPerUnit, modifierId: l.modifierId ?? null }));
+  // Its links as typed (0.7.47), else as saved, opened up with every other item's recipe as saved.
+  const recipe = openedUp(ctx, item.id, typed, links);
   const pc = plateOf(ctx, item, recipe);
   const t = targetOf(ctx, item.categoryId);
   return {
@@ -660,19 +702,21 @@ export function recipeWhatIf(
     menuItemId: string;
     lines: ReadonlyArray<{ ingredientId: string; qtyPerUnit: number; modifierId?: string | null }>;
     priceCents?: number | null;
+    links?: ReadonlyArray<RecipeLinkInput>;
   },
   now = new Date(),
 ): RecipeWhatIf {
   const ctx = loadCtx(db, now, { kind: 'item', itemId: input.menuItemId });
   const item = ctx.menu.items.find((i) => i.id === input.menuItemId);
   if (!item) throw new Error('Menu item not found');
-  const savedRecipe = ctx.menu.recipes.get(item.id) ?? [];
-  const triedRecipe: RecipeLine[] = input.lines
+  // Each side's own lines (what the dialog lists), and its recipe opened up with its links (what it costs).
+  const savedOwn = ctx.menu.ownRecipes.get(item.id) ?? [];
+  const triedOwn: RecipeLine[] = input.lines
     .filter((l) => l.ingredientId && l.qtyPerUnit > 0)
     .map((l) => ({ ingredientId: l.ingredientId, qtyPerUnit: l.qtyPerUnit, modifierId: l.modifierId ?? null }));
-  const side = (recipe: readonly RecipeLine[], basePriceCents: number): RecipeWhatIfSide => {
+  const side = (ownLines: readonly RecipeLine[], basePriceCents: number, links?: ReadonlyArray<RecipeLinkInput>): RecipeWhatIfSide => {
     const priced = { ...item, basePriceCents };
-    const pc = plateOf(ctx, priced, [...recipe]);
+    const pc = plateOf(ctx, priced, openedUp(ctx, item.id, ownLines, links));
     return {
       hasRecipe: pc.hasRecipe,
       costCents: pc.typicalCostCents,
@@ -682,21 +726,29 @@ export function recipeWhatIf(
       missingLines: pc.missingLines,
       estimateLines: pc.estimateLines,
       flag: flagOf(ctx, priced, pc),
-      lines: recipe.map((l) => {
+      lines: ownLines.map((l) => {
         const c = costLines([{ ingredientId: l.ingredientId, qty: l.qtyPerUnit }], ctx.priceOf).lines[0]!;
         return { ingredientId: l.ingredientId, modifierId: l.modifierId ?? null, qty: l.qtyPerUnit, costCents: mcToCents(c.costMc), kind: c.kind };
+      }),
+      // Each link (0.7.47): what that many of the item cost at its recipe now, like a line (not weighed by picks).
+      links: linksOf(ctx, item.id, links).map((l) => {
+        const c = costLines(
+          openedUp(ctx, item.id, [], [l]).map((x) => ({ ingredientId: x.ingredientId, qty: x.qtyPerUnit })),
+          ctx.priceOf,
+        );
+        return { componentItemId: l.componentItemId, modifierId: l.modifierId, qty: l.qtyPerUnit, costCents: c.costCents, missingLines: c.missingLines };
       }),
     };
   };
   const price = typeof input.priceCents === 'number' ? input.priceCents : item.basePriceCents;
-  const ids = [...new Set([...savedRecipe, ...triedRecipe].map((l) => l.ingredientId))];
+  const ids = [...new Set([...savedOwn, ...triedOwn].map((l) => l.ingredientId))];
   return {
     menuItemId: item.id,
     name: item.name,
     basePriceCents: item.basePriceCents,
     targetBps: targetOf(ctx, item.categoryId).bps,
-    saved: side(savedRecipe, item.basePriceCents),
-    tried: side(triedRecipe, price),
+    saved: side(savedOwn, item.basePriceCents),
+    tried: side(triedOwn, price, input.links),
     ingredients: ids.map((id) => ({ id, name: ingredientName(ctx.book, id), unit: ctx.book.ingredients.get(id)?.unit ?? '' })),
   };
 }

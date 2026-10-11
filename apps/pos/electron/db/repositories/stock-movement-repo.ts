@@ -5,6 +5,7 @@ import type { AppDatabase } from '../connection.js';
 import { nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
+import { effectiveRecipesFor } from './recipe-link-repo.js';
 import { loadPriceBook, NOT_VALUED, priceOfBook, safeStockValue, type PriceBook, type RowValue } from '../price-book.js';
 import {
   BASE_PART,
@@ -342,8 +343,17 @@ function readOrderLines(db: AppDatabase, orderId: string): OrderLine[] {
   return lines;
 }
 
-/** The recipes of the items sold, live ingredients only (as the stock SQL always joined them). */
+/**
+ * The recipes of the items sold as the stock takes them: their own lines and
+ * their links to other items' recipes opened up (0.7.47: a deal takes its
+ * burgers' and fries' ingredients as their recipes are now).
+ */
 function readRecipes(db: AppDatabase, itemIds: string[]): Map<string, RecipeLine[]> {
+  return effectiveRecipesFor(db, itemIds, readOwnRecipes);
+}
+
+/** An item's own recipe lines, live ingredients only (as the stock SQL always joined them). */
+function readOwnRecipes(db: AppDatabase, itemIds: string[]): Map<string, RecipeLine[]> {
   const out = new Map<string, RecipeLine[]>();
   if (itemIds.length === 0) return out;
   for (const r of db

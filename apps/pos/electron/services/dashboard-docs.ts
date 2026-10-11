@@ -567,6 +567,7 @@ export function menuChangedAt(db: AppDatabase): string | null {
          UNION ALL SELECT MAX(updated_at) FROM categories
          UNION ALL SELECT MAX(updated_at) FROM tax_categories
          UNION ALL SELECT MAX(updated_at) FROM recipes
+         UNION ALL SELECT MAX(updated_at) FROM recipe_links
          UNION ALL SELECT MAX(updated_at) FROM ingredient_costs
        )`,
     )

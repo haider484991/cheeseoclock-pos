@@ -1667,7 +1667,11 @@ export function menuLookup(db: AppDatabase): MenuLookup {
         .prepare(
           `SELECT DISTINCT r.menu_item_id AS id FROM recipes r
              JOIN ingredients i ON i.id = r.ingredient_id AND i.deleted_at IS NULL
-            WHERE r.deleted_at IS NULL`,
+            WHERE r.deleted_at IS NULL
+           UNION
+           SELECT DISTINCT l.menu_item_id AS id FROM recipe_links l
+             JOIN menu_items c ON c.id = l.component_item_id AND c.deleted_at IS NULL
+            WHERE l.deleted_at IS NULL`,
         )
         .all() as Array<{ id: string }>
     ).map((r) => r.id),

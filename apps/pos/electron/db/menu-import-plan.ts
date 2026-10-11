@@ -112,6 +112,13 @@ export interface MenuSnapshot {
   }>;
   /** Live recipe lines per menu item id. */
   recipes: Map<string, Array<{ ingredientId: string; qtyPerUnit: number; modifierId: string | null }>>;
+  /**
+   * The items whose recipes link other items' recipes (0.7.47: a deal linked
+   * to its burgers), each recipe opened up as the stock takes it: a file's
+   * recipe the same as that changes nothing, and with "keep the till's
+   * recipes" its links are a recipe the till has. Omitted = none.
+   */
+  linkedRecipes?: Map<string, Array<{ ingredientId: string; qtyPerUnit: number; modifierId: string | null }>>;
   taxCategories: Array<{ id: string; name: string; rateBps: number }>;
   modifierGroups: Array<{
     id: string;
@@ -1209,10 +1216,13 @@ export function planMenuImport(
 
     let recipeChange: MenuImportItemPlan['recipeChange'] = item.recipe.length > 0 ? 'skip' : 'none';
     if (recipe) {
-      const current = live.recipes.get(row.id) ?? [];
+      // A recipe linked to other items' recipes (0.7.47) is compared opened up: the lines the stock takes.
+      const linked = live.linkedRecipes?.get(row.id);
+      const current = linked ?? live.recipes.get(row.id) ?? [];
+      const file = recipe;
       const same =
-        current.length === recipe.length &&
-        recipe.every((l) => {
+        current.length === file.length &&
+        file.every((l) => {
           if (!('existingId' in l.ingredient)) return false;
           if (l.modifier && !('existingId' in l.modifier)) return false;
           const id = l.ingredient.existingId;
@@ -1223,15 +1233,25 @@ export function planMenuImport(
       if (same) {
         recipe = null;
         recipeChange = 'same';
-      } else if (current.length > 0 && policy.recipes === 'till') {
-        // The owner's rule: a recipe the till already has stays; an item with none still gets the file's.
+      } else if ((current.length > 0 || linked) && policy.recipes === 'till') {
+        // The owner's rule: a recipe the till already has stays (its links too); an item with none still gets the file's.
         recipe = null;
         recipeChange = 'kept';
-        kept.push(`recipe (${current.length} ${current.length === 1 ? 'line' : 'lines'}; the file has ${item.recipe.length})`);
+        kept.push(
+          linked
+            ? `recipe (linked to other items' recipes; the file has ${item.recipe.length} ${item.recipe.length === 1 ? 'line' : 'lines'})`
+            : `recipe (${current.length} ${current.length === 1 ? 'line' : 'lines'}; the file has ${item.recipe.length})`,
+        );
         summary.keptOnTill.recipes++;
       } else {
-        recipeChange = current.length === 0 ? 'set' : 'replace';
-        changes.push(current.length === 0 ? `recipe added (${item.recipe.length} lines)` : `recipe replaced (${current.length} → ${item.recipe.length} lines)`);
+        recipeChange = current.length === 0 && !linked ? 'set' : 'replace';
+        changes.push(
+          current.length === 0 && !linked
+            ? `recipe added (${item.recipe.length} lines)`
+            : linked
+              ? `recipe replaced (its links to other items' recipes → ${item.recipe.length} lines)`
+              : `recipe replaced (${current.length} → ${item.recipe.length} lines)`,
+        );
         summary.recipesSet++;
       }
     }

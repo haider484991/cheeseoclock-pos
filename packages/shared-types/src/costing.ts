@@ -358,6 +358,17 @@ export interface RecipeWhatIfLine {
   kind: PriceKind | 'missing';
 }
 
+/** A link to another item's recipe (0.7.47) as What if costs it: that many of the item at its recipe now. */
+export interface RecipeWhatIfLink {
+  componentItemId: string;
+  /** The choice it comes with; null = on every sale. */
+  modifierId: string | null;
+  qty: number;
+  costCents: number;
+  /** Its ingredients with no price yet (they add nothing). */
+  missingLines: number;
+}
+
 /** The dish as saved, or as tried: its plate at today's prices, as the recipe editor's footer works it out. */
 export interface RecipeWhatIfSide {
   hasRecipe: boolean;
@@ -372,6 +383,8 @@ export interface RecipeWhatIfSide {
   estimateLines: number;
   flag: FoodCostFlag;
   lines: RecipeWhatIfLine[];
+  /** Its links to other items' recipes (0.7.47), each costed. */
+  links: RecipeWhatIfLink[];
 }
 
 /**

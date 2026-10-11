@@ -11,6 +11,7 @@ import type { ApiResult } from './ipc.js';
 import type { LicenceStatus } from './licence.js';
 import type { DashLoginMade, DashLoginView, DashPushStatus, DashRole } from './dashboard.js';
 import type { MethodRatesBps } from './tax-by-method.js';
+import type { RecipeLinkInput, RecipeLinkView } from './recipe-links.js';
 import type { DeliveryChargeTaxSaved, DeliveryChargeTaxView, SaveDeliveryChargeTaxRequest } from './delivery-charge-tax.js';
 import type { AuthenticatedUser, User, Role } from './auth.js';
 import type {
@@ -1588,10 +1589,17 @@ export interface IpcContract {
       Array<Recipe & { ingredientName: string; unit: string; modifierName: string | null }>
     >;
   };
+  /** The item's links to other items' recipes (0.7.47): a deal's burgers and fries. */
+  'inventory:getRecipeLinks': {
+    request: { menuItemId: string };
+    response: ApiResult<RecipeLinkView[]>;
+  };
   'inventory:setRecipe': {
     request: {
       menuItemId: string;
       lines: Array<{ ingredientId: string; qtyPerUnit: number; modifierId?: string | null }>;
+      /** Its links to other items' recipes (0.7.47); absent = keep the ones it has. */
+      links?: RecipeLinkInput[];
     };
     response: ApiResult<{ menuItemId: string }>;
   };
@@ -1877,7 +1885,6 @@ export interface IpcContract {
     request: SetCostingTargetsRequest;
     response: ApiResult<CostingTargetsView>;
   };
-  /** The recipe editor's live footer: the recipe as typed, costed, not saved. */
   /**
    * What if on one dish (0.7.46): the recipe as saved and as tried — `lines`
    * as typed, `priceCents` another price before tax (absent = the menu's) —
@@ -1888,13 +1895,18 @@ export interface IpcContract {
       menuItemId: string;
       lines: Array<{ ingredientId: string; qtyPerUnit: number; modifierId?: string | null }>;
       priceCents?: number | null;
+      /** Its links as tried (0.7.47); absent = the ones it has. */
+      links?: RecipeLinkInput[];
     };
     response: ApiResult<RecipeWhatIf>;
   };
+  /** The recipe editor's live footer: the recipe as typed, costed, not saved. */
   'costing:recipeCost': {
     request: {
       menuItemId: string;
       lines: Array<{ ingredientId: string; qtyPerUnit: number; modifierId?: string | null }>;
+      /** Its links as typed (0.7.47); absent = the ones it has. */
+      links?: RecipeLinkInput[];
     };
     response: ApiResult<RecipeCostPreview>;
   };

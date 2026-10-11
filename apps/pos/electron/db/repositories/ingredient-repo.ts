@@ -4,8 +4,9 @@ import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { clearBatchRecipeLines } from './batch-recipe-repo.js';
+import { setRecipeLinksForItem } from './recipe-link-repo.js';
 import { convertSheetPrice, priceRowId, setIngredientPrice } from './ingredient-cost-repo.js';
-import type { Ingredient, IngredientCategory, PriceKind, PriceSource, Recipe } from '@cheeseoclock/shared-types';
+import type { Ingredient, IngredientCategory, PriceKind, PriceSource, Recipe, RecipeLinkInput } from '@cheeseoclock/shared-types';
 import {
   baseUnitConversion,
   convertPack,
@@ -801,4 +802,22 @@ export function setRecipeForItem(
     });
   });
   tx();
+}
+
+/**
+ * The recipe editor's Save (0.7.47): its own lines and — when given — its
+ * links to other items' recipes, in one transaction (absent links: the ones
+ * it has are kept).
+ */
+export function setRecipeWithLinks(
+  db: AppDatabase,
+  menuItemId: string,
+  lines: Array<{ ingredientId: string; qtyPerUnit: number; modifierId?: string | null }>,
+  links: readonly RecipeLinkInput[] | undefined,
+  actor: Actor,
+): void {
+  db.transaction(() => {
+    setRecipeForItem(db, menuItemId, lines, actor);
+    if (links !== undefined) setRecipeLinksForItem(db, menuItemId, links, actor);
+  })();
 }
