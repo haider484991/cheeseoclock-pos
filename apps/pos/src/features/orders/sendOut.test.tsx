@@ -601,8 +601,8 @@ describe('a Ready delivery card: "Send out", and "Assign rider" as a small link'
       expect(buttonsWith(c, 'Assign rider')).toEqual([]);
       expect(buttonsWith(c, 'Send out')).toEqual([]);
     }
-    // Byte for byte as before but for review fixes D's last row (undoRowD) and v0.7.36's Edit order pencil.
-    expect(sha256(undoRowD(undoEditIcon(cards.get('#0046')!)))).toBe(BEFORE.readyTakeaway);
+    // Byte for byte as before but for review fixes D's last row (undoRowD), v0.7.36's Edit order pencil and 0.7.45's one-line total.
+    expect(sha256(undoRowD(undoEditIcon(undoOneLine045(cards.get('#0046')!))))).toBe(BEFORE.readyTakeaway);
   });
 });
 
@@ -1756,6 +1756,12 @@ const iconLabels = (markup: string) => [...markup.matchAll(/<button type="button
 const EDIT_ICON = 'Edit order (add or take off items)';
 /** The card with v0.7.36's Edit order icon taken back out. */
 const undoEditIcon = (card: string) => card.replace(/<button type="button" aria-label="Edit order \(add or take off items\)".*?<\/button>/, '');
+
+/** The card with 0.7.45's one-line total and item count (whitespace-nowrap) as they were before. */
+const undoOneLine045 = (card: string) =>
+  card
+    .replace('class="whitespace-nowrap font-mono text-base font-bold', 'class="font-mono text-base font-bold')
+    .replace('class="whitespace-nowrap text-xs text-stone-500"', 'class="text-xs text-stone-500"');
 
 describe('a card’s last row fits the narrowest window (review fixes D): the icons go under the button when they must', () => {
   const KITCHEN = ['Reprint kitchen ticket', 'Print bill or receipt', 'Cancel order (manager approval)'];
