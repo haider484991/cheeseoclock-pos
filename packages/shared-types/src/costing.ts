@@ -345,6 +345,53 @@ export interface RecipeCostPreview {
   flag: FoodCostFlag;
 }
 
+// ------------------------------------------------- what if: one dish's amounts --
+
+/** One line of a recipe in What if: what it costs each time it is used (paisa, rounded once). */
+export interface RecipeWhatIfLine {
+  ingredientId: string;
+  /** The choice it is used with; null = on every sale. */
+  modifierId: string | null;
+  qty: number;
+  costCents: number;
+  /** 'missing': no price yet (it adds nothing). */
+  kind: PriceKind | 'missing';
+}
+
+/** The dish as saved, or as tried: its plate at today's prices, as the recipe editor's footer works it out. */
+export interface RecipeWhatIfSide {
+  hasRecipe: boolean;
+  /** The usual plate: every-sale lines, plus the usual picks of its required choices. */
+  costCents: number;
+  /** Its price before tax with the usual paid picks. */
+  priceCents: number;
+  foodCostBps: number | null;
+  /** What the price leaves after the food cost; null for a login without profit.view. */
+  leftCents: number | null;
+  missingLines: number;
+  estimateLines: number;
+  flag: FoodCostFlag;
+  lines: RecipeWhatIfLine[];
+}
+
+/**
+ * What if on one dish (0.7.46; the owner, 12 Oct 2026: "the recipe calculator
+ * should be really comprehensive — I wanted to know the cost of Regular Fries
+ * if I only decrease or increase the fries grams"): the recipe as saved and as
+ * tried (other amounts, another price before tax), side by side. Nothing saved.
+ */
+export interface RecipeWhatIf {
+  menuItemId: string;
+  name: string;
+  /** The price before tax on the menu now. */
+  basePriceCents: number;
+  targetBps: number;
+  saved: RecipeWhatIfSide;
+  tried: RecipeWhatIfSide;
+  /** Every ingredient either side uses, for the names and units. */
+  ingredients: Array<{ id: string; name: string; unit: string }>;
+}
+
 // ---------------------------------------------------------- missing costs --
 
 export interface MissingPriceRow {

@@ -211,6 +211,11 @@ export const recipeCostInputSchema = z.object({
     .max(500),
 });
 
+/** What if on one dish (0.7.46): the lines as tried, and another price before tax (up to Rs 1,000,000) if typed. */
+export const recipeWhatIfInputSchema = recipeCostInputSchema.extend({
+  priceCents: z.number().int().min(0).max(100_000_000).nullable().optional(),
+});
+
 /** What a stock row may stand for (stock_movements.detail): checked here, not by a table CHECK (costing spec D9). */
 export const movementDetailSchema = z.enum(MOVEMENT_DETAILS);
 

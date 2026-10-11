@@ -42,6 +42,7 @@ import { useDebouncedValue, useSessionState } from '../../components/list';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useCanSeeCosts } from '../costing/costingQueries';
+import { RecipeWhatIfDialog } from '../costing/RecipeWhatIfDialog';
 import { atLeast, noPriceText, thousandUnit } from '../costing/costingFormat';
 import { BatchCalculatorDialog } from './BatchCalculator';
 import { BatchCalculatorButton } from './BatchPicker';
@@ -105,6 +106,8 @@ export function RecipeCalculatorTab() {
   const [adding, setAdding] = useState(false);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [making, setMaking] = useState<{ ingredientId: string; amount: number } | null>(null);
+  // What if on one dish's amounts (0.7.46): the menu item it is open for.
+  const [whatIfId, setWhatIfId] = useState<string | null>(null);
 
   const itemsQ = useQuery({ queryKey: ['menu', 'items', 'all'], queryFn: () => ipc.menu.listItems() });
   const catsQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
@@ -234,6 +237,7 @@ export function RecipeCalculatorTab() {
                 onFocus={() => setFocusKey(focusKey === l.key ? null : l.key)}
                 onChange={(next) => setLine(l.key, next)}
                 onRemove={() => removeLine(l.key)}
+                onWhatIf={canCost && l.kind === 'item' ? () => setWhatIfId(l.menuItemId) : undefined}
               />
             ))}
           </div>
@@ -299,6 +303,9 @@ export function RecipeCalculatorTab() {
         </Card>
       )}
 
+      {whatIfId && itemsQ.data?.some((i) => i.id === whatIfId) && (
+        <RecipeWhatIfDialog item={itemsQ.data.find((i) => i.id === whatIfId)!} onClose={() => setWhatIfId(null)} />
+      )}
       {making && makingIngredient && (
         <BatchCalculatorDialog
           key={`${making.ingredientId}:${making.amount}`}
@@ -459,6 +466,7 @@ function LineCard({
   onFocus,
   onChange,
   onRemove,
+  onWhatIf,
 }: {
   line: CalcLine;
   picks: TypicalPicksView | undefined;
@@ -472,6 +480,8 @@ function LineCard({
   onFocus: () => void;
   onChange: (next: CalcLine) => void;
   onRemove: () => void;
+  /** What if on this dish's amounts (0.7.46); absent for a batch or a login that may not see costs. */
+  onWhatIf?: () => void;
 }) {
   return (
     <div className={cn('rounded-xl border p-4', focused ? 'border-amber-400 ring-2 ring-amber-200 dark:ring-amber-900' : 'border-stone-200 dark:border-stone-800')}>
@@ -488,6 +498,16 @@ function LineCard({
           )}
         </div>
         <div className="flex items-center gap-1">
+          {onWhatIf && (
+            <button
+              type="button"
+              onClick={onWhatIf}
+              title="Try other amounts or another price: what it costs to make"
+              className="rounded px-2 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-950/40"
+            >
+              What if: amounts
+            </button>
+          )}
           {multi && (
             <button type="button" onClick={onFocus} className="rounded px-2 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-950/40">
               {focused ? 'Show all together' : 'Show only this'}

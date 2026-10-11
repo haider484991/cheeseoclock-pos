@@ -6,7 +6,7 @@ import { formatCents, unitCostMc } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { BatchRecipe, Ingredient, MenuItem } from '@cheeseoclock/shared-types';
-import { X, Plus, Trash2, Edit, BookOpen, ChefHat, Soup, Calculator } from 'lucide-react';
+import { X, Plus, Trash2, Edit, BookOpen, ChefHat, Soup, Calculator, Scale } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
   FilterChips,
@@ -24,6 +24,9 @@ import { IngredientSelect } from './IngredientSelect';
 import { BatchCalculatorDialog } from './BatchCalculator';
 import { BatchCalculatorButton } from './BatchPicker';
 import { RecipeCostFooter } from '../costing/RecipeCostFooter';
+import { RecipeWhatIfDialog } from '../costing/RecipeWhatIfDialog';
+import { AddItemRecipeDialog } from './AddItemRecipeDialog';
+import { mergeRecipeLines } from './recipeFromItems';
 import { useCanSeeCosts } from '../costing/costingQueries';
 import { formatUnitPrice } from '../costing/costingFormat';
 
@@ -72,6 +75,9 @@ function MenuItemRecipes({ onCalculate }: { onCalculate?: (item: MenuItem) => vo
     queryFn: () => ipc.inventory.listRecipeLineCounts(),
   });
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
+  // What if on one dish's amounts (0.7.46).
+  const [whatIfItem, setWhatIfItem] = useState<MenuItem | null>(null);
+  const canCost = useCanSeeCosts();
   // "Open recipe" on the Costing page lands here with that item's recipe open.
   useDeepLinkOpen('inv.rec.openId', itemsQ.data, setEditingItem);
   const [category, setCategory] = useSessionState<string>('inv.rec.category', 'all');
@@ -134,6 +140,7 @@ function MenuItemRecipes({ onCalculate }: { onCalculate?: (item: MenuItem) => vo
             categoryName={catName(item.categoryId)}
             onEdit={() => setEditingItem(item)}
             onCalculate={onCalculate ? () => onCalculate(item) : undefined}
+            onWhatIf={canCost ? () => setWhatIfItem(item) : undefined}
           />
         ))}
         {list.total === 0 && (
@@ -161,6 +168,7 @@ function MenuItemRecipes({ onCalculate }: { onCalculate?: (item: MenuItem) => vo
       />
 
       {editingItem && <RecipeEditor item={editingItem} onClose={() => setEditingItem(null)} />}
+      {whatIfItem && <RecipeWhatIfDialog item={whatIfItem} onClose={() => setWhatIfItem(null)} />}
     </Card>
   );
 }
@@ -170,12 +178,15 @@ function RecipeCard({
   categoryName,
   onEdit,
   onCalculate,
+  onWhatIf,
 }: {
   item: MenuItem;
   categoryName: string;
   onEdit: () => void;
   /** Inventory → Recipe calculator on this item: how much of everything for N of it. */
   onCalculate?: () => void;
+  /** What if on its amounts (0.7.46); absent for a login that may not see costs. */
+  onWhatIf?: () => void;
 }) {
   const q = useQuery({
     queryKey: ['inventory', 'recipe', item.id],
@@ -203,6 +214,11 @@ function RecipeCard({
           <div className="text-xs text-stone-500">{categoryName}</div>
         </div>
         <div className="flex flex-wrap justify-end gap-1">
+          {onWhatIf && lines.length > 0 && (
+            <Button variant="secondary" size="sm" onClick={onWhatIf} title="Try other amounts or another price: what it costs to make">
+              <Scale className="h-3 w-3" /> What if
+            </Button>
+          )}
           {onCalculate && lines.length > 0 && (
             <Button variant="secondary" size="sm" onClick={onCalculate} title="How much of everything for 10 (or any number)">
               <Calculator className="h-3 w-3" /> Calculate
@@ -278,6 +294,8 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
   const choices = (groupsQ.data ?? []).flatMap((g) => g.modifiers.map((m) => ({ id: m.id, label: `${g.name}: ${m.name}` })));
 
   const [lines, setLines] = useState<EditLine[]>([]);
+  // "Add another item's recipe" (0.7.46): a deal built from the items on the menu.
+  const [addingFromItem, setAddingFromItem] = useState(false);
 
   useEffect(() => {
     if (existingQ.data) {
@@ -405,13 +423,38 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
                 </button>
               </div>
             ))}
-            <Button variant="secondary" size="sm" onClick={addLine}>
-              <Plus className="h-3 w-3" /> Add ingredient
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" size="sm" onClick={addLine}>
+                <Plus className="h-3 w-3" /> Add ingredient
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setAddingFromItem(true)}
+                title="Copy the ingredients of items already on the menu — two burgers and a fries for a deal"
+              >
+                <BookOpen className="h-3 w-3" /> Add another item&rsquo;s recipe
+              </Button>
+            </div>
           </div>
           <div className="border-t border-stone-200 px-5 py-3 dark:border-stone-800">
             <RecipeCostFooter menuItemId={item.id} lines={lines} />
           </div>
+          {addingFromItem && (
+            <AddItemRecipeDialog
+              forItem={item}
+              choices={choices}
+              groups={groupsQ.data ?? []}
+              ingredients={ingredientsQ.data}
+              onClose={() => setAddingFromItem(false)}
+              onAdd={(added, summary) => {
+                // Merged as the editor holds lines: an ingredient already there for the same choice gets the amount added.
+                setLines((prev) => mergeRecipeLines(prev.filter((l) => l.ingredientId !== '' || l.qtyPerUnit > 0), added));
+                setAddingFromItem(false);
+                toast({ title: `Added: ${summary}`, description: 'Check the amounts, then Save recipe.', variant: 'success' });
+              }}
+            />
+          )}
           <footer className="flex items-center justify-end gap-2 border-t border-stone-200 p-5 dark:border-stone-800">
             {problem && <span className="mr-auto text-xs text-red-700 dark:text-red-400">{problem}</span>}
             <Button variant="secondary" onClick={onClose}>

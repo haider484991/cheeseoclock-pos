@@ -8,6 +8,7 @@ import {
   markCostAlertsSeenInputSchema,
   recipeCalcInputSchema,
   recipeCostInputSchema,
+  recipeWhatIfInputSchema,
   setChannelFeesInputSchema,
   setCostAlertSettingsInputSchema,
   setCostingTargetsInputSchema,
@@ -26,6 +27,8 @@ import {
   itemCostSheetForLogin,
   menuCostsForLogin,
   previewRecipeCost,
+  recipeWhatIf,
+  recipeWhatIfForLogin,
 } from '../../services/costing-service.js';
 import {
   getChannelFees,
@@ -123,6 +126,18 @@ export function registerCostingHandlers(ctx: HandlerContext, deps: CostingHandle
     const parsed = recipeCostInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
     return ok(previewRecipeCost(ctx.db, parsed.data.menuItemId, parsed.data.lines));
+  });
+
+  // What if on one dish (0.7.46): costs for anyone who may see them; what the price leaves is profit.view's.
+  defineHandler('costing:recipeWhatIf', ctx, (_ctx, payload) => {
+    const s = requireCosts();
+    const parsed = recipeWhatIfInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    try {
+      return ok(recipeWhatIfForLogin(recipeWhatIf(ctx.db, parsed.data), mayProfit(s)));
+    } catch (e) {
+      return err({ code: 'not_found', message: e instanceof Error ? e.message : 'Menu item not found' });
+    }
   });
 
   defineHandler('costing:batchCalc', ctx, (_ctx, payload) => {

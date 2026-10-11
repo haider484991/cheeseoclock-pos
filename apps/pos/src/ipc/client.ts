@@ -478,6 +478,7 @@ export const ipc = {
     getTargets: () => unwrap(window.api.costing.getTargets()),
     setTargets: (input: IpcRequest<'costing:setTargets'>) => unwrap(window.api.costing.setTargets(input)),
     recipeCost: (input: IpcRequest<'costing:recipeCost'>) => unwrap(window.api.costing.recipeCost(input)),
+    recipeWhatIf: (input: IpcRequest<'costing:recipeWhatIf'>) => unwrap(window.api.costing.recipeWhatIf(input)),
     batchCalc: (input: IpcRequest<'costing:batchCalc'>) => unwrap(window.api.costing.batchCalc(input)),
     /** The recipe calculator with its costs (COST_CAPABILITY). */
     recipeCalc: (input: IpcRequest<'costing:recipeCalc'>) => unwrap(window.api.costing.recipeCalc(input)),

@@ -16,9 +16,11 @@
 import {
   DEFAULT_PRICE_STEP_CENTS,
   confirmAll,
+  costLines,
   findMissingCosts,
   foodCostFlag,
   maxBatchAmount,
+  mcToCents,
   mulDivRound,
   plateCost,
   priceChangeBps,
@@ -62,6 +64,8 @@ import {
   type MissingCosts,
   type MissingPriceRow,
   type RecipeCostPreview,
+  type RecipeWhatIf,
+  type RecipeWhatIfSide,
   type SetCostingTargetsRequest,
   type WhatIfIngredient,
   type WhatIfRequest,
@@ -637,6 +641,70 @@ export function previewRecipeCost(
     targetConfirmed: t.confirmed,
     flag: flagOf(ctx, item, pc),
   };
+}
+
+/**
+ * What if on one dish (0.7.46; the owner, 12 Oct 2026: "the recipe calculator
+ * should be really comprehensive right now I wanted to know the cost of
+ * regular fries only if I only decrease the fries or increase the fries gram
+ * I couldn't do it"): the recipe as saved and as tried — other amounts, and
+ * another price before tax when one is typed — side by side at today's
+ * prices. Each side is the plate the recipe editor's footer and the cost
+ * sheet work out (the every-sale lines plus the customers' usual picks), its
+ * food cost and flag, what the price leaves after it, and each line's cost
+ * each time it is used. Writes nothing.
+ */
+export function recipeWhatIf(
+  db: AppDatabase,
+  input: {
+    menuItemId: string;
+    lines: ReadonlyArray<{ ingredientId: string; qtyPerUnit: number; modifierId?: string | null }>;
+    priceCents?: number | null;
+  },
+  now = new Date(),
+): RecipeWhatIf {
+  const ctx = loadCtx(db, now, { kind: 'item', itemId: input.menuItemId });
+  const item = ctx.menu.items.find((i) => i.id === input.menuItemId);
+  if (!item) throw new Error('Menu item not found');
+  const savedRecipe = ctx.menu.recipes.get(item.id) ?? [];
+  const triedRecipe: RecipeLine[] = input.lines
+    .filter((l) => l.ingredientId && l.qtyPerUnit > 0)
+    .map((l) => ({ ingredientId: l.ingredientId, qtyPerUnit: l.qtyPerUnit, modifierId: l.modifierId ?? null }));
+  const side = (recipe: readonly RecipeLine[], basePriceCents: number): RecipeWhatIfSide => {
+    const priced = { ...item, basePriceCents };
+    const pc = plateOf(ctx, priced, [...recipe]);
+    return {
+      hasRecipe: pc.hasRecipe,
+      costCents: pc.typicalCostCents,
+      priceCents: pc.typicalPriceCents,
+      foodCostBps: pc.foodCostBps,
+      leftCents: pc.profitCents,
+      missingLines: pc.missingLines,
+      estimateLines: pc.estimateLines,
+      flag: flagOf(ctx, priced, pc),
+      lines: recipe.map((l) => {
+        const c = costLines([{ ingredientId: l.ingredientId, qty: l.qtyPerUnit }], ctx.priceOf).lines[0]!;
+        return { ingredientId: l.ingredientId, modifierId: l.modifierId ?? null, qty: l.qtyPerUnit, costCents: mcToCents(c.costMc), kind: c.kind };
+      }),
+    };
+  };
+  const price = typeof input.priceCents === 'number' ? input.priceCents : item.basePriceCents;
+  const ids = [...new Set([...savedRecipe, ...triedRecipe].map((l) => l.ingredientId))];
+  return {
+    menuItemId: item.id,
+    name: item.name,
+    basePriceCents: item.basePriceCents,
+    targetBps: targetOf(ctx, item.categoryId).bps,
+    saved: side(savedRecipe, item.basePriceCents),
+    tried: side(triedRecipe, price),
+    ingredients: ids.map((id) => ({ id, name: ingredientName(ctx.book, id), unit: ctx.book.ingredients.get(id)?.unit ?? '' })),
+  };
+}
+
+/** What if for a login without profit.view: no "left after the food cost" (owner, 2026-09-27). */
+export function recipeWhatIfForLogin(w: RecipeWhatIf, canSeeProfit: boolean): RecipeWhatIf {
+  if (canSeeProfit) return w;
+  return { ...w, saved: { ...w.saved, leftCents: null }, tried: { ...w.tried, leftCents: null } };
 }
 
 function missingOf(ctx: Ctx): MissingCosts {

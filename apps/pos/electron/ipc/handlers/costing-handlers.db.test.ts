@@ -25,7 +25,7 @@
  * missing. Every name and price is made up.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AuthenticatedUser, BatchCalc, CostingTargetsView, ItemCostSheet, MenuCostsView, MissingCosts, UUID } from '@cheeseoclock/shared-types';
+import type { AuthenticatedUser, BatchCalc, CostingTargetsView, ItemCostSheet, MenuCostsView, MissingCosts, RecipeWhatIf, UUID } from '@cheeseoclock/shared-types';
 import { DatabaseSync, DEV, MANAGER as MANAGER_ACTOR, openCostingShop, openMigrated } from '../../db/costing-shop.fixture.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
@@ -114,6 +114,8 @@ const READ_CHANNELS = (): Record<string, unknown> => ({
   'costing:missingCosts': undefined,
   'costing:getTargets': undefined,
   'costing:recipeCost': { menuItemId: s.item.fajitaM, lines: [] },
+  // What if on one dish (0.7.46): other amounts and another price, side by side; what the price leaves is profit.view's.
+  'costing:recipeWhatIf': { menuItemId: s.item.fajitaM, lines: [] },
   'costing:batchCalc': { ingredientId: s.ing.sauce, amount: 200 },
   // The recipe calculator's costs (recipe-calc-handlers.db.test.ts has the rest).
   'costing:recipeCalc': { lines: [{ kind: 'item', menuItemId: s.item.fajitaM, count: 10, portions: [] }] },
@@ -473,6 +475,40 @@ live('the item cost sheet', () => {
     });
     expect(await call('costing:recipeCost', { menuItemId: 'no-such-item', lines: [] })).toMatchObject({ ok: false, code: 'precondition_failed' });
   });
+
+  it('What if (0.7.46): Crispy Wings with 200 g of chicken instead of 150 — each line, the plate, the food cost; what the price leaves only for the owner', async () => {
+    h.session = MANAGER;
+    const tried = [
+      { ingredientId: s.ing.chicken, qtyPerUnit: 200, modifierId: null },
+      { ingredientId: s.ing.breading, qtyPerUnit: 50, modifierId: null },
+      { ingredientId: s.ing.salt, qtyPerUnit: 2, modifierId: null },
+    ];
+    const w = await data<RecipeWhatIf>('costing:recipeWhatIf', { menuItemId: s.item.crispyWings, lines: tried });
+    expect(w).toMatchObject({ menuItemId: s.item.crispyWings, name: 'Crispy Wings', basePriceCents: 90_000 });
+    // Chicken Rs 900 / kg: 150 g = Rs 135, 200 g = Rs 180; the breading a guessed Rs 10; salt free.
+    expect(w.saved).toMatchObject({ hasRecipe: true, costCents: 14_500, priceCents: 90_000, foodCostBps: 1611, leftCents: null, estimateLines: 1 });
+    expect(w.tried).toMatchObject({ hasRecipe: true, costCents: 19_000, priceCents: 90_000, foodCostBps: 2111, leftCents: null });
+    expect(w.saved.lines.map((l) => [l.qty, l.costCents, l.kind])).toEqual([
+      [150, 13_500, 'set'],
+      [50, 1_000, 'estimate'],
+      [2, 0, 'free'],
+    ]);
+    expect(w.tried.lines[0]).toMatchObject({ ingredientId: s.ing.chicken, qty: 200, costCents: 18_000 });
+    expect(w.ingredients.map((i) => [i.name, i.unit])).toEqual([
+      ['Test chicken', 'g'],
+      ['Test breading', 'g'],
+      ['Test salt', 'g'],
+    ]);
+    // Another price before tax: the tried side only.
+    const priced = await data<RecipeWhatIf>('costing:recipeWhatIf', { menuItemId: s.item.crispyWings, lines: tried, priceCents: 100_000 });
+    expect([priced.saved.priceCents, priced.tried.priceCents, priced.tried.foodCostBps]).toEqual([90_000, 100_000, 1900]);
+    // The owner also sees what the price leaves after the food cost.
+    h.session = OWNER;
+    const o = await data<RecipeWhatIf>('costing:recipeWhatIf', { menuItemId: s.item.crispyWings, lines: tried });
+    expect([o.saved.leftCents, o.tried.leftCents]).toEqual([75_500, 71_000]);
+    expect(await call('costing:recipeWhatIf', { menuItemId: 'no-such-item', lines: [] })).toMatchObject({ ok: false, code: 'not_found' });
+    expect(await call('costing:recipeWhatIf', { menuItemId: s.item.crispyWings, lines: [], priceCents: -1 })).toMatchObject({ ok: false, code: 'validation_failed' });
+  });
 });
 
 live('Missing costs', () => {
@@ -692,6 +728,7 @@ live('the costing channels and a growing order history', () => {
     // the recipe editor's footer and the cost sheet read one item's sales, not the menu's
     for (const [channel, payload] of [
       ['costing:recipeCost', { menuItemId: s.item.fajitaM, lines: [] }],
+      ['costing:recipeWhatIf', { menuItemId: s.item.fajitaM, lines: [] }],
       ['costing:itemSheet', { menuItemId: s.item.fajitaM }],
     ] as const) {
       const sales = (await sqlOf(channel, payload)).filter((q) => /\border_items\b/.test(q));

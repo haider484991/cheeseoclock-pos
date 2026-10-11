@@ -308,6 +308,7 @@ const api: RendererApi = {
     getTargets: () => invoke('costing:getTargets', undefined),
     setTargets: (req) => invoke('costing:setTargets', req),
     recipeCost: (req) => invoke('costing:recipeCost', req),
+    recipeWhatIf: (req) => invoke('costing:recipeWhatIf', req),
     batchCalc: (req) => invoke('costing:batchCalc', req),
     recipeCalc: (req) => invoke('costing:recipeCalc', req),
     alerts: () => invoke('costing:alerts', undefined),

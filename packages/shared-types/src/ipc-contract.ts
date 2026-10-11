@@ -161,6 +161,7 @@ import type {
   MenuCostsView,
   MissingCosts,
   RecipeCostPreview,
+  RecipeWhatIf,
   SetCostAlertSettingsRequest,
   SetCostingTargetsRequest,
 } from './costing.js';
@@ -1877,6 +1878,19 @@ export interface IpcContract {
     response: ApiResult<CostingTargetsView>;
   };
   /** The recipe editor's live footer: the recipe as typed, costed, not saved. */
+  /**
+   * What if on one dish (0.7.46): the recipe as saved and as tried — `lines`
+   * as typed, `priceCents` another price before tax (absent = the menu's) —
+   * costed side by side at today's prices. Nothing is saved.
+   */
+  'costing:recipeWhatIf': {
+    request: {
+      menuItemId: string;
+      lines: Array<{ ingredientId: string; qtyPerUnit: number; modifierId?: string | null }>;
+      priceCents?: number | null;
+    };
+    response: ApiResult<RecipeWhatIf>;
+  };
   'costing:recipeCost': {
     request: {
       menuItemId: string;

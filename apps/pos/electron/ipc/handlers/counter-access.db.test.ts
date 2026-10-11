@@ -389,6 +389,8 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   'costing:missingCosts': undefined,
   'costing:getTargets': undefined,
   'costing:recipeCost': { menuItemId: 'no-such-item', lines: [] },
+  // What if on one dish (0.7.46): costs, like the recipe editor's footer.
+  'costing:recipeWhatIf': { menuItemId: 'no-such-item', lines: [] },
   'costing:batchCalc': { ingredientId: 'no-such-ingredient', amount: 200 },
   'costing:recipeCalc': { lines: [{ kind: 'batch', ingredientId: 'no-such-ingredient', amount: 200 }] },
   // Prices and their history (costing spec Phase 4): costs, both ways.
