@@ -16,7 +16,7 @@ import { useMemo, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
-import type { Ingredient, MenuItem, Recipe, RecipeLinkView } from '@cheeseoclock/shared-types';
+import { isDeliveryChargeName, type Ingredient, type MenuItem, type Recipe, type RecipeLinkView } from '@cheeseoclock/shared-types';
 import { Link2, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { itemForChoice, linesFromItem, MAX_TIMES, withoutCopiedLines, type DraftLine, type DraftLink } from './recipeFromItems';
@@ -71,9 +71,12 @@ export function AddItemRecipeDialog({
   const itemsQ = useQuery({ queryKey: ['menu', 'items', 'all'], queryFn: () => ipc.menu.listItems() });
   const countsQ = useQuery({ queryKey: ['inventory', 'recipeLineCounts'], queryFn: () => ipc.inventory.listRecipeLineCounts() });
   const lineCount = useMemo(() => new Map((countsQ.data ?? []).map((c) => [c.menuItemId, c.lineCount])), [countsQ.data]);
-  // Every other item, A to Z: one without a recipe yet can be linked too (the deal follows it once it has one).
+  // Every other item but the delivery charges, A to Z: one without a recipe yet can be linked too (the deal follows it once it has one).
   const sources = useMemo(
-    () => (itemsQ.data ?? []).filter((i) => i.id !== forItem.id).sort((a, b) => a.name.localeCompare(b.name)),
+    () =>
+      (itemsQ.data ?? [])
+        .filter((i) => i.id !== forItem.id && !isDeliveryChargeName(i.name))
+        .sort((a, b) => a.name.localeCompare(b.name)),
     [itemsQ.data, forItem.id],
   );
   const hasRecipe = (id: string) => (lineCount.get(id) ?? 0) > 0;
