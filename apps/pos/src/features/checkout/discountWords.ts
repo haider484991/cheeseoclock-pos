@@ -96,6 +96,8 @@ export function drawerDiscountLabel(
  */
 export function receiptDiscountLabel(d: Discount, items: ReadonlyArray<Line>): string {
   if (d.freeOrder === true) return d.reason ? `${FREE_ORDER_LABEL} (${d.reason})` : FREE_ORDER_LABEL;
+  // An offer on some categories (0.7.44): its name alone, as the printed bill says it.
+  if (d.source === 'offer' && d.reason && (d.offer?.categoryIds?.length ?? 0) > 0) return d.reason;
   const tags = discountLeftAloneTags(d, items).join(', ');
   if (d.source === 'offer' && d.reason) return tags ? `${d.reason} (${tags})` : d.reason;
   const what = d.reason ?? amountWords(d);
@@ -120,7 +122,7 @@ export function offerOnOrder(d: Discount | null | undefined): { name: string; de
 export function cartOfferDetail(d: Discount, items: ReadonlyArray<Line>): string {
   // An offer on some categories (0.7.44) says which: never the delivery charge or a value deal anyway.
   const on = d.offer?.categoryNames ?? [];
-  if (on.length > 0) return ` · automatic offer on ${on.join(', ')}`;
+  if (on.length > 0) return ` · on ${on.join(', ')}`;
   const tags = discountLeftAloneTags(d, items);
   return tags.length > 0 ? ` · automatic offer, ${tags.join(', ')}` : ' · automatic offer';
 }

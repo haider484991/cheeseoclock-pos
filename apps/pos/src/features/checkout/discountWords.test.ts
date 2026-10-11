@@ -175,7 +175,11 @@ describe('several offers on one order (0.7.44)', () => {
 
   it('an offer on some categories says which; its × says what it does', () => {
     const pizzas = row({ offer: { name: 'Test 20% off pizzas', categoryIds: ['c1'], categoryNames: ['Regular Pizzas'], declined: false } });
-    expect(cartOfferDetail(pizzas, [])).toBe(' · automatic offer on Regular Pizzas');
+    expect(cartOfferDetail(pizzas, [])).toBe(' · on Regular Pizzas');
+    // The receipt on screen: its name alone, as the printed bill (never "not on value deals": it never could be).
+    expect(receiptDiscountLabel({ ...(pizzas as object), reason: 'Test 20% off pizzas' } as never, [{ menuItemName: 'Big Two', noDiscount: true }])).toBe(
+      'Test 20% off pizzas',
+    );
     expect(offerRowAction(pizzas)).toBe('Take “Test 20% off pizzas” off this order');
     expect(offerRowAction(row({ offer: { name: 'Test 20% off pizzas', declined: true } }))).toBe('Put “Test 20% off pizzas” back');
   });
