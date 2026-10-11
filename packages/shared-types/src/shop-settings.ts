@@ -556,6 +556,16 @@ export interface ChannelOffer {
   /** A % of the food (whole %, 1–50) or rupees off (paisa, whole rupees, Rs 1–5,000). */
   type: 'percent' | 'flat';
   value: number;
+  /**
+   * The menu categories it comes off (the owner, 11 Oct 2026: "category
+   * discounts … like we have 10 percent offer on entire menu and separate 20
+   * percent off on regular pizzas so they don't conflict"): absent or null =
+   * the whole menu, as every offer before 0.7.44. An item whose category
+   * has an offer of its own that fits gets THAT offer and never the
+   * whole-menu one too; each offer prints on its own line. Value deals and
+   * the delivery charge never take a category offer.
+   */
+  categoryIds?: string[] | null;
   /** Only when the food comes to at least this (paisa, whole rupees); null = any order. */
   minOrderCents: number | null;
   /** The most it takes off one order (paisa, whole rupees); null = no limit. */
@@ -596,6 +606,8 @@ export interface DiscountOffers {
 }
 
 export const OFFERS_MAX = 10;
+/** The most categories one offer names. */
+export const OFFER_CATEGORIES_MAX = 30;
 export const OFFER_NAME_MAX = 30;
 export const OFFER_MAX_PERCENT = 50;
 /** Rs 5,000 off at most. */
@@ -787,6 +799,10 @@ export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Obj
   'kitchen.timing': 1,
   'stock.rules': 1,
   'menu.importPolicy': 1,
+  // Still 1 with an offer's categories (`categoryIds`, v0.7.44): a value without them is the same as
+  // before, and a till older than 0.7.44 reads an offer WITH them as a newer till's (a field inside an
+  // offer it does not know: shared-schemas storedFormatIsNewer) and puts no offer on — never one on
+  // the whole menu that was meant for a category.
   'discounts.offers': 1,
   'orders.reasons': 1,
   // 2 since v0.7.37: `alsoDelivery` (a format-1 value reads it as false).
@@ -1179,6 +1195,12 @@ export interface OfferTerms {
   /** When 'discounts.offers' was saved (its updated_at); null = never saved. */
   settingsAt: string | null;
   /**
+   * The categories it came off (ChannelOffer.categoryIds), frozen with it.
+   * Written only for an offer on some categories: absent = the whole menu
+   * (every offer frozen before 0.7.44 reads so).
+   */
+  categoryIds?: string[];
+  /**
    * The cashier took the offer off this order (the × on its line): the row
    * stays at Rs 0 so the offer does not come straight back; "Put it back"
    * removes it. Absent = the offer is on.
@@ -1197,6 +1219,15 @@ export interface OfferTerms {
 export interface OfferRule extends DiscountBaseRule {
   from: 'till';
   offer: OfferTerms;
+  /**
+   * The order lines (order_items ids) it came off, on an order where an offer
+   * on some categories is on: each such offer its categories' lines, the
+   * whole-menu offer the food they left. Worked out again with its amount at
+   * every cart change (recomputeOrderTotals) — so the tax split, the FBR
+   * invoice and the bill read each offer over its own lines. Absent = every
+   * line its scope lets it come off (every order with one offer, as before).
+   */
+  lines?: string[];
 }
 
 /** An automatic offer on the order snapshot (cart, Pay, bill, the order drawer). */
@@ -1209,6 +1240,9 @@ export interface OfferShare {
   maxOffCents: number | null;
   /** Taken off this order by the cashier (Rs 0, "Put it back" undoes it). */
   declined: boolean;
+  /** An offer on some categories (OfferTerms.categoryIds): their ids, and their names as the menu has them now. */
+  categoryIds?: string[];
+  categoryNames?: string[];
 }
 
 /** A discount's foodpanda figures, on the order snapshot (bill, receipt, Pay). */

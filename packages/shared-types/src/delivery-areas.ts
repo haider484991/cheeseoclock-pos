@@ -412,10 +412,14 @@ export function discountBillLabel(
     readonly alsoOffDeliveryCharge?: boolean;
     readonly skipsNoDiscountLines?: boolean;
     readonly freeOrder?: boolean;
+    /** An automatic offer's categories (0.7.44): its name says which items, so no tags. */
+    readonly offer?: { readonly categoryIds?: ReadonlyArray<string> } | null;
   },
   items: ReadonlyArray<{ readonly menuItemName?: string | null; readonly noDiscount?: boolean }>,
 ): string {
   if (d.freeOrder === true) return d.reason ? `Free order (${d.reason})` : 'Free order';
+  // An offer on some categories prints as its name alone: it never came off a delivery charge or a value deal.
+  if (d.source === 'offer' && d.reason && (d.offer?.categoryIds?.length ?? 0) > 0) return d.reason;
   const tags = discountLeftAloneTags(d, items);
   const said = tags.join(', ');
   // The foodpanda deal's label, and an automatic offer's NAME (its reason), print as themselves.
@@ -522,13 +526,19 @@ export function deliveryBillOf(s: {
     readonly digitalNetCents?: number | null;
   };
   readonly items: ReadonlyArray<{
+    readonly id?: string;
     readonly menuItemName?: string | null;
     readonly lineTotalCents: number;
     readonly taxRateBps?: number;
     /** The line's card rate (0052); absent / null = none. */
     readonly digitalRateBps?: number | null;
   }>;
-  readonly discounts: ReadonlyArray<{ readonly alsoOffDeliveryCharge?: boolean }>;
+  readonly discounts: ReadonlyArray<{
+    readonly alsoOffDeliveryCharge?: boolean;
+    readonly amountCents?: number;
+    /** The lines the row came off, when it names them (several offers, 0.7.44). */
+    readonly lineIds?: ReadonlyArray<string>;
+  }>;
 }): DeliveryBill | null {
   const { order } = s;
   if (order.mode !== 'delivery') return null;
@@ -538,7 +548,19 @@ export function deliveryBillOf(s: {
 
   const chargeLines = s.items.filter((l) => isDeliveryChargeLine(l));
   const foodLines = s.items.filter((l) => !isDeliveryChargeLine(l));
-  const tookDiscount = order.discountCents > 0 && s.discounts[s.discounts.length - 1]?.alsoOffDeliveryCharge !== false;
+  // Several offers (0.7.44) name the lines each came off: the charge took one when a row taking
+  // something off names a charge line. Any other order: the newest row's frozen rule, as before.
+  const chargeIds = new Set(chargeLines.map((l) => l.id).filter((id): id is string => typeof id === 'string'));
+  const tookDiscount =
+    order.discountCents > 0 &&
+    (s.discounts.some((d) => Array.isArray(d.lineIds))
+      ? s.discounts.some(
+          (d) =>
+            (d.amountCents ?? 0) > 0 &&
+            d.alsoOffDeliveryCharge !== false &&
+            (!Array.isArray(d.lineIds) || d.lineIds.some((id) => chargeIds.has(id))),
+        )
+      : s.discounts[s.discounts.length - 1]?.alsoOffDeliveryCharge !== false);
   // Paid, in part or in full, by card / wallet / bank (0052): the tax is no
   // longer each line at its own rate, so the whole of it prints on one line
   // — at the card rate when the whole bill went by card, with no rate when

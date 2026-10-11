@@ -3,6 +3,7 @@ import { DEFAULT_DISCOUNT_OFFERS, type ChannelOffer } from '@cheeseoclock/shared
 import { discountOffersSchema } from '@cheeseoclock/shared-schemas';
 import {
   OFFER_RULES_NOTE,
+  categoryWords,
   dayWords,
   hourWords,
   newOfferForm,
@@ -165,5 +166,54 @@ describe('the on / off switch on an offer’s row (saved at once)', () => {
       ['Test second, renamed', true],
     ]);
     expect(withOfferSwitched(sent, 'test-wa').offers[0]!.on).toBe(true);
+  });
+});
+
+/**
+ * Offers on some categories (the owner, 11 Oct 2026: "10 percent offer on
+ * entire menu and separate 20 percent off on regular pizzas so they don't
+ * conflict"). Made-up categories.
+ */
+describe('an offer on some categories', () => {
+  const NAMES = new Map([
+    ['cat-pizza', 'Regular Pizzas'],
+    ['cat-burger', 'Burgers'],
+  ]);
+  const pizzas = offer({ id: 'test-pizza', name: 'Test 20% pizzas', value: 20, cameBy: 'any', categoryIds: ['cat-pizza'] });
+
+  it('round-trips its categories, and what it saves passes the main process’s schema', () => {
+    const v = { v: 1, askCameBy: false, offers: [pizzas, offer()] };
+    const back = offersFromForm(offersToForm(v));
+    expect(back.problem).toBeNull();
+    expect(back.value).toEqual(v);
+    expect(discountOffersSchema.safeParse(back.value).success).toBe(true);
+  });
+
+  it('a whole-menu offer writes NO categories field at all (an older till reads it as before)', () => {
+    const f = offersToForm({ v: 1, askCameBy: false, offers: [offer()] });
+    expect(f.offers[0]).toMatchObject({ onCategories: false, categoryIds: [] });
+    expect(offersFromForm(f).value?.offers[0]).not.toHaveProperty('categoryIds');
+    // Ticked and unticked again: still none.
+    const again = { ...f, offers: [{ ...f.offers[0]!, onCategories: true, categoryIds: ['cat-pizza'] }] };
+    expect(offersFromForm({ ...again, offers: [{ ...again.offers[0]!, onCategories: false }] }).value?.offers[0]).not.toHaveProperty('categoryIds');
+  });
+
+  it('“Only some categories” with none picked is refused, naming the offer', () => {
+    const f = offersToForm({ v: 1, askCameBy: false, offers: [pizzas] });
+    expect(offersFromForm({ ...f, offers: [{ ...f.offers[0]!, categoryIds: [] }] }).problem).toBe(
+      '“Test 20% pizzas”: pick at least one category, or “The whole menu”.',
+    );
+  });
+
+  it('its line says which categories; one deleted since says so', () => {
+    expect(offerSummary(pizzas, true, NAMES)).toBe('20% off Regular Pizzas only · deliveries · any way it came in · every day, all day');
+    expect(categoryWords(['cat-pizza', 'cat-burger'], NAMES)).toBe('Regular Pizzas and Burgers');
+    expect(categoryWords(['cat-pizza', 'cat-gone'], NAMES)).toBe('Regular Pizzas and a category no longer on the menu');
+  });
+
+  it('its example: their items take it, the rest the whole-menu offer, never both', () => {
+    expect(offerExample(pizzas, false, NAMES)).toBe(
+      'A delivery with Rs 2,000 of Regular Pizzas: 20% off takes Rs 400 off them, on its own line of the bill. The rest of the food takes your whole-menu offer, if one fits — never both on one item.',
+    );
   });
 });

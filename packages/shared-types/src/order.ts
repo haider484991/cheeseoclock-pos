@@ -214,6 +214,13 @@ export interface OrderDiscount {
    * PIN and a reason (`reason`). Absent = any other discount.
    */
   freeOrder?: boolean;
+  /**
+   * The order lines (items' ids) this discount came off, when its row says
+   * (an order carrying an offer on some categories: OfferRule.lines). The
+   * bill's readers split each such discount over these lines only. Absent =
+   * every line its scope lets it come off, as always.
+   */
+  lineIds?: string[];
 }
 
 export interface Payment {

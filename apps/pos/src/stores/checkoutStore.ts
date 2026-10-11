@@ -175,7 +175,8 @@ interface CheckoutState {
    * The × on one of the owner's automatic offers takes it off this order
    * (it stays off); clearing that again puts the offers back.
    */
-  clearDiscount: (approverPin?: string) => Promise<void>;
+  /** `discountId`: one offer of several on the order (0.7.44) — taken off, or put back. */
+  clearDiscount: (approverPin?: string, discountId?: string) => Promise<void>;
   /**
    * Before Pay opens: the customer typed in is saved on the order, so the
    * bill Pay shows is final — an automatic offer that needs the customer's
@@ -653,12 +654,12 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
       });
     },
 
-    clearDiscount(approverPin) {
+    clearDiscount(approverPin, discountId) {
       return run(async () => {
         if (get().edit) return editWith({ op: 'clearDiscount' });
         const snap = get().snapshot;
         if (!snap) return;
-        const next = await ipc.orders.clearDiscount(snap.order.id, approverPin);
+        const next = await ipc.orders.clearDiscount(snap.order.id, approverPin, discountId);
         set({ snapshot: next });
       });
     },

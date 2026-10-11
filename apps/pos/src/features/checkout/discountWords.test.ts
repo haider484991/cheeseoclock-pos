@@ -9,6 +9,8 @@ import {
   billLeavesOut,
   cartDiscountDetail,
   cartOfferDetail,
+  offerRowAction,
+  severalOffersOn,
   drawerDiscountLabel,
   payDiscountLabel,
   receiptDiscountLabel,
@@ -154,5 +156,27 @@ describe('a Free order (v0.7.36) on every screen', () => {
     expect(drawerDiscountLabel('Staff meal', false, null, false, true)).toBe('Free order (Staff meal)');
     expect(receiptDiscountLabel(free, deal)).toBe('Free order (Staff meal)');
     expect(receiptDiscountLabel({ ...free, reason: null }, deal)).toBe('Free order');
+  });
+});
+
+describe('several offers on one order (0.7.44)', () => {
+  const row = (over: Record<string, unknown> = {}) =>
+    ({ discountType: 'percent', value: 10, reason: 'Test 10% off', source: 'offer', amountCents: 7_000, ...over }) as never;
+
+  it('listed one by one when all are offers and there are several, or one names its lines or categories', () => {
+    expect(severalOffersOn([row(), row({ reason: 'Test 20% off pizzas' })])).toHaveLength(2);
+    expect(severalOffersOn([row({ lineIds: ['l1'] })])).toHaveLength(1);
+    expect(severalOffersOn([row({ offer: { categoryIds: ['c1'], categoryNames: ['Regular Pizzas'] } })])).toHaveLength(1);
+    // One whole-menu offer, a staff discount, or nothing: the one line, as before.
+    expect(severalOffersOn([row()])).toBeNull();
+    expect(severalOffersOn([row({ source: null })])).toBeNull();
+    expect(severalOffersOn([])).toBeNull();
+  });
+
+  it('an offer on some categories says which; its × says what it does', () => {
+    const pizzas = row({ offer: { name: 'Test 20% off pizzas', categoryIds: ['c1'], categoryNames: ['Regular Pizzas'], declined: false } });
+    expect(cartOfferDetail(pizzas, [])).toBe(' · automatic offer on Regular Pizzas');
+    expect(offerRowAction(pizzas)).toBe('Take “Test 20% off pizzas” off this order');
+    expect(offerRowAction(row({ offer: { name: 'Test 20% off pizzas', declined: true } }))).toBe('Put “Test 20% off pizzas” back');
   });
 });

@@ -11,7 +11,7 @@ import { Banknote, CreditCard, Smartphone, Building, X } from 'lucide-react';
 import { quickCashRupees } from './tenderAmounts';
 import { ownsEnter } from './keys';
 import { foodpandaDealLine } from './foodpandaDealLine';
-import { offerOnOrder, payDiscountLabel } from './discountWords';
+import { offerOnOrder, payDiscountLabel, severalOffersOn } from './discountWords';
 import { foodpandaPayStep } from './tabletAtPay';
 
 interface Props {
@@ -304,7 +304,16 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                     <dt>Subtotal</dt>
                     <dd className="font-mono">{formatCents(snapshot.order.subtotalCents)}</dd>
                   </div>
-                  {(snapshot.order.discountCents > 0 || dealLine) && (
+                  {/* Several offers (0.7.44): one line each, as the bill prints them. */}
+                  {severalOffersOn(snapshot.discounts)
+                    ?.filter((d) => d.amountCents > 0)
+                    .map((d) => (
+                      <div key={d.id} className="flex justify-between text-emerald-700 dark:text-emerald-300">
+                        <dt>{d.reason ?? 'Automatic offer'}</dt>
+                        <dd className="font-mono">−{formatCents(d.amountCents)}</dd>
+                      </div>
+                    ))}
+                  {!severalOffersOn(snapshot.discounts) && (snapshot.order.discountCents > 0 || dealLine) && (
                     <div className="flex justify-between text-emerald-700 dark:text-emerald-300">
                       <dt>
                         {/* "(food only)" when the discount's own frozen rule left the delivery charge alone. */}

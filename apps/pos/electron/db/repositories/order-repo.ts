@@ -42,6 +42,12 @@ import {
   foodpandaDealRule,
   foodpandaTerms,
   matchOffer,
+  matchOffers,
+  assignOfferLines,
+  isCategoryOffer,
+  taxAfterDiscountRows,
+  type DiscountRowShare,
+  type OfferLine,
   mostOffWithoutManagerCents,
   normalizePhone,
   offerAmount,
@@ -1124,6 +1130,9 @@ function applyOfferStep(db: AppDatabase, orderId: string, actor: Actor): boolean
   const rows = liveDiscountRows(db, orderId);
   // One discount per order: never over a staff, website or foodpanda row.
   if (rows.some((r) => r.source !== 'offer')) return false;
+  // Offers on some categories (0.7.44): several offers on one order, each over its own lines.
+  const several = severalOffersStep(db, order, rows, actor);
+  if (several !== null) return several;
   const offerRows = rows;
   const latest = offerRows[offerRows.length - 1] ?? null;
   const current = latest ? parseOfferRule(latest.rule_json) : null;
@@ -1169,6 +1178,78 @@ function applyOfferStep(db: AppDatabase, orderId: string, actor: Actor): boolean
   if (offerRows.length > 0) takeOffOfferRows(db, offerRows, actor, pick ? 'replaced_by_offer' : 'offer_off');
   if (!pick) return offerRows.length > 0;
   insertOfferRow(db, orderId, pick.rule, foodpandaDealApprover(db, setting.savedByUserId), actor, 'apply_offer');
+  return true;
+}
+
+/**
+ * The offer step when the owner has an offer on some categories, or the
+ * order already carries several offers or one on some categories (the
+ * owner, 11 Oct 2026: "10 percent offer on entire menu and separate 20
+ * percent off on regular pizzas so they don't conflict and add separately
+ * each"): pos-domain matchOffers — every offer on some categories that fits
+ * and takes something off its categories' items, and the whole-menu offer
+ * that takes the most off the food they leave — each its own row (its own
+ * line on the bill). An offer already on keeps its row and frozen terms; an
+ * offer the cashier took off stays off (its Rs 0 row) and only it: the
+ * others still go on. Null when none of that applies (the one-offer step
+ * goes on as before); else whether a row changed. The lines each row comes
+ * off are worked out with its amount (recomputeSeveralOffers).
+ */
+function severalOffersStep(
+  db: AppDatabase,
+  order: Order,
+  rows: ReadonlyArray<LiveDiscountRow>,
+  actor: Actor,
+): boolean | null {
+  const setting = readShopSetting(db, 'discounts.offers');
+  // Saved by a newer version of the app: none of its offers is put on here.
+  const liveOffers = setting.newerFormat ? [] : setting.value.offers;
+  const parsed = rows.map((r) => parseOfferRule(r.rule_json));
+  const several =
+    liveOffers.some((o) => isCategoryOffer(o)) ||
+    rows.length > 1 ||
+    parsed.some((r) => r !== null && (isCategoryOffer(r.offer) || r.lines !== undefined));
+  if (!several) return null;
+  // An offer row this version can't read (a newer till's): every offer row is left exactly as it is.
+  if (parsed.some((r) => r === null)) return false;
+  const rules = parsed as OfferRule[];
+  const declined = new Set(rules.filter((r) => r.offer.declined).map((r) => r.offer.id));
+  const active = rules.map((rule, i) => ({ rule, row: rows[i]! })).filter((x) => !x.rule.offer.declined);
+  const lines = discountLinesOf(db, order.id);
+  const phoneRow = db.prepare(`SELECT customer_phone_snapshot AS phone FROM orders WHERE id = ?`).get(order.id) as
+    | { phone: string | null }
+    | undefined;
+  const typedPhone = phoneRow?.phone?.trim() || null;
+  const phone = normalizePhone(typedPhone);
+  const onceAny = liveOffers.some((o) => o.oncePerCustomerPerDay) || active.some((x) => x.rule.offer.oncePerCustomerPerDay);
+  const picks = matchOffers(
+    {
+      source: order.source,
+      mode: order.mode,
+      cameBy: order.cameBy ?? null,
+      hasPhone: phone !== null,
+      createdAt: order.createdAt,
+      foodCents: discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: true }),
+      subtotalCents: discountBaseCents(lines, { alsoOffDeliveryCharge: true, skipsNoDiscountLines: true }),
+    },
+    offerLinesOf(lines),
+    liveOffers,
+    {
+      alsoOffDeliveryCharge: readDiscountAlsoOffDeliveryCharge(db),
+      settingsAt: setting.savedAt,
+      usedToday:
+        phone && onceAny ? offersUsedToday(db, { id: order.id, createdAt: order.createdAt }, [phone, typedPhone ?? phone]) : new Set(),
+      current: active.map((x) => x.rule),
+      declined,
+    },
+  );
+  const kept = new Set(picks.filter((p) => p.isCurrent).map((p) => p.rule));
+  const gone = active.filter((x) => !kept.has(x.rule)).map((x) => x.row);
+  const fresh = picks.filter((p) => !p.isCurrent);
+  if (gone.length === 0 && fresh.length === 0) return false;
+  if (gone.length > 0) takeOffOfferRows(db, gone, actor, fresh.length > 0 ? 'replaced_by_offer' : 'offer_off');
+  const approver = foodpandaDealApprover(db, setting.savedByUserId);
+  for (const p of fresh) insertOfferRow(db, order.id, { ...p.rule, lines: p.lineIds }, approver, actor, 'apply_offer');
   return true;
 }
 
@@ -2447,28 +2528,141 @@ export interface ApplyDiscountOptions extends OrderEditing {
 function discountLinesOf(
   db: AppDatabase,
   orderId: string,
-): Array<{ lineTotalCents: number; menuItemName: string; taxRateBps: number; noDiscount: boolean; digitalRateBps: number | null }> {
+): Array<{
+  id: string;
+  lineTotalCents: number;
+  menuItemName: string;
+  menuItemId: string | null;
+  categoryId: string | null;
+  taxRateBps: number;
+  noDiscount: boolean;
+  digitalRateBps: number | null;
+}> {
   const rows = db
     .prepare(
-      `SELECT line_total_cents, menu_item_name, tax_rate_bps_snapshot, digital_rate_bps_snapshot, no_discount
-         FROM order_items WHERE order_id = ? AND deleted_at IS NULL
-        ORDER BY created_at, id`,
+      `SELECT oi.id, oi.line_total_cents, oi.menu_item_name, oi.menu_item_id, mi.category_id,
+              oi.tax_rate_bps_snapshot, oi.digital_rate_bps_snapshot, oi.no_discount
+         FROM order_items oi
+         LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
+        WHERE oi.order_id = ? AND oi.deleted_at IS NULL
+        ORDER BY oi.created_at, oi.id`,
     )
     .all(orderId) as Array<{
+    id: string;
     line_total_cents: number;
     menu_item_name: string;
+    menu_item_id: string | null;
+    category_id: string | null;
     tax_rate_bps_snapshot: number;
     digital_rate_bps_snapshot: number | null;
     no_discount: number;
   }>;
   return rows.map((r) => ({
+    id: r.id,
     lineTotalCents: r.line_total_cents,
     menuItemName: r.menu_item_name,
+    menuItemId: r.menu_item_id,
+    // The category its menu item is in now: the offers on some categories go by it (0.7.44).
+    categoryId: r.category_id ?? null,
     taxRateBps: r.tax_rate_bps_snapshot,
     noDiscount: r.no_discount === 1,
     // The line's card rate (0052); null = none.
     digitalRateBps: r.digital_rate_bps_snapshot ?? null,
   }));
+}
+
+/** The order's lines as the offers see them (pos-domain OfferLine). */
+function offerLinesOf(lines: ReturnType<typeof discountLinesOf>): OfferLine[] {
+  return lines.map((l) => ({
+    id: l.id,
+    categoryId: l.categoryId,
+    lineTotalCents: l.lineTotalCents,
+    menuItemName: l.menuItemName,
+    menuItemId: l.menuItemId,
+    noDiscount: l.noDiscount,
+  }));
+}
+
+const sameIds = (a: readonly string[] | undefined, b: readonly string[]) =>
+  !!a && a.length === b.length && a.every((x, i) => x === b[i]);
+
+/**
+ * The totals of an order carrying SEVERAL of the owner's offers (0.7.44:
+ * an offer on some categories beside the whole-menu one): every live row an
+ * offer, and more than one, or one on some categories or naming its lines.
+ * Each offer is worked over its own lines (pos-domain assignOfferLines: its
+ * categories' lines, the whole-menu offer the food they left; one taken off
+ * takes nothing), its amount and its lines written back to its row when
+ * they changed; the tax per line on what is left of it (taxAfterDiscountRows)
+ * and the same at the card rates. Returns false for any other order: the
+ * one-discount path. Inside the caller's transaction.
+ */
+function recomputeSeveralOffers(db: AppDatabase, orderId: string): boolean {
+  const rows = liveDiscountRows(db, orderId);
+  if (rows.length === 0 || rows.some((r) => r.source !== 'offer')) return false;
+  const parsed = rows.map((r) => parseOfferRule(r.rule_json));
+  // A row this version can't read (a newer till's): the one-discount path, as before.
+  if (parsed.some((r) => r === null)) return false;
+  const rules = parsed as OfferRule[];
+  if (rows.length < 2 && !rules.some((r) => isCategoryOffer(r.offer) || r.lines !== undefined)) return false;
+
+  const lines = discountLinesOf(db, orderId);
+  const subtotal = lines.reduce((sum, l) => sum + l.lineTotalCents, 0);
+  // The minimum of every offer is measured on the order's food, the value deals left out.
+  const foodCents = discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: true });
+  const shares = assignOfferLines(
+    rules.filter((r) => !r.offer.declined),
+    offerLinesOf(lines),
+    foodCents,
+  );
+  const now = nowIso();
+  const worked: DiscountRowShare[] = [];
+  rules.forEach((rule, i) => {
+    const row = rows[i]!;
+    const share = rule.offer.declined ? null : (shares.find((x) => x.rule === rule) ?? null);
+    const amount = share ? share.amountCents : 0;
+    const next: OfferRule = share ? { ...rule, lines: share.lineIds } : rule;
+    const json = JSON.stringify(next);
+    if (amount !== row.amount_cents || (share && !sameIds(rule.lines, share.lineIds))) {
+      db.prepare(
+        `UPDATE order_discounts SET amount_cents = ?, rule_json = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+      ).run(amount, json, now, row.id);
+      enqueueSync(db, {
+        entityType: 'order_discounts',
+        entityId: row.id,
+        op: 'upsert',
+        payload: { id: row.id, amountCents: amount, rule: next },
+      });
+    }
+    worked.push({ amountCents: amount, ruleJson: json });
+  });
+  const discount = worked.reduce((sum, w) => sum + w.amountCents, 0);
+  const tax = subtotal > 0 ? taxAfterDiscountRows(lines, worked).taxCents : 0;
+  // The same bill paid by card / wallet / bank (0052), each line at its card rate; null when no line has one.
+  const digitalTotal = lines.some((l) => l.digitalRateBps !== null && l.digitalRateBps !== l.taxRateBps)
+    ? subtotal -
+      discount +
+      (subtotal > 0
+        ? taxAfterDiscountRows(
+            lines.map((l) => ({ ...l, taxRateBps: l.digitalRateBps ?? l.taxRateBps })),
+            worked,
+          ).taxCents
+        : 0)
+    : null;
+  const total = subtotal - discount + tax;
+  db.prepare(
+    `UPDATE orders SET
+       subtotal_cents = ?, discount_cents = ?, tax_cents = ?, total_cents = ?, digital_total_cents = ?,
+       updated_at = ?, version = version + 1
+     WHERE id = ?`,
+  ).run(subtotal, discount, tax, total, digitalTotal, now, orderId);
+  enqueueSync(db, {
+    entityType: 'orders',
+    entityId: orderId,
+    op: 'upsert',
+    payload: { id: orderId, subtotalCents: subtotal, discountCents: discount, taxCents: tax, totalCents: total, digitalTotalCents: digitalTotal },
+  });
+  return true;
 }
 
 /**
@@ -2648,6 +2842,16 @@ export function applyDiscount(
   tx();
 }
 
+/** The names of these categories as the menu has them now, in the offer's order (one gone since: left out). */
+function categoryNamesOf(db: AppDatabase, ids: readonly string[]): string[] {
+  const names: string[] = [];
+  for (const id of ids) {
+    const row = db.prepare(`SELECT name FROM categories WHERE id = ?`).get(id) as { name: string } | undefined;
+    if (row) names.push(row.name);
+  }
+  return names;
+}
+
 /** The order carries the shop's foodpanda deal (a live source 'foodpanda' discount row). */
 export function hasFoodpandaDeal(db: AppDatabase, orderId: string): boolean {
   return (
@@ -2674,7 +2878,7 @@ export function clearDiscount(
   db: AppDatabase,
   orderId: string,
   actor: Actor & { userId: string },
-  opts: { approverUserId?: string | null } & OrderEditing = {},
+  opts: { approverUserId?: string | null; discountId?: string } & OrderEditing = {},
 ): void {
   const tx = db.transaction(() => {
     // Same gate as applying one: taking a discount off a paid order would
@@ -2700,6 +2904,48 @@ export function clearDiscount(
     if (existing.length === 0) return; // nothing to clear, no audit noise
     // Taking the foodpanda deal off is changing it: a manager's, like applyDiscount.
     if (existing.some((d) => d.source === 'foodpanda') && !opts.approverUserId) throw new Error(FOODPANDA_DEAL_NEEDS_MANAGER);
+    // Several offers on one order (0.7.44). The × on ONE offer's line (`discountId`) takes that
+    // offer off this order — it stays off, Rs 0, and the whole-menu offer may then cover its
+    // items — and on one taken off it puts it back; the others stay. With no offer named (the
+    // F3 box's "No discount"), every offer on it comes off, each staying off; when all of them
+    // are off already, they all go back. No PIN: the bill only goes up. Audited.
+    const named = opts.discountId !== undefined ? existing.find((d) => d.id === opts.discountId) : undefined;
+    if (opts.discountId !== undefined && !named) throw new Error('That discount is no longer on this order');
+    const offerRules = existing.map((d) => (d.source === 'offer' ? parseOfferRule(d.rule_json) : null));
+    const allOffers = offerRules.every((r) => r !== null);
+    if (named || (existing.length > 1 && allOffers)) {
+      const targets = named ? [named] : existing;
+      const rules = named ? [parseOfferRule(named.source === 'offer' ? named.rule_json : null)] : offerRules;
+      if (rules.some((r) => r === null)) throw new Error('Only an automatic offer comes off by itself — change the discount with F3');
+      const allOff = rules.every((r) => r!.offer.declined === true);
+      for (const row of targets) {
+        db.prepare(`UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`).run(now, now, row.id);
+        enqueueSync(db, { entityType: 'order_discounts', entityId: row.id, op: 'delete', payload: { id: row.id, deletedAt: now } });
+      }
+      writeAudit(db, {
+        entityType: 'order_discounts',
+        entityId: orderId,
+        action: 'clear',
+        actorUserId: actor.userId,
+        before: targets,
+        after: null,
+      });
+      // Taken off: each offer that was on gets its Rs 0 row (its lines left out: it comes off none).
+      // Putting back (all of them off): nothing more, and the offer step puts them on again.
+      if (!allOff) {
+        for (const rule of rules) {
+          if (rule!.offer.declined) {
+            // Named, or already off among several: it stays off.
+            if (!named) insertOfferRow(db, orderId, rule!, null, actor, 'decline_offer');
+            continue;
+          }
+          const { lines: _comesOffNone, ...rest } = rule!;
+          insertOfferRow(db, orderId, declinedOfferRule(rest), null, actor, 'decline_offer');
+        }
+      }
+      recomputeOrderTotals(db, orderId, actor);
+      return;
+    }
     // The × on the owner's automatic offer: it comes off THIS order and stays
     // off (a Rs 0 row, so the next cart change does not put it straight back).
     // It only raises the bill, so no PIN; audited. Clearing that row ("Put it
@@ -2760,6 +3006,8 @@ function recomputeOrderTotals(
   // The owner's automatic offers first: put on, kept, swapped or taken off
   // for the cart as it is now (a counter order being rung up only).
   applyOfferStep(db, orderId, actor);
+  // Several offers on one order (0.7.44): each over its own lines. Any other order: below, as before.
+  if (recomputeSeveralOffers(db, orderId)) return;
 
   // Subtotal = sum of line_total_cents over non-deleted items
   const subtotalRow = db
@@ -3992,6 +4240,10 @@ export function getOrderSnapshot(
     rule_json: string | null;
   }>;
 
+  // Several offers (0.7.44): every row as frozen — each names the lines it came off.
+  const severalOffers =
+    discountRows.length > 1 ||
+    discountRows.some((d) => d.source === 'offer' && parseOfferRule(d.rule_json)?.lines !== undefined);
   const discounts: OrderSnapshot['discounts'] = discountRows.map((d, i) => {
     // Which lines it came off: whether it also came off the delivery charge
     // (none = yes, as every discount before 0.7.26) and whether it left the
@@ -4007,7 +4259,7 @@ export function getOrderSnapshot(
     // scope gives), then the tax — one tax rate can't tell the splits apart.
     const frozen = discountRuleScope(d.rule_json);
     const { alsoOffDeliveryCharge, skipsNoDiscountLines } =
-      i === discountRows.length - 1
+      i === discountRows.length - 1 && !severalOffers
         ? storedDiscountScope(frozen, items, order.discountCents, order.taxCents, {
             discountType: d.discount_type,
             value: d.value,
@@ -4060,9 +4312,14 @@ export function getOrderSnapshot(
               minOrderCents: offer.offer.minOrderCents,
               maxOffCents: offer.offer.maxOffCents,
               declined: offer.offer.declined === true,
+              ...(offer.offer.categoryIds
+                ? { categoryIds: [...offer.offer.categoryIds], categoryNames: categoryNamesOf(db, offer.offer.categoryIds) }
+                : {}),
             },
           }
         : {}),
+      // The lines it came off, when its row names them (several offers, 0.7.44).
+      ...(offer?.lines ? { lineIds: [...offer.lines] } : {}),
       alsoOffDeliveryCharge,
       skipsNoDiscountLines,
       // A Free order (v0.7.36): the screens and papers say "Free order · <reason>".

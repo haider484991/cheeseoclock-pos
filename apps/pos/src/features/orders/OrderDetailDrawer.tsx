@@ -38,7 +38,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { RefundOrderDialog } from './RefundOrderDialog';
 import { MarkDeliveredDialog, REFUSED_ITEM_REFUND } from './MarkDeliveredDialog';
 import { REFUSED_ITEM_OWED_TEXT } from './refusedItemWords';
-import { drawerDiscountLabel } from '../checkout/discountWords';
+import { drawerDiscountLabel, severalOffersOn } from '../checkout/discountWords';
 import { CameByRow } from './CameByRow';
 import { ModeBadge, PaidChip, StatusBadge } from './OrderBadges';
 import { PAYMENT_LABELS, isOwed, orderTimeLabel, shortOrderNumber } from './historyFilters';
@@ -334,7 +334,12 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
 
               <dl className="space-y-1 border-t border-stone-200 pt-3 text-sm dark:border-stone-700">
                 <Row k="Subtotal" v={formatCents(o.subtotalCents)} />
-                {o.discountCents > 0 && (
+                {/* Several offers (0.7.44): one line each, as the bill prints them. */}
+                {o.discountCents > 0 &&
+                  severalOffersOn(snap.discounts)
+                    ?.filter((d) => d.amountCents > 0)
+                    .map((d) => <Row key={d.id} k={d.reason ?? 'Automatic offer'} v={`− ${formatCents(d.amountCents)}`} tone="emerald" />)}
+                {o.discountCents > 0 && !severalOffersOn(snap.discounts) && (
                   <Row
                     k={drawerDiscountLabel(
                       snap.discounts.find((d) => d.reason)?.reason,

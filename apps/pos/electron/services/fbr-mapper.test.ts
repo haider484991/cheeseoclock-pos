@@ -232,3 +232,42 @@ describe('history maps as before', () => {
     expect(payloads(snapshotOf([PIZZA, BIG_TWO, CHARGE], { ...FOOD_ONLY_OVER_DEALS, pre0734: false }))).toBe(V0733);
   });
 });
+
+/**
+ * Several offers on one order (0.7.44: "20% off" Regular Pizzas beside "10%
+ * off" the whole menu): each row names the lines it came off, so the
+ * invoice splits each over its own lines — the pizza carries the 20%, the
+ * burger the 10%, the value deal and the charge nothing.
+ */
+describe('several offers, each over its own lines', () => {
+  it('the pizza carries Rs 300, the burger Rs 70; the deal and the charge no discount key; the line tax adds up to the stored tax', () => {
+    const BURGER: Line = { name: 'Test Zinger', cents: 70_000, rateBps: 1_500 };
+    const s = snapshotOf([PIZZA, BURGER, BIG_TWO, CHARGE], null);
+    const row = (id: string, reason: string, value: number, cents: number, line: string) =>
+      ({
+        id: id as UUID,
+        orderId: 'order-1' as UUID,
+        discountType: 'percent' as const,
+        value,
+        reason,
+        appliedByUserId: 'u_cash' as UUID,
+        approvedByUserId: null,
+        amountCents: cents as Cents,
+        source: 'offer' as const,
+        alsoOffDeliveryCharge: false,
+        skipsNoDiscountLines: true,
+        lineIds: [line],
+      }) satisfies OrderDiscount;
+    s.discounts = [row('d-pizza', 'Test 20% off pizzas', 20, 30_000, 'line-0'), row('d-menu', 'Test 10% off', 10, 7_000, 'line-1')];
+    // Tax: 15% of (1,200 + 630 + 3,600 + 200) = Rs 844.50.
+    s.order = { ...s.order, discountCents: 37_000 as Cents, taxCents: 84_450 as Cents, totalCents: (650_000 - 37_000 + 84_450) as Cents };
+    const sale = mapOrderToFbrPayload(s, SELLER);
+    expect(byName(sale.items)).toEqual({
+      'Test Fajita Pizza': { net: 1_200, tax: 180, discount: 300 },
+      'Test Zinger': { net: 630, tax: 94.5, discount: 70 },
+      'Big Two': { net: 3_600, tax: 540, discount: undefined },
+      'Delivery Charge (Rs 200)': { net: 200, tax: 30, discount: undefined },
+    });
+    expect(taxOf(sale.items)).toBe(84_450);
+  });
+});

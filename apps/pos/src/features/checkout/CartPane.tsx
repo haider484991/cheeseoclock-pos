@@ -21,7 +21,7 @@ import { CustomerInlinePanel } from './CustomerInlinePanel';
 import { foodpandaDealLine } from './foodpandaDealLine';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { isDeliveryChargeName, isLeaveOutChoice } from '@cheeseoclock/shared-types';
-import { cartDiscountDetail, cartOfferDetail, FREE_ORDER_LABEL, offerOnOrder } from './discountWords';
+import { cartDiscountDetail, cartOfferDetail, FREE_ORDER_LABEL, offerOnOrder, offerRowAction, severalOffersOn } from './discountWords';
 import { useCheckoutRules } from '../settings/shop-rules/useShopSetting';
 
 interface Props {
@@ -98,6 +98,8 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
   const dealLine = discount?.source === 'foodpanda' ? foodpandaDealLine(discount, subtotalCents) : null;
   // One of the owner's automatic offers (Settings → Money & discounts): put on by the till itself.
   const offerOn = offerOnOrder(discount);
+  // Several offers on one order (0.7.44: an offer on some categories beside the whole-menu one): one line each.
+  const several = severalOffersOn(snapshot?.discounts ?? []);
   const rules = useCheckoutRules();
   const alsoOffDeliveryCharge = rules.data?.discounts.alsoOffDeliveryCharge ?? false;
   // No discount yet: an offer that would go on once the phone is saved, or from how much food.
@@ -196,6 +198,17 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
     clearDiscount().catch((e: unknown) => {
       toast({
         title: offerOn?.declined ? 'Could not put the offer back' : 'Could not remove the discount',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      });
+    });
+  }
+
+  /** The × on one offer of several: that offer off this order (it stays off), or back on. No PIN. */
+  function toggleOffer(d: { id: string; offer?: { declined: boolean } | null }) {
+    clearDiscount(undefined, d.id).catch((e: unknown) => {
+      toast({
+        title: d.offer?.declined ? 'Could not put the offer back' : 'Could not take the offer off',
         description: e instanceof Error ? e.message : 'Unknown error',
         variant: 'error',
       });
@@ -320,7 +333,32 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
           </div>
           {/* The owner's foodpanda deal shows even when it takes nothing off the shop's bill
               (foodpanda pays all of it, or the order is under its minimum). */}
-          {discountCents > 0 || dealLine || offerOn ? (
+          {several ? (
+            several.map((d) => (
+              <div key={d.id} className="is-discount">
+                <dt>
+                  <button
+                    type="button"
+                    className="ticket-link"
+                    style={{ color: 'inherit' }}
+                    onClick={onDiscount}
+                    title="Change the discount (F3)"
+                  >
+                    <Percent className="h-3 w-3" aria-hidden="true" />
+                    {d.offer?.name ?? d.reason ?? 'Automatic offer'}
+                    <span className="font-normal">
+                      {d.offer?.declined ? ' · taken off this order' : cartOfferDetail(d, items)}
+                    </span>
+                  </button>
+                  <button type="button" onClick={() => toggleOffer(d)} aria-label={offerRowAction(d)} title={offerRowAction(d)}>
+                    {d.offer?.declined ? <RotateCcw className="h-3 w-3" /> : <X className="h-3 w-3" />}
+                  </button>
+                </dt>
+                {/* An offer taken off takes nothing off: no −0.00. */}
+                <dd>{d.offer?.declined ? '' : `−${formatCents(d.amountCents, { showSymbol: false })}`}</dd>
+              </div>
+            ))
+          ) : discountCents > 0 || dealLine || offerOn ? (
             <div className="is-discount">
               <dt>
                 <button

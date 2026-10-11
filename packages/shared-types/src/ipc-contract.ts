@@ -730,9 +730,11 @@ export interface IpcContract {
      * Taking the shop's foodpanda deal off an order needs a manager's PIN or
      * password. On one of the owner's automatic offers it takes the offer off
      * THIS order (it stays off, Rs 0; no PIN: the bill only goes up); on an
-     * offer taken off it puts the offers back.
+     * offer taken off it puts the offers back. `discountId` (several offers on
+     * one order, 0.7.44): that one offer only — taken off this order, or put
+     * back when it was taken off; the others stay.
      */
-    request: { orderId: string; approverPin?: string };
+    request: { orderId: string; approverPin?: string; discountId?: string };
     response: ApiResult<OrderSnapshot>;
   };
   /**

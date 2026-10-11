@@ -13,13 +13,22 @@
  * there when the card is saved. Any offer is switched off from its row at
  * once. The owner alone (the main process refuses anyone else). No offers
  * and not asked by default: nothing changes until the owner adds one.
+ *
+ * Since 0.7.44 an offer can be on some categories only (the owner, 11 Oct
+ * 2026: "category discounts … 10 percent offer on entire menu and separate
+ * 20 percent off on regular pizzas so they don't conflict"): its items take
+ * it beside the whole-menu offer, never both, each on its own bill line.
+ * The categories offered: the menu's, without the delivery charges' and
+ * those never discounted (an offer never comes off value deals).
  */
 import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { cn } from '@cheeseoclock/ui';
 import { Gift, Plus, Trash2 } from 'lucide-react';
 import {
   CAME_BY_CHOICES,
   CAME_BY_LABEL,
+  categoryNeverDiscounted,
   OFFER_MAX_PERCENT,
   OFFER_NAME_MAX,
   OFFERS_MAX,
@@ -28,6 +37,8 @@ import {
   type ShopSettingCard,
 } from '@cheeseoclock/shared-types';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { ipc } from '../../ipc/client';
+import { useMenuWithoutCharges } from '../menu-mgmt/useMenuCharges';
 import { SettingCard } from './shop-rules/SettingCard';
 import { useDraft } from './shop-rules/useDraft';
 import { useShopSetting, useValueDealsMarked } from './shop-rules/useShopSetting';
@@ -75,6 +86,18 @@ function OffersFields({ s }: { s: ReturnType<typeof useShopSetting<'discounts.of
   const alsoOff = useShopSetting('discounts.delivery').q.data?.value.alsoOffDeliveryCharge ?? false;
   // A category never discounted (Menu → Categories): each offer's line says it never comes off value deals.
   const valueDealsMarked = useValueDealsMarked();
+  // The menu's categories an offer can be on (0.7.44): not the delivery charges', not one never discounted.
+  const catQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
+  const { chargeCategoryIds } = useMenuWithoutCharges();
+  const names = useMemo(() => new Map((catQ.data ?? []).map((c) => [c.id as string, c.name])), [catQ.data]);
+  const offerable = useMemo(
+    () =>
+      [...(catQ.data ?? [])]
+        .filter((c) => !chargeCategoryIds.has(c.id) && !categoryNeverDiscounted(c))
+        .sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name))
+        .map((c) => ({ id: c.id as string, name: c.name })),
+    [catQ.data, chargeCategoryIds],
+  );
   const [open, setOpen] = useState<string | null>(null);
   const saving = s.save.isPending || s.putBack.isPending;
 
@@ -129,7 +152,7 @@ function OffersFields({ s }: { s: ReturnType<typeof useShopSetting<'discounts.of
           {example && (
             <p>
               <span className="font-semibold">For example ({example.name || 'the new offer'}): </span>
-              {offerExample(example, alsoOff)}
+              {offerExample(example, alsoOff, names)}
             </p>
           )}
           {OFFER_RULES_NOTE.map((n) => (
@@ -170,7 +193,7 @@ function OffersFields({ s }: { s: ReturnType<typeof useShopSetting<'discounts.of
               <div className="flex flex-wrap items-center gap-2 p-3">
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold">{f.name.trim() || `Offer ${i + 1} (new)`}</div>
-                  <div className="text-xs text-stone-500">{one ? offerSummary(one, valueDealsMarked) : 'Not finished yet'}</div>
+                  <div className="text-xs text-stone-500">{one ? offerSummary(one, valueDealsMarked, names) : 'Not finished yet'}</div>
                 </div>
                 {saved && (
                   <button
@@ -196,7 +219,7 @@ function OffersFields({ s }: { s: ReturnType<typeof useShopSetting<'discounts.of
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>
-              {isOpen && <OfferFields f={f} set={(p) => setOffer(f.id, p)} />}
+              {isOpen && <OfferFields f={f} set={(p) => setOffer(f.id, p)} categories={offerable} names={names} />}
             </div>
           );
         })}
@@ -213,9 +236,23 @@ function OffersFields({ s }: { s: ReturnType<typeof useShopSetting<'discounts.of
   );
 }
 
-/** One offer's fields. */
-function OfferFields({ f, set }: { f: OfferForm; set: (p: Partial<OfferForm>) => void }) {
+/** One offer's fields. `categories`: the ones an offer can be on; `names`: every category's name (one no longer offered still shows). */
+function OfferFields({
+  f,
+  set,
+  categories,
+  names,
+}: {
+  f: OfferForm;
+  set: (p: Partial<OfferForm>) => void;
+  categories: ReadonlyArray<{ id: string; name: string }>;
+  names: ReadonlyMap<string, string>;
+}) {
   const toggleDay = (d: number) => set({ days: f.days.includes(d) ? f.days.filter((x) => x !== d) : [...f.days, d].sort((a, b) => a - b) });
+  const toggleCategory = (id: string) =>
+    set({ categoryIds: f.categoryIds.includes(id) ? f.categoryIds.filter((x) => x !== id) : [...f.categoryIds, id] });
+  // A category picked before that is no longer offered (deleted, or now never discounted): shown so it can be taken off.
+  const stale = f.categoryIds.filter((id) => !categories.some((c) => c.id === id));
   const toggleWay = (c: (typeof CAME_BY_CHOICES)[number]) =>
     set({ anyWay: false, cameBy: f.cameBy.includes(c) ? f.cameBy.filter((x) => x !== c) : [...f.cameBy, c] });
   const id = (what: string) => `${f.id}-${what}`;
@@ -249,6 +286,45 @@ function OfferFields({ f, set }: { f: OfferForm; set: (p: Partial<OfferForm>) =>
           </div>
           <p className="mt-1 text-xs text-stone-500">A whole % from 1 to {OFFER_MAX_PERCENT}, or whole rupees up to Rs 5,000.</p>
         </div>
+      </div>
+
+      <div>
+        <span className={labelClass}>Which items</span>
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Which items the offer comes off">
+          <button type="button" aria-pressed={!f.onCategories} onClick={() => set({ onCategories: false })} className={chipClass(!f.onCategories)}>
+            The whole menu
+          </button>
+          <button type="button" aria-pressed={f.onCategories} onClick={() => set({ onCategories: true })} className={chipClass(f.onCategories)}>
+            Only some categories
+          </button>
+        </div>
+        {f.onCategories && (
+          <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Categories">
+            {categories.map((c) => (
+              <button key={c.id} type="button" aria-pressed={f.categoryIds.includes(c.id)} onClick={() => toggleCategory(c.id)} className={chipClass(f.categoryIds.includes(c.id))}>
+                {c.name}
+              </button>
+            ))}
+            {stale.map((id) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed
+                title="Not on the menu for offers any more — tap to take it off this offer"
+                onClick={() => toggleCategory(id)}
+                className={cn(chipClass(true), 'line-through')}
+              >
+                {names.get(id) ?? 'A category no longer on the menu'}
+              </button>
+            ))}
+            {categories.length === 0 && stale.length === 0 && <span className="text-sm text-stone-500">No categories yet — add them in Menu.</span>}
+          </div>
+        )}
+        <p className="mt-1 text-xs text-stone-500">
+          {f.onCategories
+            ? 'Their items take this offer; the rest of the food takes your whole-menu offer, if one fits — never both on one item. Each prints on its own line of the bill.'
+            : 'Every item but value deals; the delivery charge only if “Discounts and the delivery charge” below says so.'}
+        </p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

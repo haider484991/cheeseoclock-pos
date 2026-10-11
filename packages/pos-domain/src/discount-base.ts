@@ -195,6 +195,67 @@ export function taxAfterDiscount(
   return { shares, taxCents };
 }
 
+// ------------------------------------- several offers on one order (0.7.44) --
+
+/** A live discount row as the split sees it: what it took off, and the rule frozen on it. */
+export interface DiscountRowShare {
+  amountCents: number;
+  ruleJson: string | null;
+}
+
+/**
+ * The order lines a discount row names (an offer on an order that carries
+ * an offer on some categories: OfferRule.lines), or null when it names none
+ * (every line its scope lets it come off, as every discount before 0.7.44).
+ */
+export function discountRowLineIds(ruleJson: string | null | undefined): string[] | null {
+  const rule = parseOfferRule(ruleJson);
+  return rule?.lines ? [...rule.lines] : null;
+}
+
+/**
+ * Each line's share of EVERY discount row on the order (paisa): each row
+ * split over its own lines — the lines its rule names, else every line its
+ * frozen scope lets it come off — and the shares added up per line. One row
+ * naming no lines splits exactly as splitDiscount. The lines carry their
+ * order_items ids (`id`) for the rows that name them.
+ */
+export function splitDiscountRows(
+  lines: ReadonlyArray<DiscountLine & { id?: string }>,
+  rows: ReadonlyArray<DiscountRowShare>,
+  feeItemIds?: ReadonlySet<string> | null,
+): number[] {
+  const out = lines.map(() => 0);
+  const totals = lines.map((l) => l.lineTotalCents);
+  for (const row of rows) {
+    if (!(row.amountCents > 0)) continue;
+    const scope = discountRuleScope(row.ruleJson);
+    const named = discountRowLineIds(row.ruleJson);
+    const weights = lines.map((l) =>
+      (named === null || (l.id !== undefined && named.includes(l.id))) && lineTakesDiscount(l, scope, feeItemIds) ? l.lineTotalCents : 0,
+    );
+    const shares = allocateDiscount(named === null ? weightsThatCarry(totals, weights, row.amountCents) : weights, row.amountCents);
+    shares.forEach((x, i) => {
+      out[i] = (out[i] ?? 0) + x;
+    });
+  }
+  return out;
+}
+
+/** taxAfterDiscount for every discount row on the order (splitDiscountRows), each line taxed on what is left of it. */
+export function taxAfterDiscountRows(
+  lines: ReadonlyArray<TaxedDiscountLine & { id?: string }>,
+  rows: ReadonlyArray<DiscountRowShare>,
+): TaxAfterDiscount {
+  const shares = splitDiscountRows(lines, rows);
+  let taxCents = 0;
+  lines.forEach((line, i) => {
+    const net = Math.max(0, line.lineTotalCents - (shares[i] ?? 0));
+    taxCents += computeTax(net, line.taxRateBps ?? 0, 'exclusive').taxCents as number;
+  });
+  return { shares, taxCents };
+}
+
 // ------------------------------------------------------------ the rule --
 
 /** Only a true is written: a rule that does not skip keeps the JSON it had before 0.7.34. */

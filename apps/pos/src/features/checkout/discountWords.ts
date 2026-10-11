@@ -23,7 +23,7 @@ import {
  */
 
 type Discount = Pick<OrderDiscount, 'discountType' | 'value' | 'reason'> &
-  Partial<Pick<OrderDiscount, 'source' | 'alsoOffDeliveryCharge' | 'skipsNoDiscountLines' | 'offer' | 'freeOrder'>>;
+  Partial<Pick<OrderDiscount, 'source' | 'alsoOffDeliveryCharge' | 'skipsNoDiscountLines' | 'offer' | 'freeOrder' | 'lineIds'>>;
 type Line = { readonly menuItemName?: string | null; readonly noDiscount?: boolean };
 
 /** A Free order's name on every screen (v0.7.36: 100% off everything, with a manager's PIN), as the bill prints it. */
@@ -118,8 +118,30 @@ export function offerOnOrder(d: Discount | null | undefined): { name: string; de
  * offer, food only", " · automatic offer, not on value deals".
  */
 export function cartOfferDetail(d: Discount, items: ReadonlyArray<Line>): string {
+  // An offer on some categories (0.7.44) says which: never the delivery charge or a value deal anyway.
+  const on = d.offer?.categoryNames ?? [];
+  if (on.length > 0) return ` · automatic offer on ${on.join(', ')}`;
   const tags = discountLeftAloneTags(d, items);
   return tags.length > 0 ? ` · automatic offer, ${tags.join(', ')}` : ' · automatic offer';
+}
+
+/**
+ * The offers the cart lists one by one (0.7.44: an offer on some categories
+ * beside the whole-menu one): every row when they are all the owner's
+ * automatic offers and there are several, or one names its lines or its
+ * categories. Null for any other order: the one discount line, as before.
+ */
+export function severalOffersOn<D extends Discount>(discounts: ReadonlyArray<D>): D[] | null {
+  if (discounts.length === 0 || discounts.some((d) => d.source !== 'offer')) return null;
+  const several =
+    discounts.length > 1 || discounts.some((d) => Array.isArray(d.lineIds) || (d.offer?.categoryIds?.length ?? 0) > 0);
+  return several ? [...discounts] : null;
+}
+
+/** The × on one offer of several: what it does, for its label and tooltip. */
+export function offerRowAction(d: Pick<Discount, 'offer' | 'reason'>): string {
+  const name = d.offer?.name ?? d.reason ?? 'this offer';
+  return d.offer?.declined ? `Put “${name}” back` : `Take “${name}” off this order`;
 }
 
 /** A line with nothing off that the bill leaves out: an automatic offer the cashier took off. */

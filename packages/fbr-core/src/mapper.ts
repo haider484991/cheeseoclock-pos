@@ -68,7 +68,13 @@ export function mapOrderToFbrPayload(
     (leavesCharge && isDeliveryChargeLine(l)) || (leavesMarked && l.noDiscount === true) ? 0 : totals[i]!,
   );
   const carry = masked.reduce((s, w) => s + Math.max(0, w), 0);
-  const shares = allocateDiscount(Math.round(orderDiscount) > carry ? totals : masked, orderDiscount);
+  // Several offers on one order (0.7.44: an offer on some categories beside the whole-menu one):
+  // each discount over the lines its row names (pos-domain splitDiscountRows, kept in step by hand),
+  // its own scope masking the rest; the shares added up per line. Any other order: the one split.
+  const severalRows = discounts.some((d) => Array.isArray(d.lineIds));
+  const shares = severalRows
+    ? sharesOfRows(items, discounts, orderDiscount)
+    : allocateDiscount(Math.round(orderDiscount) > carry ? totals : masked, orderDiscount);
   const fbrItems: FbrInvoiceItem[] = items.map((line, i) => {
     const lineDiscount = shares[i] ?? 0;
     const netCents = Math.max(0, line.lineTotalCents - lineDiscount);
@@ -179,6 +185,35 @@ export function mapRefundToFbrDebitNote(
     invoiceRefNo: refund.originalIrn,
     items,
   };
+}
+
+/**
+ * Each line's share of every discount row, each split over the lines it
+ * names (or, naming none, every line its scope lets it come off) — pos-domain
+ * splitDiscountRows, kept in step by hand. Rows taking nothing are skipped;
+ * an order whose stored discount is 0 (a Rs 0 subtotal) shares nothing.
+ */
+function sharesOfRows(
+  items: OrderSnapshot['items'],
+  rows: OrderSnapshot['discounts'],
+  orderDiscount: number,
+): number[] {
+  const out = items.map(() => 0);
+  if (!(orderDiscount > 0)) return out;
+  for (const d of rows) {
+    if (!(d.amountCents > 0)) continue;
+    const named = Array.isArray(d.lineIds) ? new Set(d.lineIds) : null;
+    const weights = items.map((l) => {
+      if (named && !named.has(l.id)) return 0;
+      if (d.alsoOffDeliveryCharge === false && isDeliveryChargeLine(l)) return 0;
+      if (d.skipsNoDiscountLines === true && l.noDiscount === true) return 0;
+      return l.lineTotalCents;
+    });
+    allocateDiscount(weights, d.amountCents).forEach((x, i) => {
+      out[i] = (out[i] ?? 0) + x;
+    });
+  }
+  return out;
 }
 
 /** Same as pos-domain allocateDiscount (largest remainder, whole paisa). */

@@ -148,8 +148,14 @@ export const ipc = {
     applyDiscount: (input: IpcRequest<'orders:applyDiscount'>) =>
       unwrap(window.api.orders.applyDiscount(input)),
     /** A manager's PIN or password is needed to take the shop's foodpanda deal off. */
-    clearDiscount: (orderId: string, approverPin?: string) =>
-      unwrap(window.api.orders.clearDiscount(approverPin ? { orderId, approverPin } : { orderId })),
+    clearDiscount: (orderId: string, approverPin?: string, discountId?: string) =>
+      unwrap(
+        window.api.orders.clearDiscount({
+          orderId,
+          ...(approverPin ? { approverPin } : {}),
+          ...(discountId ? { discountId } : {}),
+        }),
+      ),
     /** Edit order: the order the kitchen has, as these changes would leave it (nothing is written). */
     previewEdit: (input: IpcRequest<'orders:previewEdit'>) => unwrap(window.api.orders.previewEdit(input)),
     /** Edit order: save the changes (the kitchen gets an ADDED / REMOVED slip). */

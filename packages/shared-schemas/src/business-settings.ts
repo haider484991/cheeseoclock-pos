@@ -46,6 +46,7 @@ import {
   OFFER_MAX_FLAT_CENTS,
   OFFER_MAX_ORDER_CENTS,
   OFFER_MAX_PERCENT,
+  OFFER_CATEGORIES_MAX,
   OFFER_NAME_MAX,
   OFFERS_MAX,
   ORDER_REASON_ID_RE,
@@ -637,6 +638,15 @@ const offerShape = {
     .refine(allDifferent, { message: 'Pick takeaway and delivery once each' }),
   type: z.enum(['percent', 'flat'], { errorMap: () => ({ message: 'A % off, or rupees off' }) }),
   value: z.number().int({ message: 'The amount off is a whole number' }),
+  // v0.7.44: the categories it comes off; absent or null = the whole menu. A till older than 0.7.44
+  // reads an offer with them as a newer till's (storedFormatIsNewer) and puts no offer on.
+  categoryIds: z
+    .array(z.string().min(1).max(64))
+    .min(1, { message: 'Pick at least one category — or “The whole menu”' })
+    .max(OFFER_CATEGORIES_MAX, { message: `At most ${OFFER_CATEGORIES_MAX} categories on one offer` })
+    .refine(allDifferent, { message: 'Pick each category once' })
+    .nullable()
+    .optional(),
   minOrderCents: wholeRupees(OFFER_MAX_ORDER_CENTS / 100, 'The smallest order').nullable(),
   maxOffCents: wholeRupees(OFFER_MAX_ORDER_CENTS / 100, 'The most off one order')
     .refine((c) => c > 0, { message: 'The most off one order must be more than Rs 0 — or leave it empty' })

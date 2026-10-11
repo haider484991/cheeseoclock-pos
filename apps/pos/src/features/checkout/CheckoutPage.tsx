@@ -129,10 +129,11 @@ export function CheckoutPage() {
     try {
       const next = await useCheckoutStore.getState().sendToKitchen();
       // Saving the customer's phone at Send can put one of the owner's offers on: say so.
-      const offer = next.discounts[next.discounts.length - 1];
+      // Several offers (0.7.44): each one that took something off, named.
+      const offers = next.discounts.filter((d) => d.source === 'offer' && d.amountCents > 0 && d.reason);
       const offerNote =
-        offer?.source === 'offer' && offer.amountCents > 0 && offer.reason
-          ? `${offer.reason}: ${formatCents(offer.amountCents)} off (the owner’s offer)`
+        offers.length > 0
+          ? `${offers.map((d) => `${d.reason}: ${formatCents(d.amountCents)} off`).join(' · ')} (the owner’s ${offers.length === 1 ? 'offer' : 'offers'})`
           : undefined;
       toast({
         title: `Sent to kitchen · #${next.order.orderNumber.split('-').pop()}`,

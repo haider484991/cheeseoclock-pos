@@ -6,11 +6,12 @@
  * same plain words, naming the offer. Every number in the words comes from
  * the values (pos-domain offerAmount works the example, as the till does).
  */
-import { formatCents, offerAmount } from '@cheeseoclock/pos-domain';
+import { formatCents, isCategoryOffer, offerAmount } from '@cheeseoclock/pos-domain';
 import {
   CAME_BY_CHOICES,
   CAME_BY_LABEL,
   NOT_ON_VALUE_DEALS,
+  OFFER_CATEGORIES_MAX,
   OFFER_ID_RE,
   OFFER_MAX_FLAT_CENTS,
   OFFER_MAX_ORDER_CENTS,
@@ -43,6 +44,9 @@ export interface OfferForm {
   type: 'percent' | 'flat';
   /** The % or the rupees, as typed. */
   amount: string;
+  /** On some categories only (0.7.44), and which; off = the whole menu. */
+  onCategories: boolean;
+  categoryIds: string[];
   minOrder: string;
   maxOff: string;
   days: number[];
@@ -74,6 +78,8 @@ export function offerToForm(o: ChannelOffer): OfferForm {
     delivery: o.orderTypes.includes('delivery'),
     type: o.type,
     amount: o.type === 'percent' ? String(o.value) : String(o.value / 100),
+    onCategories: isCategoryOffer(o),
+    categoryIds: [...(o.categoryIds ?? [])],
     minOrder: rupeesText(o.minOrderCents),
     maxOff: rupeesText(o.maxOffCents),
     days: [...o.days].sort((a, b) => a - b),
@@ -115,6 +121,8 @@ export function newOfferForm(taken: ReadonlyArray<string>): OfferForm {
     delivery: true,
     type: 'percent',
     amount: '10',
+    onCategories: false,
+    categoryIds: [],
     minOrder: '',
     maxOff: '',
     days: [...ALL_DAYS],
@@ -149,6 +157,9 @@ function offerFromForm(f: OfferForm, i: number): Parsed<ChannelOffer> {
     if (cents === null || Number.isNaN(cents) || cents < 100 || cents > OFFER_MAX_FLAT_CENTS) return bad(`the rupees off are whole rupees, Rs 1 to ${MAX_FLAT}.`);
     value = cents;
   }
+  const categoryIds = [...new Set(f.categoryIds)];
+  if (f.onCategories && categoryIds.length === 0) return bad('pick at least one category, or “The whole menu”.');
+  if (f.onCategories && categoryIds.length > OFFER_CATEGORIES_MAX) return bad(`pick at most ${OFFER_CATEGORIES_MAX} categories.`);
   const minOrderCents = centsFromRupeesText(f.minOrder);
   if (Number.isNaN(minOrderCents) || (minOrderCents ?? 0) > OFFER_MAX_ORDER_CENTS) return bad(`the smallest order is whole rupees up to ${MAX_ORDER}, or empty.`);
   const maxOffCents = centsFromRupeesText(f.maxOff);
@@ -177,6 +188,9 @@ function offerFromForm(f: OfferForm, i: number): Parsed<ChannelOffer> {
       orderTypes,
       type: f.type,
       value,
+      // On some categories only: the list. The whole menu writes NO field at all, so a till older than
+      // 0.7.44 reads the offer exactly as before (a field it does not know would switch its offers off).
+      ...(f.onCategories ? { categoryIds } : {}),
       minOrderCents,
       maxOffCents,
       days,
@@ -253,9 +267,13 @@ export function hourWords(h: ChannelOffer['hours']): string {
  * not on value deals · …" while a category is never discounted
  * (`notOnValueDeals`, Menu → Categories): an offer never comes off them.
  */
-export function offerSummary(o: ChannelOffer, notOnValueDeals = false): string {
+export function offerSummary(o: ChannelOffer, notOnValueDeals = false, names?: ReadonlyMap<string, string>): string {
   const parts: string[] = [];
-  parts.push(`${offerAmountWords(o)} the food${notOnValueDeals ? `, ${NOT_ON_VALUE_DEALS}` : ''}`);
+  parts.push(
+    isCategoryOffer(o)
+      ? `${offerAmountWords(o)} ${categoryWords(o.categoryIds!, names)} only`
+      : `${offerAmountWords(o)} the food${notOnValueDeals ? `, ${NOT_ON_VALUE_DEALS}` : ''}`,
+  );
   parts.push(o.orderTypes.length === 2 ? 'takeaway and delivery' : o.orderTypes[0] === 'delivery' ? 'deliveries' : 'takeaways');
   parts.push(o.cameBy === 'any' ? 'any way it came in' : `came by ${cameByWords(o.cameBy)}`);
   parts.push(`${dayWords(o.days)}, ${hourWords(o.hours)}`);
@@ -264,6 +282,15 @@ export function offerSummary(o: ChannelOffer, notOnValueDeals = false): string {
   if (o.oncePerCustomerPerDay) parts.push('once a customer a day');
   if (o.startsOn || o.endsOn) parts.push(o.startsOn && o.endsOn ? `${o.startsOn} to ${o.endsOn}` : o.startsOn ? `from ${o.startsOn}` : `until ${o.endsOn}`);
   return parts.join(' · ');
+}
+
+/** "Regular Pizzas and Burgers" — an offer's categories by their names now (one deleted since: "a category no longer on the menu"). */
+export function categoryWords(ids: ReadonlyArray<string>, names?: ReadonlyMap<string, string>): string {
+  const known = ids.map((id) => names?.get(id) ?? null);
+  const shown = known.filter((n): n is string => n !== null);
+  const gone = known.length - shown.length;
+  const all = [...shown, ...(gone > 0 ? [gone === 1 ? 'a category no longer on the menu' : `${gone} categories no longer on the menu`] : [])];
+  return all.length > 0 ? andList(all) : 'its categories';
 }
 
 /** The whole setting in one line, for History and "Put back the default". */
@@ -285,8 +312,15 @@ export const EXAMPLE_CHARGE_CENTS = 20_000;
  * and a Rs 200 delivery charge: 10% off takes Rs 200 off the food. The Rs
  * 200 delivery charge is paid in full."
  */
-export function offerExample(o: ChannelOffer, alsoOffDeliveryCharge: boolean): string {
+export function offerExample(o: ChannelOffer, alsoOffDeliveryCharge: boolean, names?: ReadonlyMap<string, string>): string {
   const on = o.orderTypes.includes('delivery') ? 'delivery' : 'takeaway';
+  if (isCategoryOffer(o)) {
+    // On some categories: Rs 2,000 of their items on the order; never the delivery charge.
+    const off = offerAmount(o, EXAMPLE_FOOD_CENTS, EXAMPLE_FOOD_CENTS);
+    const what = categoryWords(o.categoryIds!, names);
+    if (off === 0) return `A ${on} with ${formatCents(EXAMPLE_FOOD_CENTS)} of ${what}: nothing off — it starts from ${formatCents(o.minOrderCents ?? 0)} of food.`;
+    return `A ${on} with ${formatCents(EXAMPLE_FOOD_CENTS)} of ${what}: ${offerAmountWords(o)} takes ${formatCents(off)} off them, on its own line of the bill. The rest of the food takes your whole-menu offer, if one fits — never both on one item.`;
+  }
   const charge = on === 'delivery' ? EXAMPLE_CHARGE_CENTS : 0;
   const base = alsoOffDeliveryCharge ? EXAMPLE_FOOD_CENTS + charge : EXAMPLE_FOOD_CENTS;
   const off = offerAmount(o, base, EXAMPLE_FOOD_CENTS);
@@ -305,7 +339,7 @@ export function offerExample(o: ChannelOffer, alsoOffDeliveryCharge: boolean): s
 
 /** The rules every offer follows, as the card says them. */
 export const OFFER_RULES_NOTE = [
-  'The till puts the biggest offer that fits on a counter order by itself — never on a website or foodpanda order. One discount per order: a cashier’s discount (F3) replaces it with the usual manager rule, and removing that brings the offer back.',
+  'The till puts the biggest offer that fits on a counter order by itself — never on a website or foodpanda order. An offer on some categories goes on beside it: their items take that offer, the rest of the food the whole-menu one, never both on one item, and each prints on its own line. A cashier’s discount (F3) replaces them all with the usual manager rule, and removing that brings the offers back.',
   'Phone and WhatsApp offers need the customer’s phone on the order. How the order came in is locked when it is sent: changing it after needs a manager’s PIN or password, and the till keeps a record.',
   'The offer’s name prints on the bill. An order keeps the terms it got; a change here is for orders started from then on. Reports list offers under Standing offers, and Team & leakage flags a cashier with far more Phone or WhatsApp orders, or offer rupees, than the shop.',
 ] as const;

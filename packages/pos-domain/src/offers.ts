@@ -45,6 +45,7 @@
 import {
   CAME_BY_CHOICES,
   daypartHours,
+  isDeliveryChargeLine,
   type CameBy,
   type ChannelOffer,
   type CounterOffers,
@@ -138,6 +139,8 @@ export function offerTerms(offer: ChannelOffer, settingsAt: string | null): Offe
     orderTypes: [...offer.orderTypes],
     oncePerCustomerPerDay: offer.oncePerCustomerPerDay,
     settingsAt,
+    // On some categories only (format 2): frozen with it. The whole menu writes none, as before.
+    ...(offer.categoryIds && offer.categoryIds.length > 0 ? { categoryIds: [...offer.categoryIds] } : {}),
   };
 }
 
@@ -193,6 +196,11 @@ export function parseOfferRule(json: string | null | undefined): OfferRule | nul
   if (cameBy === null) return null;
   const typesRaw = t['orderTypes'];
   if (!Array.isArray(typesRaw) || !typesRaw.every((m) => m === 'takeaway' || m === 'delivery')) return null;
+  // On some categories (0.7.44): a list of ids, or none (the whole menu). Anything else: not one this version reads.
+  const catsRaw = t['categoryIds'];
+  if (catsRaw !== undefined && !isIdList(catsRaw, 1)) return null;
+  const linesRaw = r['lines'];
+  if (linesRaw !== undefined && !isIdList(linesRaw, 0)) return null;
   const terms: OfferTerms = {
     v: 1,
     id: t['id'] as string,
@@ -205,6 +213,7 @@ export function parseOfferRule(json: string | null | undefined): OfferRule | nul
     orderTypes: typesRaw as OfferOrderType[],
     oncePerCustomerPerDay: t['oncePerCustomerPerDay'] === true,
     settingsAt: typeof t['settingsAt'] === 'string' ? t['settingsAt'] : null,
+    ...(catsRaw !== undefined ? { categoryIds: [...(catsRaw as string[])] } : {}),
     ...(t['declined'] === true ? { declined: true as const } : {}),
   };
   return {
@@ -215,7 +224,23 @@ export function parseOfferRule(json: string | null | undefined): OfferRule | nul
     // An offer frozen before 0.7.34 has none: it was worked over the value deals too.
     ...(r['skipsNoDiscountLines'] === true ? { skipsNoDiscountLines: true as const } : {}),
     offer: terms,
+    ...(linesRaw !== undefined ? { lines: [...(linesRaw as string[])] } : {}),
   };
+}
+
+/** A list of ids (non-empty strings, each once), at least `min` long. */
+function isIdList(v: unknown, min: number): v is string[] {
+  return (
+    Array.isArray(v) &&
+    v.length >= min &&
+    v.every((x) => typeof x === 'string' && x.length > 0 && x.length <= 64) &&
+    new Set(v).size === v.length
+  );
+}
+
+/** An offer (live or frozen) on some categories only, not the whole menu. */
+export function isCategoryOffer(o: { categoryIds?: readonly string[] | null }): boolean {
+  return !!o.categoryIds && o.categoryIds.length > 0;
 }
 
 /**
@@ -329,6 +354,163 @@ export function matchOffer(order: OfferOrder, offers: ReadonlyArray<ChannelOffer
   return best;
 }
 
+// ---------------------------------------------------------------------------
+// Offers on some categories (format 2, v0.7.44): several offers on one order
+// ---------------------------------------------------------------------------
+
+/**
+ * An order line as the offers see it: its id, its menu item's category
+ * (null = none known), what it came to, the name it was sold under (a
+ * delivery charge), and its never-discounted mark (a value deal).
+ */
+export interface OfferLine {
+  id: string;
+  categoryId: string | null;
+  lineTotalCents: number;
+  menuItemName?: string | null;
+  menuItemId?: string | null;
+  noDiscount?: boolean;
+}
+
+/** One offer's share of an order: the lines it comes off and what it takes off them. */
+export interface OfferLinesShare {
+  rule: OfferRule;
+  lineIds: string[];
+  amountCents: number;
+}
+
+/**
+ * Could this line take this offer at all? Never a value deal (an offer's
+ * rule skips them; one frozen before 0.7.34 did not), a delivery charge
+ * only for a whole-menu offer that also comes off it, and an offer on some
+ * categories only its categories' lines.
+ */
+function lineFitsOffer(line: OfferLine, rule: OfferRule): boolean {
+  if (line.noDiscount === true && rule.skipsNoDiscountLines === true) return false;
+  const charge = isDeliveryChargeLine({ menuItemName: line.menuItemName ?? null });
+  if (isCategoryOffer(rule.offer)) {
+    return !charge && line.categoryId !== null && rule.offer.categoryIds!.includes(line.categoryId);
+  }
+  return !charge || rule.alsoOffDeliveryCharge;
+}
+
+/**
+ * Which lines each offer on the order comes off, and what it takes off
+ * them (the owner, 11 Oct 2026: "10 percent offer on entire menu and
+ * separate 20 percent off on regular pizzas so they don't conflict"):
+ *
+ *  - an offer on some categories takes its categories' lines — two such
+ *    offers on one category: the one that takes more off first, then the
+ *    offer's id (the same answer on every till);
+ *  - one that takes nothing off (under its minimum, say) leaves its lines
+ *    to the whole-menu offer;
+ *  - the whole-menu offer takes the food they left (and the delivery charge
+ *    when its rule says so); a second whole-menu offer gets nothing (the
+ *    offer step never puts two on).
+ *
+ * The minimum is always measured on the order's food (`foodCents`: value
+ * deals left out), as for every offer. `rules` are the offers ON the order
+ * (a declined one takes nothing: leave it out). Pure: the offer step, the
+ * totals and the tests run the same lines.
+ */
+export function assignOfferLines(rules: readonly OfferRule[], lines: readonly OfferLine[], foodCents: number): OfferLinesShare[] {
+  const taken = new Set<string>();
+  const sumOf = (ids: readonly string[]) =>
+    lines.filter((l) => ids.includes(l.id)).reduce((s, l) => s + Math.max(0, l.lineTotalCents), 0);
+  const fitting = (rule: OfferRule) => lines.filter((l) => !taken.has(l.id) && lineFitsOffer(l, rule)).map((l) => l.id);
+  const rank = (rule: OfferRule) => (rule.offer.declined ? 0 : offerAmount(rule.offer, sumOf(fitting(rule)), foodCents));
+  const byRank = (list: readonly OfferRule[]) =>
+    [...list]
+      .map((rule) => ({ rule, r: rank(rule) }))
+      .sort((a, b) => b.r - a.r || (a.rule.offer.id < b.rule.offer.id ? -1 : a.rule.offer.id > b.rule.offer.id ? 1 : 0))
+      .map((x) => x.rule);
+  const out: OfferLinesShare[] = [];
+  for (const rule of byRank(rules.filter((r) => isCategoryOffer(r.offer)))) {
+    const ids = fitting(rule);
+    const amountCents = rule.offer.declined ? 0 : offerAmount(rule.offer, sumOf(ids), foodCents);
+    if (amountCents > 0) for (const id of ids) taken.add(id);
+    out.push({ rule, lineIds: amountCents > 0 ? ids : [], amountCents });
+  }
+  for (const rule of byRank(rules.filter((r) => !isCategoryOffer(r.offer)))) {
+    const ids = fitting(rule);
+    const amountCents = rule.offer.declined ? 0 : offerAmount(rule.offer, sumOf(ids), foodCents);
+    if (amountCents > 0) for (const id of ids) taken.add(id);
+    out.push({ rule, lineIds: amountCents > 0 ? ids : [], amountCents });
+  }
+  return out;
+}
+
+/** One offer the order should carry, with the lines it comes off. */
+export interface OfferPlanPick extends OfferPick {
+  lineIds: string[];
+}
+
+export interface OffersMatchOptions extends Omit<OfferMatchOptions, 'current'> {
+  /** The offers on the order now, as frozen on their rows (none declined). */
+  current: readonly OfferRule[];
+  /** The ids of the offers the cashier took off this order (their Rs 0 rows stay; nothing brings them back but "Put it back"). */
+  declined: ReadonlySet<string>;
+}
+
+/**
+ * The offers an order should carry when the owner has offers on some
+ * categories (or the order already carries one): every offer on some
+ * categories that fits and takes something off its categories' lines, and
+ * the one whole-menu offer that takes the most off the food they left.
+ * Each must fit the order (its type, how it came in, the phone, once a day)
+ * and run when the order was started; the minimum is measured on the
+ * order's food. An offer already on keeps its FROZEN terms; and when the
+ * owner has saved the offers since one of them went on, that Save does not
+ * move the order: only the offers already on stay, while they fit.
+ */
+export function matchOffers(
+  order: OfferOrder,
+  lines: readonly OfferLine[],
+  offers: ReadonlyArray<ChannelOffer>,
+  opts: OffersMatchOptions,
+): OfferPlanPick[] {
+  if (!offerCanApplyTo(order)) return [];
+  const used = opts.usedToday ?? new Set<string>();
+  const current = opts.current.filter((r) => !r.offer.declined && !opts.declined.has(r.offer.id));
+  const fits = (rule: OfferRule) => offerMiss(rule.offer, order, used) === null;
+  const olderSave = current.some((r) => r.offer.settingsAt !== opts.settingsAt);
+  const candidates: OfferRule[] = [];
+  if (olderSave) {
+    for (const r of current) if (fits(r)) candidates.push(r);
+  } else {
+    for (const offer of offers) {
+      if (opts.declined.has(offer.id)) continue;
+      const already = current.find((r) => r.offer.id === offer.id);
+      if (already) {
+        if (fits(already)) candidates.push(already);
+        continue;
+      }
+      if (!offerRunsAt(offer, order.createdAt)) continue;
+      if (offerMiss(offer, order, used) !== null) continue;
+      candidates.push(offerRule(offerTerms(offer, opts.settingsAt), opts.alsoOffDeliveryCharge));
+    }
+    // An offer on the order the owner has since removed from the list: only a new Save removes one, so it is
+    // never the same Save — kept out.
+  }
+  const isCurrent = (rule: OfferRule) => current.includes(rule);
+  const byCategory = candidates.filter((r) => isCategoryOffer(r.offer));
+  const wholeMenu = candidates.filter((r) => !isCategoryOffer(r.offer));
+  // The offers on some categories first; then each whole-menu offer on what they left — the one that takes the
+  // most off goes on (a tie: the one already on, then the owner's order of the list).
+  let best: OfferLinesShare | null = null;
+  for (const rule of wholeMenu) {
+    const share = assignOfferLines([...byCategory, rule], lines, order.foodCents).find((x) => x.rule === rule)!;
+    if (share.amountCents <= 0) continue;
+    if (!best || share.amountCents > best.amountCents || (share.amountCents === best.amountCents && isCurrent(rule) && !isCurrent(best.rule))) {
+      best = share;
+    }
+  }
+  const shares = assignOfferLines(best ? [...byCategory, best.rule] : byCategory, lines, order.foodCents);
+  return shares
+    .filter((x) => x.amountCents > 0)
+    .map((x) => ({ rule: x.rule, amountCents: x.amountCents, isCurrent: isCurrent(x.rule), lineIds: x.lineIds }));
+}
+
 /**
  * The counter shows the Walk-in · Phone · WhatsApp chips on a takeaway or
  * delivery order: always when the owner asks, else when an offer that runs
@@ -355,6 +537,8 @@ export function offerHint(
 ): { name: string; needs: 'phone' | 'more_food'; fromCents?: number; oncePerDay?: true } | null {
   if (!rules || !offerCanApplyTo(order)) return null;
   for (const offer of rules.offers) {
+    // An offer on some categories says nothing here: whether the cart holds its items is the till's to work out.
+    if (isCategoryOffer(offer)) continue;
     if (!offerRunsAt(offer, order.createdAt)) continue;
     const miss = offerMiss(offer, order);
     if (miss === 'phone') {

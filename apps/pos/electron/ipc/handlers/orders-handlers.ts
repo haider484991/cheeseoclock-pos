@@ -525,7 +525,12 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
         throw new IpcGuardError({ code: 'forbidden', message: e instanceof Error ? e.message : 'Manager approval failed' });
       }
     }
-    clearDiscount(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId }, { approverUserId });
+    // One offer of several (0.7.44): that one only.
+    const discountId = typeof payload.discountId === 'string' && payload.discountId.length <= 64 ? payload.discountId : undefined;
+    if (payload.discountId !== undefined && discountId === undefined) {
+      throw new IpcGuardError({ code: 'validation_failed', message: 'Which discount?' });
+    }
+    clearDiscount(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId }, { approverUserId, ...(discountId ? { discountId } : {}) });
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     return ok(snap);
