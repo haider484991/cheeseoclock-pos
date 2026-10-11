@@ -10,13 +10,19 @@ import {
   billDependsOnMethod,
   billsByMethod,
   RATED_METHOD_LABEL,
-  type Order,
+  type MethodTotalsCents,
   type PaymentMethod,
   type RatedPaymentMethod,
 } from '@cheeseoclock/shared-types';
 
 /** An order not paid yet as Pay settles it: its stored total is the bill in cash. */
-export function quoteOf(order: Pick<Order, 'totalCents' | 'subtotalCents' | 'discountCents' | 'digitalTotalCents' | 'methodTotalsCents'>): MethodQuote {
+export function quoteOf(order: {
+  totalCents: number;
+  subtotalCents: number;
+  discountCents: number;
+  digitalTotalCents?: number | null;
+  methodTotalsCents?: MethodTotalsCents | null;
+}): MethodQuote {
   return {
     totalCents: order.totalCents,
     digitalTotalCents: order.digitalTotalCents ?? null,

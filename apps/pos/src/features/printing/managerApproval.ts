@@ -22,6 +22,8 @@ export interface ManagerAsk {
    * shift report, v0.7.35); null: the receipt words (approvalPaperNote).
    */
   paperNote: string | null;
+  /** The button's words: "Approve and print" for a paper; "Approve" when nothing prints (0.7.45: Change payment). */
+  actionLabel: string;
   resolve: (secret: string | null) => void;
 }
 
@@ -33,11 +35,12 @@ export function askManagerSecret(
   error: string | null = null,
   printNo: number | null = null,
   paperNote: string | null = null,
+  actionLabel = 'Approve and print',
 ): Promise<string | null> {
   return new Promise((resolve) => {
     // A second question replaces an open one; the first counts as cancelled.
     useManagerApprovalStore.getState().ask?.resolve(null);
-    useManagerApprovalStore.setState({ ask: { message, error, printNo, paperNote, resolve } });
+    useManagerApprovalStore.setState({ ask: { message, error, printNo, paperNote, actionLabel, resolve } });
   });
 }
 

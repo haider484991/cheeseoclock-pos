@@ -20,7 +20,8 @@ import { resetCustomerForm, useCustomerForm } from './useCustomerForm';
 import { CustomerInlinePanel } from './CustomerInlinePanel';
 import { foodpandaDealLine } from './foodpandaDealLine';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
-import { isDeliveryChargeName, isLeaveOutChoice } from '@cheeseoclock/shared-types';
+import { billsByMethod, isDeliveryChargeName, isLeaveOutChoice } from '@cheeseoclock/shared-types';
+import { waysWords } from './billByWay';
 import { cartDiscountDetail, cartOfferDetail, FREE_ORDER_LABEL, offerOnOrder, offerRowAction, severalOffersOn } from './discountWords';
 import { useCheckoutRules } from '../settings/shop-rules/useShopSetting';
 
@@ -91,7 +92,9 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
   const subtotalCents = order?.subtotalCents ?? 0;
   const discountCents = order?.discountCents ?? 0;
   const taxCents = order?.taxCents ?? 0;
-  const cardTotalCents = order?.digitalTotalCents ?? null;
+  // The bill by each way of paying whose bill is not the total (0052 the card; 0.7.45 each way its own).
+  // Only before it is paid: a paid order's total is the bill as it was settled.
+  const byWays = order && order.paidAt === null ? billsByMethod(order) : [];
   const itemCount = items.reduce((n, i) => n + i.quantity, 0);
   const shortNumber = order?.orderNumber.split('-').pop() ?? null;
   const discount = snapshot?.discounts[snapshot.discounts.length - 1] ?? null;
@@ -431,13 +434,13 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
             <dt>Total</dt>
             <dd>{formatCents(totalCents)}</dd>
           </div>
-          {/* The same bill by card / wallet / bank (0052): its lines at their card rates. Only when the order has one. */}
-          {cardTotalCents !== null && cardTotalCents !== totalCents && (
-            <div className="text-xs text-stone-500" data-testid="card-total">
-              <dt>By card</dt>
-              <dd>{formatCents(cardTotalCents)}</dd>
+          {/* The same bill by card / wallet / bank (0052; 0.7.45 each way at its own rate): one line per bill. */}
+          {byWays.map((g) => (
+            <div key={g.methods.join('-')} className="text-xs text-stone-500" data-testid="card-total">
+              <dt>By {waysWords(g.methods)}</dt>
+              <dd>{formatCents(g.totalCents)}</dd>
             </div>
-          )}
+          ))}
         </dl>
 
         {heldBy ? (

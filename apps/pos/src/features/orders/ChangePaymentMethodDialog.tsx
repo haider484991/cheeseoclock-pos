@@ -54,8 +54,8 @@ export function ChangePaymentMethodDialog({
   const qc = useQueryClient();
   const { toast } = useToast();
   const [pick, setPick] = useState<ChangeablePaymentMethod | null>(null);
-  // Saved, and the bill changed with it: the new bill can be printed.
-  const [done, setDone] = useState<PaymentMethodChanged | null>(null);
+  // Saved, and the bill changed with it: the new bill can be printed (and the way it is paid now).
+  const [done, setDone] = useState<(PaymentMethodChanged & { method: ChangeablePaymentMethod }) | null>(null);
   const refund = payment.amountCents < 0;
   const previewQ = useQuery({
     queryKey: ['orders', orderId, 'paymentChangePreview', payment.id],
@@ -68,7 +68,7 @@ export function ChangePaymentMethodDialog({
     mutationFn: async (method: ChangeablePaymentMethod) => {
       let approverPin: string | undefined;
       if (needsManager) {
-        const secret = await askManagerSecret(CHANGE_METHOD_PIN_WHY, null, null, CHANGE_METHOD_PIN_NOTE);
+        const secret = await askManagerSecret(CHANGE_METHOD_PIN_WHY, null, null, CHANGE_METHOD_PIN_NOTE, 'Approve');
         if (!secret) throw new Error('Not changed - no manager approval');
         approverPin = secret;
       }
@@ -79,7 +79,7 @@ export function ChangePaymentMethodDialog({
       // The order, the shift's drawer (open or closed) and every report that splits by method.
       for (const key of ['orders', 'shifts', 'reports'] as const) void qc.invalidateQueries({ queryKey: [key] });
       // A bill that changed: stay open to print the new one. Else done.
-      if (r.rebilled) setDone(r);
+      if (r.rebilled) setDone({ ...r, method });
       else onClose();
     },
     onError: (e) => toast({ title: 'Not changed', description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' }),
@@ -103,8 +103,13 @@ export function ChangePaymentMethodDialog({
             <div>
               <Dialog.Title className="text-lg font-semibold">{refund ? CHANGE_REFUND_TITLE : CHANGE_METHOD_TITLE}</Dialog.Title>
               <Dialog.Description className="mt-0.5 text-sm text-stone-600 dark:text-stone-300">
-                {orderLabel} · {refund ? `refund ${formatCents(-payment.amountCents)}` : formatCents(payment.amountCents)} · now{' '}
-                <span className="font-semibold">{PAYMENT_LABELS[payment.method]}</span>
+                {orderLabel} ·{' '}
+                {done?.rebilled
+                  ? formatCents(done.rebilled.amountAfterCents)
+                  : refund
+                    ? `refund ${formatCents(-payment.amountCents)}`
+                    : formatCents(payment.amountCents)}{' '}
+                · now <span className="font-semibold">{PAYMENT_LABELS[done?.method ?? payment.method]}</span>
               </Dialog.Description>
             </div>
             <button

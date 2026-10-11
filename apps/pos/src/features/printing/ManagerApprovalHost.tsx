@@ -52,7 +52,7 @@ export function ManagerApprovalHost() {
                 Cancel
               </Button>
               <Button type="submit" variant="primary" disabled={!secret.trim()}>
-                Approve and print
+                {ask.actionLabel}
               </Button>
             </div>
           </form>

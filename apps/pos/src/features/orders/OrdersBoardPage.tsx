@@ -808,20 +808,25 @@ function OrderCard({
       ) : (
         <div className="mt-2 flex items-center justify-between border-t border-stone-100 pt-2 dark:border-stone-700">
           <div className="flex items-center gap-2">
-            <span className="font-mono text-base font-bold text-stone-900 dark:text-stone-100">
+            <span className="whitespace-nowrap font-mono text-base font-bold text-stone-900 dark:text-stone-100">
               {formatCents(order.totalCents)}
             </span>
             {onTakePayment ? (
               // Not paid, and the kitchen has it: the chip takes the money now (the order stays where it is).
-              <button type="button" onClick={onTakePayment} title="Take payment now" aria-label="Not paid: take payment now" className="rounded-full">
-                <PaidChip paid={false} className="ring-1 ring-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900" />
-                <span className="ml-1 text-[11px] font-semibold text-amber-800 underline dark:text-amber-300">Take payment</span>
+              <button
+                type="button"
+                onClick={onTakePayment}
+                title="Take payment now"
+                aria-label="Not paid: take payment now"
+                className={TAKE_PAYMENT_CHIP}
+              >
+                Not paid · Pay
               </button>
             ) : (
               <PaidChip paid={paid} />
             )}
           </div>
-          <span className="text-xs text-stone-500">
+          <span className="whitespace-nowrap text-xs text-stone-500">
             {itemCount} {itemCount === 1 ? 'item' : 'items'}
           </span>
         </div>
@@ -912,6 +917,9 @@ const RIDER_LINK =
 /** "Rider owes Rs 4,515": amber, in the rider's box. */
 const OWES_CHIP =
   'inline-flex items-center whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900 dark:bg-amber-950 dark:text-amber-200';
+/** "Not paid · Pay" (0.7.45): the NOT PAID chip as a button that takes the money, one line, as small as the chip. */
+const TAKE_PAYMENT_CHIP =
+  'inline-flex items-center whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900 ring-1 ring-amber-400 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:hover:bg-amber-900';
 /** An Out card's total row: the bill, and PAID / NOT PAID unless the rider's box says what he owes. */
 const OUT_CARD_TOTAL = 'mt-1.5 flex items-center gap-2 border-t border-stone-100 pt-1.5 dark:border-stone-700';
 /** [Rider paid] [Print] [Cancel]. */
