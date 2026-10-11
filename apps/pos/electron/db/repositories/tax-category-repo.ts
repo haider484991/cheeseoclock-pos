@@ -1,7 +1,7 @@
 import { v7 as uuidv7 } from 'uuid';
 import type { AppDatabase } from '../connection.js';
 import { writeWithSync, nowIso, type Actor } from './base.js';
-import type { TaxCategory } from '@cheeseoclock/shared-types';
+import { cleanMethodRates, methodMapJson, parseMethodRates, type MethodRatesBps, type TaxCategory } from '@cheeseoclock/shared-types';
 
 interface Row {
   id: string;
@@ -9,6 +9,8 @@ interface Row {
   rate_bps: number;
   /** The rate when paid by card / wallet / bank (0052); null = none. */
   digital_rate_bps: number | null;
+  /** The ways of paying with a rate of their own, different from the card rate (0054); null = none. */
+  method_rates_json: string | null;
   created_at: string;
   updated_at: string;
   synced_at: string | null;
@@ -17,7 +19,7 @@ interface Row {
   version: number;
 }
 
-const ROW_SELECT = `id, name, rate_bps, digital_rate_bps, created_at, updated_at, synced_at, deleted_at, device_id, version`;
+const ROW_SELECT = `id, name, rate_bps, digital_rate_bps, method_rates_json, created_at, updated_at, synced_at, deleted_at, device_id, version`;
 
 function rowToTax(row: Row): TaxCategory {
   return {
@@ -25,6 +27,7 @@ function rowToTax(row: Row): TaxCategory {
     name: row.name,
     rateBps: row.rate_bps as TaxCategory['rateBps'],
     digitalRateBps: (row.digital_rate_bps ?? null) as TaxCategory['digitalRateBps'],
+    methodRatesBps: parseMethodRates(row.method_rates_json),
   };
 }
 
@@ -57,17 +60,20 @@ export function findTaxCategory(db: AppDatabase, id: string): TaxCategory | null
 
 export function createTaxCategory(
   db: AppDatabase,
-  input: { name: string; rateBps: number; digitalRateBps?: number | null },
+  input: { name: string; rateBps: number; digitalRateBps?: number | null; methodRatesBps?: MethodRatesBps | null },
   actor: Actor,
 ): TaxCategory {
   const id = uuidv7();
   const now = nowIso();
   const digitalRateBps = cleanDigitalRateBps(input.digitalRateBps, input.rateBps);
+  // The ways with a rate of their own (0.7.45): only those that differ from the card rate.
+  const methodRatesBps = cleanMethodRates(input.methodRatesBps, { rateBps: input.rateBps, digitalRateBps });
   const tax: TaxCategory = {
     id: id as TaxCategory['id'],
     name: input.name,
     rateBps: input.rateBps as TaxCategory['rateBps'],
     digitalRateBps: digitalRateBps as TaxCategory['digitalRateBps'],
+    methodRatesBps,
   };
   writeWithSync({
     db,
@@ -80,9 +86,9 @@ export function createTaxCategory(
     after: tax,
     writeRow: () => {
       db.prepare(
-        `INSERT INTO tax_categories (id, name, rate_bps, digital_rate_bps, created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
-      ).run(id, input.name, input.rateBps, digitalRateBps, now, now, actor.deviceId);
+        `INSERT INTO tax_categories (id, name, rate_bps, digital_rate_bps, method_rates_json, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(id, input.name, input.rateBps, digitalRateBps, methodMapJson(methodRatesBps), now, now, actor.deviceId);
     },
   });
   return tax;
@@ -90,7 +96,7 @@ export function createTaxCategory(
 
 export function updateTaxCategory(
   db: AppDatabase,
-  input: { id: string; name?: string; rateBps?: number; digitalRateBps?: number | null },
+  input: { id: string; name?: string; rateBps?: number; digitalRateBps?: number | null; methodRatesBps?: MethodRatesBps | null },
   actor: Actor,
 ): TaxCategory {
   const row = db
@@ -102,11 +108,17 @@ export function updateTaxCategory(
   const rateBps = input.rateBps ?? row.rate_bps;
   // Absent = keep the card rate it has; null = no card rate any more.
   const digitalRateBps = cleanDigitalRateBps(input.digitalRateBps === undefined ? row.digital_rate_bps : input.digitalRateBps, rateBps);
+  // Absent = keep the ways' own rates it has (measured again against the card rate now); null = none any more.
+  const methodRatesBps = cleanMethodRates(
+    input.methodRatesBps === undefined ? parseMethodRates(row.method_rates_json) : input.methodRatesBps,
+    { rateBps, digitalRateBps },
+  );
   const updated: TaxCategory = {
     id: row.id as TaxCategory['id'],
     name,
     rateBps: rateBps as TaxCategory['rateBps'],
     digitalRateBps: digitalRateBps as TaxCategory['digitalRateBps'],
+    methodRatesBps,
   };
   const now = nowIso();
 
@@ -121,8 +133,8 @@ export function updateTaxCategory(
     after: updated,
     writeRow: () => {
       db.prepare(
-        `UPDATE tax_categories SET name = ?, rate_bps = ?, digital_rate_bps = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
-      ).run(name, rateBps, digitalRateBps, now, input.id);
+        `UPDATE tax_categories SET name = ?, rate_bps = ?, digital_rate_bps = ?, method_rates_json = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+      ).run(name, rateBps, digitalRateBps, methodMapJson(methodRatesBps), now, input.id);
     },
   });
   return updated;

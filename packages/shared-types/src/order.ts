@@ -1,6 +1,7 @@
 import type { Cents } from './money.js';
 import type { UUID, OrderNumber } from './ids.js';
 import type { DiscountSource, FoodpandaDealShare, OfferShare, OrderCameBy } from './shop-settings.js';
+import type { MethodRatesBps, MethodTotalsCents } from './tax-by-method.js';
 
 // 'dine_in' is retained for historical orders; the POS no longer offers it.
 export type OrderMode = 'dine_in' | 'takeaway' | 'delivery' | 'online' | 'foodpanda';
@@ -72,6 +73,14 @@ export interface Order {
    * total. Pay reads it through pos-domain splitTender.
    */
   digitalTotalCents?: Cents | null;
+  /**
+   * The bill if paid entirely one way, for the ways of paying whose bill
+   * differs from the bill by card (orders.method_totals_json, 0.7.45: a
+   * rate for each way of paying): {"jazzcash": 115000}. Absent / null =
+   * none: every way but cash pays digitalTotalCents (else the total). Read
+   * it through billByMethod (tax-by-method.ts).
+   */
+  methodTotalsCents?: MethodTotalsCents | null;
   /**
    * Written by the sale (0052): the part of the bill before tax that was
    * paid by card / wallet / bank, and the tax on that part (pos-domain
@@ -256,6 +265,12 @@ export interface OrderSnapshot {
        * Absent / null = none: the line is taxed at taxRateBps however it is paid.
        */
       digitalRateBps?: number | null;
+      /**
+       * The line's rates for the ways of paying with a rate of their own
+       * (order_items.method_rates_snapshot_json, 0.7.45), frozen with the
+       * others. Absent / null = none: every way but cash at digitalRateBps.
+       */
+      methodRatesBps?: MethodRatesBps | null;
       modifiers: OrderItemModifier[];
     }
   >;
@@ -385,6 +400,17 @@ export interface PaymentMethodChanged {
     expectedCashCents: number;
     varianceCents: number;
     previousVarianceCents: number;
+  } | null;
+  /**
+   * The bill was worked out again for the new way of paying (0.7.45: a card
+   * rate, or a way with a rate of its own): the payment's amount and the
+   * order's total before and after. Null / absent: the amount stayed.
+   */
+  rebilled?: {
+    amountBeforeCents: number;
+    amountAfterCents: number;
+    totalBeforeCents: number;
+    totalAfterCents: number;
   } | null;
 }
 

@@ -10,6 +10,7 @@
 import type { ApiResult } from './ipc.js';
 import type { LicenceStatus } from './licence.js';
 import type { DashLoginMade, DashLoginView, DashPushStatus, DashRole } from './dashboard.js';
+import type { MethodRatesBps } from './tax-by-method.js';
 import type { DeliveryChargeTaxSaved, DeliveryChargeTaxView, SaveDeliveryChargeTaxRequest } from './delivery-charge-tax.js';
 import type { AuthenticatedUser, User, Role } from './auth.js';
 import type {
@@ -592,13 +593,16 @@ export interface IpcContract {
     response: ApiResult<TaxCategory[]>;
   };
   'menu:createTaxCategory': {
-    /** `digitalRateBps`: the rate when paid by card / wallet / bank (0052); null / absent = none. */
-    request: { name: string; rateBps: number; digitalRateBps?: number | null };
+    /**
+     * `digitalRateBps`: the rate when paid by card / wallet / bank (0052); null / absent = none.
+     * `methodRatesBps`: the ways of paying with a rate of their own (0.7.45); null / absent = none.
+     */
+    request: { name: string; rateBps: number; digitalRateBps?: number | null; methodRatesBps?: MethodRatesBps | null };
     response: ApiResult<TaxCategory>;
   };
   'menu:updateTaxCategory': {
-    /** `digitalRateBps`: absent = keep, null = no card rate any more. */
-    request: { id: string; name?: string; rateBps?: number; digitalRateBps?: number | null };
+    /** `digitalRateBps`: absent = keep, null = no card rate any more. `methodRatesBps` likewise for the ways' own rates. */
+    request: { id: string; name?: string; rateBps?: number; digitalRateBps?: number | null; methodRatesBps?: MethodRatesBps | null };
     response: ApiResult<TaxCategory>;
   };
   'menu:deleteTaxCategory': {
@@ -1041,7 +1045,8 @@ export interface IpcContract {
    * how it was paid (the card tax rate) cash and card cannot be swapped.
    */
   'orders:changePaymentMethod': {
-    request: { orderId: string; paymentId: string; method: ChangeablePaymentMethod };
+    /** `approverPin`: a manager's (or the owner's) PIN or password — a cashier's change needs one (0.7.45). */
+    request: { orderId: string; paymentId: string; method: ChangeablePaymentMethod; approverPin?: string };
     response: ApiResult<PaymentMethodChanged>;
   };
 

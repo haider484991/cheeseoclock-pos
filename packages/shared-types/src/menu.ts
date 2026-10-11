@@ -1,6 +1,7 @@
 import type { Cents, Bps } from './money.js';
 import type { UUID } from './ids.js';
 import { BUY_1_GET_1_NAME_RE } from './buy-1-get-1.js';
+import type { MethodRatesBps } from './tax-by-method.js';
 
 export type PrepStation = 'kitchen' | 'bar' | 'cold';
 
@@ -226,6 +227,13 @@ export interface TaxCategory {
    * as rateBps (no card rate). Read it through taxRateByPayment.
    */
   digitalRateBps?: Bps | null;
+  /**
+   * The ways of paying with a rate of their own, different from the card
+   * rate (tax_categories.method_rates_json, 0.7.45): {"jazzcash": 1500}.
+   * Null / absent = none: every way but cash pays the card rate. Read a
+   * rate through rateByMethod (tax-by-method.ts).
+   */
+  methodRatesBps?: MethodRatesBps | null;
 }
 
 /** The rate a tax category charges a bill paid by card / wallet / bank: its card rate, else its rate. */

@@ -36,6 +36,12 @@ export const taxCategorySchema = z.object({
   rateBps: bpsSchema,
   /** The rate when paid by card / wallet / bank (0052); null / absent = the same as rateBps. */
   digitalRateBps: bpsSchema.nullable().optional(),
+  /** The ways of paying with a rate of their own, different from the card rate (0.7.45); null / absent = none. */
+  methodRatesBps: z
+    .object({ card: bpsSchema, easypaisa: bpsSchema, jazzcash: bpsSchema, bank_transfer: bpsSchema })
+    .partial()
+    .nullable()
+    .optional(),
 });
 
 export const modifierGroupSchema = z.object({

@@ -47,6 +47,7 @@ import {
   isCategoryOffer,
   taxAfterDiscountRows,
   type DiscountRowShare,
+  type MethodQuote,
   type OfferLine,
   mostOffWithoutManagerCents,
   normalizePhone,
@@ -59,7 +60,8 @@ import {
   taxAfterDiscount,
   tillDiscountRule,
   digitalCentsOf,
-  splitTender,
+  methodWords,
+  settleLegs,
   tradingDayOfInstant,
   validateOrderForTender,
   validateVoid,
@@ -92,8 +94,18 @@ import {
   deliveryChargeLinesCents,
   isDeliveryChargeLine,
   isDeliveryChargeMenuItem,
+  billByMethod,
   isOutsideRiderOrder,
+  isRatedPaymentMethod,
+  methodMapJson,
   paidAfterItLeft,
+  parseMethodRates,
+  parseMethodTotals,
+  RATED_PAYMENT_METHODS,
+  rateByMethod,
+  type MethodRatesBps,
+  type MethodTotalsCents,
+  type RatesByMethod,
 } from '@cheeseoclock/shared-types';
 import type {
   CameBy,
@@ -175,6 +187,8 @@ interface OrderRow {
   /** The part before tax paid by card / wallet / bank, and the tax on it (0052); 0 = none. */
   digital_net_cents?: number | null;
   digital_tax_cents?: number | null;
+  /** The bill by each way of paying whose bill differs from the bill by card (0054); null = none. */
+  method_totals_json?: string | null;
 }
 
 const ORDER_CAME_BY: readonly string[] = ['walk_in', 'phone', 'whatsapp', 'website', 'foodpanda'];
@@ -222,6 +236,9 @@ function rowToOrder(row: OrderRow): Order {
     ...(typeof row.digital_total_cents === 'number' ? { digitalTotalCents: row.digital_total_cents as Order['totalCents'] } : {}),
     ...(row.digital_net_cents ? { digitalNetCents: row.digital_net_cents as Order['totalCents'] } : {}),
     ...(row.digital_tax_cents ? { digitalTaxCents: row.digital_tax_cents as Order['totalCents'] } : {}),
+    // The bill by each way of paying with a rate of its own (0054), only when one has: every
+    // other order reads exactly as before.
+    ...methodTotalsOf(row.method_totals_json),
     createdAt: row.created_at,
     // When it was sent (0048), only once it was: an order never sent, or one
     // from before 0.7.34, reads exactly as before (every reader falls back to
@@ -255,6 +272,18 @@ function rowToOrder(row: OrderRow): Order {
   };
 }
 
+/** `{ methodRatesBps }` from a line's stored method_rates_snapshot_json, or nothing at all when it holds none. */
+function lineMethodRatesOf(json: string | null | undefined): { methodRatesBps?: MethodRatesBps } {
+  const rates = parseMethodRates(json);
+  return rates ? { methodRatesBps: rates } : {};
+}
+
+/** `{ methodTotalsCents }` from a stored method_totals_json, or nothing at all when it holds none. */
+function methodTotalsOf(json: string | null | undefined): { methodTotalsCents?: Order['methodTotalsCents'] } {
+  const totals = parseMethodTotals(json);
+  return totals ? { methodTotalsCents: totals as Order['methodTotalsCents'] } : {};
+}
+
 function isTestDeleteStock(v: unknown): v is TestDeleteStock {
   return v === 'put_back' || v === 'waste' || v === 'none' || v === 'settled_before';
 }
@@ -266,7 +295,7 @@ const ORDER_SELECT = `
   assigned_rider_id, dispatched_at, delivered_at,
   created_at, updated_at, device_id, version,
   deleted_at, deleted_by, delete_reason, delete_kind, delete_stock, came_by, sent_at, rider_keeps_cents,
-  digital_total_cents, digital_net_cents, digital_tax_cents
+  digital_total_cents, digital_net_cents, digital_tax_cents, method_totals_json
 `;
 
 /**
@@ -2092,11 +2121,13 @@ export function addOrderItem(
         categoryNeverDiscounted({ name: itemRow.category_name ?? '', noDiscount: noDiscountOf(itemRow.category_no_discount) }));
 
     const taxRow = db
-      .prepare(`SELECT rate_bps, digital_rate_bps FROM tax_categories WHERE id = ? AND deleted_at IS NULL`)
-      .get(itemRow.tax_category_id) as { rate_bps: number; digital_rate_bps: number | null } | undefined;
+      .prepare(`SELECT rate_bps, digital_rate_bps, method_rates_json FROM tax_categories WHERE id = ? AND deleted_at IS NULL`)
+      .get(itemRow.tax_category_id) as { rate_bps: number; digital_rate_bps: number | null; method_rates_json: string | null } | undefined;
     const rateBps = taxRow?.rate_bps ?? 0;
     // The category's card rate (0052), frozen on the line like its rate; null = none.
     const digitalRateBps = taxRow?.digital_rate_bps ?? null;
+    // …and the ways of paying with a rate of their own (0054), read back and stored again as this till reads them.
+    const methodRatesJson = methodMapJson(parseMethodRates(taxRow?.method_rates_json));
 
     const unitPrice = input.unitPriceOverrideCents ?? itemRow.base_price_cents;
 
@@ -2150,9 +2181,9 @@ export function addOrderItem(
       `INSERT INTO order_items
          (id, order_id, menu_item_id, menu_item_name, combo_id, parent_order_item_id,
           quantity, unit_price_cents, line_total_cents, tax_category_id, tax_rate_bps_snapshot,
-          digital_rate_bps_snapshot, prep_station_snapshot, notes, kitchen_status, no_discount,
+          digital_rate_bps_snapshot, method_rates_snapshot_json, prep_station_snapshot, notes, kitchen_status, no_discount,
           created_at, updated_at, device_id, version)
-       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 1)`,
+       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 1)`,
     ).run(
       itemId,
       input.orderId,
@@ -2165,6 +2196,7 @@ export function addOrderItem(
       itemRow.tax_category_id,
       rateBps,
       digitalRateBps,
+      methodRatesJson,
       itemRow.prep_station,
       input.notes ?? null,
       noDiscount ? 1 : 0,
@@ -2537,11 +2569,12 @@ function discountLinesOf(
   taxRateBps: number;
   noDiscount: boolean;
   digitalRateBps: number | null;
+  methodRatesBps: MethodRatesBps | null;
 }> {
   const rows = db
     .prepare(
       `SELECT oi.id, oi.line_total_cents, oi.menu_item_name, oi.menu_item_id, mi.category_id,
-              oi.tax_rate_bps_snapshot, oi.digital_rate_bps_snapshot, oi.no_discount
+              oi.tax_rate_bps_snapshot, oi.digital_rate_bps_snapshot, oi.method_rates_snapshot_json, oi.no_discount
          FROM order_items oi
          LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
         WHERE oi.order_id = ? AND oi.deleted_at IS NULL
@@ -2555,6 +2588,7 @@ function discountLinesOf(
     category_id: string | null;
     tax_rate_bps_snapshot: number;
     digital_rate_bps_snapshot: number | null;
+    method_rates_snapshot_json: string | null;
     no_discount: number;
   }>;
   return rows.map((r) => ({
@@ -2568,7 +2602,45 @@ function discountLinesOf(
     noDiscount: r.no_discount === 1,
     // The line's card rate (0052); null = none.
     digitalRateBps: r.digital_rate_bps_snapshot ?? null,
+    // The ways of paying with a rate of their own (0054); null = none.
+    methodRatesBps: parseMethodRates(r.method_rates_snapshot_json),
   }));
+}
+
+/** A line as the bill by each way of paying sees it. */
+type RatedLine = ReturnType<typeof discountLinesOf>[number];
+
+/** A line's rates as tax-by-method reads them. */
+function ratesOf(l: Pick<RatedLine, 'taxRateBps' | 'digitalRateBps' | 'methodRatesBps'>): RatesByMethod {
+  return { rateBps: l.taxRateBps, digitalRateBps: l.digitalRateBps, methodRatesBps: l.methodRatesBps };
+}
+
+/**
+ * The bill by card (orders.digital_total_cents, 0052) and by each way of
+ * paying with a rate of its own (orders.method_totals_json, 0054): the same
+ * lines and the same discount shares, each line at that way's rate. `taxAt`
+ * works the tax of the lines at the rates it is given exactly as the stored
+ * tax is worked (one discount, or several offers). The bill by card is null
+ * when no line has a card rate different from its rate, as since 0052; a way
+ * has a bill of its own only when some line's rate that way differs from its
+ * card rate — so an order from before 0054, or with no way of its own, is
+ * stored exactly as before.
+ */
+function billsByMethodOf(
+  lines: ReadonlyArray<RatedLine>,
+  subtotal: number,
+  discount: number,
+  taxAt: (lines: RatedLine[]) => number,
+): { digitalTotal: number | null; methodTotals: MethodTotalsCents | null } {
+  const billAt = (method: string) =>
+    subtotal - discount + (subtotal > 0 ? taxAt(lines.map((l) => ({ ...l, taxRateBps: rateByMethod(ratesOf(l), method) }))) : 0);
+  const digitalTotal = lines.some((l) => rateByMethod(ratesOf(l), 'card') !== l.taxRateBps) ? billAt('card') : null;
+  const methodTotals: MethodTotalsCents = {};
+  for (const m of RATED_PAYMENT_METHODS) {
+    if (m === 'card') continue;
+    if (lines.some((l) => rateByMethod(ratesOf(l), m) !== rateByMethod(ratesOf(l), 'card'))) methodTotals[m] = billAt(m);
+  }
+  return { digitalTotal, methodTotals: Object.keys(methodTotals).length > 0 ? methodTotals : null };
 }
 
 /** The order's lines as the offers see them (pos-domain OfferLine). */
@@ -2638,51 +2710,31 @@ function recomputeSeveralOffers(db: AppDatabase, orderId: string): boolean {
   });
   const discount = worked.reduce((sum, w) => sum + w.amountCents, 0);
   const tax = subtotal > 0 ? taxAfterDiscountRows(lines, worked).taxCents : 0;
-  // The same bill paid by card / wallet / bank (0052), each line at its card rate; null when no line has one.
-  const digitalTotal = lines.some((l) => l.digitalRateBps !== null && l.digitalRateBps !== l.taxRateBps)
-    ? subtotal -
-      discount +
-      (subtotal > 0
-        ? taxAfterDiscountRows(
-            lines.map((l) => ({ ...l, taxRateBps: l.digitalRateBps ?? l.taxRateBps })),
-            worked,
-          ).taxCents
-        : 0)
-    : null;
+  // The same bill paid by card / wallet / bank (0052), each line at its card rate, and by each way
+  // of paying with a rate of its own (0054); null when no line has one.
+  const { digitalTotal, methodTotals } = billsByMethodOf(lines, subtotal, discount, (ls) => taxAfterDiscountRows(ls, worked).taxCents);
   const total = subtotal - discount + tax;
   db.prepare(
     `UPDATE orders SET
-       subtotal_cents = ?, discount_cents = ?, tax_cents = ?, total_cents = ?, digital_total_cents = ?,
+       subtotal_cents = ?, discount_cents = ?, tax_cents = ?, total_cents = ?, digital_total_cents = ?, method_totals_json = ?,
        updated_at = ?, version = version + 1
      WHERE id = ?`,
-  ).run(subtotal, discount, tax, total, digitalTotal, now, orderId);
+  ).run(subtotal, discount, tax, total, digitalTotal, methodMapJson(methodTotals), now, orderId);
   enqueueSync(db, {
     entityType: 'orders',
     entityId: orderId,
     op: 'upsert',
-    payload: { id: orderId, subtotalCents: subtotal, discountCents: discount, taxCents: tax, totalCents: total, digitalTotalCents: digitalTotal },
+    payload: {
+      id: orderId,
+      subtotalCents: subtotal,
+      discountCents: discount,
+      taxCents: tax,
+      totalCents: total,
+      digitalTotalCents: digitalTotal,
+      methodTotalsCents: methodTotals,
+    },
   });
   return true;
-}
-
-/**
- * The bill if paid entirely by card / wallet / bank (orders.digital_total_cents,
- * 0052): subtotal less discount, plus each line's tax at its card rate on what
- * is left of it — the discount shared exactly as for the stored tax
- * (taxAfterDiscount), so the two bills differ only by the rates. Null when no
- * line carries a card rate different from its rate: then the total is the
- * total however the customer pays, as before 0052.
- */
-function cardTotalOf(
-  lines: ReadonlyArray<{ lineTotalCents: number; menuItemName: string; taxRateBps: number; noDiscount: boolean; digitalRateBps: number | null }>,
-  subtotal: number,
-  discount: number,
-  scope: DiscountScope,
-): number | null {
-  if (!lines.some((l) => l.digitalRateBps !== null && l.digitalRateBps !== l.taxRateBps)) return null;
-  const atCardRates = lines.map((l) => ({ ...l, taxRateBps: l.digitalRateBps ?? l.taxRateBps }));
-  const tax = subtotal > 0 ? taxAfterDiscount(atCardRates, discount, scope).taxCents : 0;
-  return subtotal - discount + tax;
 }
 
 export function applyDiscount(
@@ -3156,24 +3208,33 @@ function recomputeOrderTotals(
   // way. Lines in insertion order so they all agree.
   const tax = subtotal > 0 ? taxAfterDiscount(lines, discount, scope).taxCents : 0;
   // The same bill paid by card / wallet / bank (0052): the same shares, each
-  // line at its card rate. Null when no line has one: the total is the total.
-  const digitalTotal = cardTotalOf(lines, subtotal, discount, scope);
+  // line at its card rate — and by each way of paying with a rate of its own
+  // (0054). Null when no line has one: the total is the total.
+  const { digitalTotal, methodTotals } = billsByMethodOf(lines, subtotal, discount, (ls) => taxAfterDiscount(ls, discount, scope).taxCents);
 
   const total = subtotal - discount + tax;
   const now = nowIso();
 
   db.prepare(
     `UPDATE orders SET
-       subtotal_cents = ?, discount_cents = ?, tax_cents = ?, total_cents = ?, digital_total_cents = ?,
+       subtotal_cents = ?, discount_cents = ?, tax_cents = ?, total_cents = ?, digital_total_cents = ?, method_totals_json = ?,
        updated_at = ?, version = version + 1
      WHERE id = ?`,
-  ).run(subtotal, discount, tax, total, digitalTotal, now, orderId);
+  ).run(subtotal, discount, tax, total, digitalTotal, methodMapJson(methodTotals), now, orderId);
 
   enqueueSync(db, {
     entityType: 'orders',
     entityId: orderId,
     op: 'upsert',
-    payload: { id: orderId, subtotalCents: subtotal, discountCents: discount, taxCents: tax, totalCents: total, digitalTotalCents: digitalTotal },
+    payload: {
+      id: orderId,
+      subtotalCents: subtotal,
+      discountCents: discount,
+      taxCents: tax,
+      totalCents: total,
+      digitalTotalCents: digitalTotal,
+      methodTotalsCents: methodTotals,
+    },
   });
   // Note: no audit_log for total recomputes — they're a side-effect, not a user action
   void actor; // (reserved for future per-recompute audit if needed)
@@ -3233,34 +3294,90 @@ interface SettledBill {
 }
 
 /**
- * The bill as these legs settle it when the order carries a card rate (0052;
- * pos-domain splitTender): the card / wallet / bank part at the card rates,
- * the cash part at the cash rates. Null when the order has no card rate, or
- * is foodpanda's: the stored total stands and the caller checks the legs
- * against it as before 0052. Legs that do not fit are refused in plain words.
+ * An order's bill by each way of paying, worked out again from its lines and
+ * its discount rows as they are now (0.7.45: Change payment on a paid order,
+ * whose stored total is the bill as it was settled, not the bill in cash).
+ * The same sums as recomputeOrderTotals — the one discount over the scope
+ * frozen on its row, or several offers each over its own lines — on the
+ * stored subtotal and discount, so an order that has not changed since it
+ * was rung up reads exactly the bill Pay was shown. Writes nothing.
+ */
+export function orderBillQuote(db: AppDatabase, orderId: string): MethodQuote | null {
+  const order = findOrder(db, orderId);
+  if (!order) return null;
+  const lines = discountLinesOf(db, orderId);
+  const rows = liveDiscountRows(db, orderId);
+  const subtotal = order.subtotalCents;
+  const discount = order.discountCents;
+  // Several offers on one order (0.7.44), as recomputeSeveralOffers tells them apart.
+  const rules = rows.map((r) => (r.source === 'offer' ? parseOfferRule(r.rule_json) : null));
+  const several =
+    rows.length > 0 &&
+    rules.every((r) => r !== null) &&
+    (rows.length >= 2 || rules.some((r) => r !== null && (isCategoryOffer(r.offer) || r.lines !== undefined)));
+  const last = rows[rows.length - 1];
+  const scope: DiscountScope = last ? discountRuleScope(last.rule_json) : { alsoOffDeliveryCharge: true, skipsNoDiscountLines: false };
+  const taxAt = several
+    ? (ls: RatedLine[]) => taxAfterDiscountRows(ls, rows.map((r) => ({ amountCents: r.amount_cents, ruleJson: r.rule_json }))).taxCents
+    : (ls: RatedLine[]) => taxAfterDiscount(ls, discount, scope).taxCents;
+  const cashTax = subtotal > 0 ? taxAt(lines) : 0;
+  const { digitalTotal, methodTotals } = billsByMethodOf(lines, subtotal, discount, taxAt);
+  return {
+    totalCents: subtotal - discount + cashTax,
+    digitalTotalCents: digitalTotal,
+    methodTotalsCents: methodTotals,
+    netCents: subtotal - discount,
+  };
+}
+
+/**
+ * Does this order's bill depend on how it is paid: a card rate (0052) or a
+ * way of paying with a rate of its own (0054)? Never a foodpanda order's.
+ */
+export function orderHasPaymentRates(order: Pick<Order, 'mode' | 'digitalTotalCents' | 'methodTotalsCents'>): boolean {
+  if (order.mode === 'foodpanda') return false;
+  return typeof order.digitalTotalCents === 'number' || Object.keys(order.methodTotalsCents ?? {}).length > 0;
+}
+
+/**
+ * The bill as these legs settle it when the order's bill depends on how it
+ * is paid (0052, 0054; pos-domain settleLegs): each part by card, a wallet or
+ * a bank at that way's rates, the cash part at the cash rates. Null when it
+ * does not, or the order is foodpanda's: the stored total stands and the
+ * caller checks the legs against it as before 0052. Legs that do not fit are
+ * refused in plain words.
  */
 function cardRateSettlement(
   order: Order,
   payments: ReadonlyArray<{ method: PaymentMethod; amountCents: number }>,
 ): SettledBill | null {
-  if (order.mode === 'foodpanda' || typeof order.digitalTotalCents !== 'number') return null;
+  if (!orderHasPaymentRates(order)) return null;
   const sum = payments.reduce((s, p) => s + p.amountCents, 0);
-  const digital = digitalCentsOf(payments);
-  const split = splitTender(
-    { totalCents: order.totalCents, digitalTotalCents: order.digitalTotalCents, netCents: order.subtotalCents - order.discountCents },
-    digital,
-  );
+  const rated = payments.filter((p) => isRatedPaymentMethod(p.method));
+  const digital = rated.reduce((s, p) => s + p.amountCents, 0);
+  const quote = {
+    totalCents: order.totalCents,
+    digitalTotalCents: order.digitalTotalCents ?? null,
+    methodTotalsCents: order.methodTotalsCents ?? null,
+    netCents: order.subtotalCents - order.discountCents,
+  };
+  const split = settleLegs(quote, payments);
   if (!split.ok) throw new Error(split.reason);
   const cash = sum - digital;
   if (cash !== split.cashDueCents) {
     const rs = (cents: number) => (cents / 100).toLocaleString('en-PK', { maximumFractionDigits: 2 });
     if (digital === 0) throw new Error(`Payments (Rs ${sum / 100}) must equal the order total (Rs ${order.totalCents / 100})`);
+    // The way paid other than cash, as the cashier reads it: "on the card", "by JazzCash".
+    const ways = [...new Set(rated.map((p) => p.method))].filter(isRatedPaymentMethod);
+    const one = ways.length === 1 ? ways[0]! : null;
+    const on = one === null || one === 'card' ? 'on the card' : `by ${methodWords(one)}`;
     if (cash === 0) {
       throw new Error(
-        `Rs ${rs(digital)} on the card leaves Rs ${rs(split.cashDueCents)} to pay in cash (the bill by card is Rs ${rs(order.digitalTotalCents)})`,
+        `Rs ${rs(digital)} ${on} leaves Rs ${rs(split.cashDueCents)} to pay in cash` +
+          (one ? ` (the bill by ${methodWords(one)} is Rs ${rs(billByMethod(quote, one))})` : ''),
       );
     }
-    throw new Error(`With Rs ${rs(digital)} on the card the cash part is Rs ${rs(split.cashDueCents)}, not Rs ${rs(cash)}`);
+    throw new Error(`With Rs ${rs(digital)} ${on} the cash part is Rs ${rs(split.cashDueCents)}, not Rs ${rs(cash)}`);
   }
   return { totalCents: split.totalCents, taxCents: split.taxCents, digitalNetCents: split.digitalNetCents, digitalTaxCents: split.digitalTaxCents };
 }
@@ -4108,7 +4225,7 @@ export function getOrderSnapshot(
     .prepare(
       `SELECT oi.id, oi.order_id, oi.menu_item_id, oi.menu_item_name, oi.combo_id,
               oi.parent_order_item_id, oi.quantity, oi.unit_price_cents, oi.line_total_cents,
-              oi.tax_category_id, oi.tax_rate_bps_snapshot, oi.digital_rate_bps_snapshot, oi.prep_station_snapshot,
+              oi.tax_category_id, oi.tax_rate_bps_snapshot, oi.digital_rate_bps_snapshot, oi.method_rates_snapshot_json, oi.prep_station_snapshot,
               oi.notes, oi.kitchen_status, oi.no_discount, oi.created_at, oi.updated_at, oi.device_id, oi.version,
               c.name AS category_name
          FROM order_items oi
@@ -4129,6 +4246,7 @@ export function getOrderSnapshot(
     tax_category_id: string;
     tax_rate_bps_snapshot: number | null;
     digital_rate_bps_snapshot: number | null;
+    method_rates_snapshot_json: string | null;
     prep_station_snapshot: PrepStation;
     notes: string | null;
     kitchen_status: OrderItem['kitchenStatus'];
@@ -4182,6 +4300,8 @@ export function getOrderSnapshot(
     taxRateBps: r.tax_rate_bps_snapshot ?? 0,
     // The line's card rate (0052), only when it has one: every other line reads exactly as before.
     ...(typeof r.digital_rate_bps_snapshot === 'number' ? { digitalRateBps: r.digital_rate_bps_snapshot } : {}),
+    // …and the ways of paying with a rate of their own (0054), only when it has any.
+    ...lineMethodRatesOf(r.method_rates_snapshot_json),
     notes: r.notes,
     kitchenStatus: r.kitchen_status,
     // The line's own snapshot (0047), never worked out again from the category it is in today.

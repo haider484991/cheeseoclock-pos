@@ -34,6 +34,7 @@ export * from './website-shop.js';
 export * from './phone.js';
 export * from './delivery-areas.js';
 export * from './delivery-charge-tax.js';
+export * from './tax-by-method.js';
 export * from './reports.js';
 export * from './alerts.js';
 export * from './costing.js';

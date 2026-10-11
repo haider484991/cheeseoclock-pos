@@ -118,7 +118,8 @@ import { fbrWorker } from '../../services/fbr-worker.js';
 import { getReceiptPrinterConfig } from '../../services/printer-config.js';
 import { decrementForOrder } from '../../db/repositories/stock-movement-repo.js';
 import { getOrderStockStatus } from '../../db/repositories/order-stock-repo.js';
-import { changePaymentMethod } from '../../db/repositories/payment-method-repo.js';
+import { changePaymentMethod, paymentShiftOf } from '../../db/repositories/payment-method-repo.js';
+import { findShift } from '../../db/repositories/shift-repo.js';
 import { setTypedDeliveryCharge } from '../../db/repositories/typed-delivery-charge-repo.js';
 import { kitchenTicketsNotPrinted } from '../../db/repositories/print-queue-repo.js';
 import log from 'electron-log/main';
@@ -150,7 +151,16 @@ function withKitchenTicketMarks(db: AppDatabase, snaps: OrderSnapshot[]): OrderS
 /** What requireAdmin names ("… needs the owner (admin) login"). */
 const DELETE_TEST = 'Deleting a test order';
 const DELETED_TESTS = 'The list of deleted test orders';
-const CHANGE_PAYMENT = 'Changing how an order was paid';
+/**
+ * Who may change how an order was paid (0.7.45; the owner, 12 Oct 2026: "first
+ * the cashier thought it will paid cash then customer decided to pay on
+ * card"): the owner at any time, as since v0.7.42; anyone else only while the
+ * shift that took the money is still open — a manager as they are, a cashier
+ * with a manager's (or the owner's) PIN or password.
+ */
+export const CHANGE_PAYMENT_SHIFT_CLOSED =
+  'The shift that took this money is closed: only the owner can change how it was paid now.';
+export const CHANGE_PAYMENT_NEEDS_PIN = "Changing how an order was paid needs a manager's PIN or password.";
 
 function requireOrderCreate(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -1239,24 +1249,62 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   // The owner (admin) login only: a payment typed in as Cash that came by
   // JazzCash leaves the drawer short at the close (payment-method-repo.ts).
 
-  defineHandler('orders:changePaymentMethod', ctx, (_ctx, payload) => {
-    const s = requireAdmin(CHANGE_PAYMENT);
+  defineHandler('orders:changePaymentMethod', ctx, async (_ctx, payload) => {
+    const s = requireOrderCreate();
     const parsed = changePaymentMethodInputSchema.safeParse(payload);
     if (!parsed.success) {
       throw new IpcGuardError({ code: 'validation_failed', message: 'Pick Cash, Card, EasyPaisa, JazzCash or Bank transfer.' });
     }
+    const { orderId, paymentId, method, approverPin } = parsed.data;
+    const order = findOrder(ctx.db, orderId);
+    if (!order) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    // The owner at any time; anyone else only while the shift that took the money is open.
+    let approverUserId: string | null = null;
+    if (s.role !== 'admin') {
+      assertCounterMaySee(ctx.db, s, order, 'open');
+      // A payment that is not there is the change's own refusal, below.
+      const taken = paymentShiftOf(ctx.db, orderId, paymentId);
+      const shift = taken.shiftId ? findShift(ctx.db, taken.shiftId) : null;
+      if (taken.found && (!shift || shift.closedAt !== null)) {
+        throw new IpcGuardError({ code: 'forbidden', message: CHANGE_PAYMENT_SHIFT_CLOSED });
+      }
+      // A cashier: a manager's (or the owner's) PIN or password, checked before anything changes.
+      if (!hasCapability(s.role, 'discount.approve')) {
+        if (!approverPin) throw new IpcGuardError({ code: 'precondition_failed', message: CHANGE_PAYMENT_NEEDS_PIN });
+        try {
+          approverUserId = (await verifyManagerPin(ctx.db, approverPin)).approverUserId;
+        } catch (e) {
+          throw new IpcGuardError({ code: 'forbidden', message: e instanceof Error ? e.message : 'Manager approval failed' });
+        }
+      }
+    }
     let change: ReturnType<typeof changePaymentMethod>;
     try {
-      change = changePaymentMethod(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId });
+      change = changePaymentMethod(ctx.db, { orderId, paymentId, method }, { userId: s.id, deviceId: ctx.deviceId }, { approverUserId });
     } catch (e) {
       throw new IpcGuardError({
         code: 'precondition_failed',
         message: e instanceof Error ? e.message : 'Could not change how it was paid',
       });
     }
-    const snap = getOrderSnapshot(ctx.db, parsed.data.orderId);
+    const snap = getOrderSnapshot(ctx.db, orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
-    return ok({ snapshot: snap, closedShift: change.closedShift });
+    // The bill was worked out again: its FBR invoice still waiting on this till goes with the new figures.
+    if (change.rebilled) {
+      try {
+        const queued = getFbrRowByOrder(ctx.db, orderId);
+        if (queued && queued.status !== 'sent') {
+          const cfg = getFbrConfig(ctx.db);
+          enqueueFbrSubmission(ctx.db, orderId, mapOrderToFbrPayload(snap, toSellerInfo(cfg)), cfg.mode);
+          fbrWorker.kick();
+        }
+      } catch (e) {
+        log.warn('FBR invoice not re-queued after a payment change', { orderId, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    // The cash given back or taken: the drawer opens for it (no paper).
+    if (change.drawerOpenId) printSpooler.onOrderEvent(orderId, 'payment_changed', { drawerOpenId: change.drawerOpenId });
+    return ok({ snapshot: snap, closedShift: change.closedShift, rebilled: change.rebilled });
   });
 
   // ---- Test orders the owner deletes (migration 0043) ----

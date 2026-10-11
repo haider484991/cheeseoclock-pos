@@ -33,6 +33,8 @@ export const changePaymentMethodInputSchema = z
     orderId: z.string().min(1).max(64),
     paymentId: z.string().min(1).max(64),
     method: changeablePaymentMethodSchema,
+    /** A manager's (or the owner's) PIN or password, when a cashier changes it (0.7.45). */
+    approverPin: z.string().min(1).max(128).optional(),
   })
   .strict();
 

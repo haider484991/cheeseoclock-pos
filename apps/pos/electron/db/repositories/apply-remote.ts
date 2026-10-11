@@ -39,6 +39,7 @@ import {
   type SyncChange,
 } from '@cheeseoclock/sync-core';
 import { baseUnitConversion, orderStockNoteKind, returnsToOtherTill, unitFactor } from '@cheeseoclock/pos-domain';
+import { methodMapJson, parseMethodRates } from '@cheeseoclock/shared-types';
 import { quoteIdent, readRowImage, replicableTables } from '../replicable-schema.js';
 import { writeAudit } from './audit-repo.js';
 import { enqueueSync, readParked, writeParked, type ParkedChange } from './sync-repo.js';
@@ -1063,10 +1064,10 @@ const REMOTE_TABLES: Record<string, RemoteTableHandler> = {
     tableName: 'tax_categories',
     upsert(db, p, c) {
       db.prepare(
-        `INSERT INTO tax_categories (id, name, rate_bps, digital_rate_bps, created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO tax_categories (id, name, rate_bps, digital_rate_bps, method_rates_json, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, rate_bps = excluded.rate_bps,
-           digital_rate_bps = excluded.digital_rate_bps,
+           digital_rate_bps = excluded.digital_rate_bps, method_rates_json = excluded.method_rates_json,
            updated_at = excluded.updated_at, version = excluded.version,
            deleted_at = NULL`,
       ).run(
@@ -1075,6 +1076,8 @@ const REMOTE_TABLES: Record<string, RemoteTableHandler> = {
         p.rateBps,
         // The card rate (0052); a till from before it sends none.
         typeof p.digitalRateBps === 'number' ? p.digitalRateBps : null,
+        // The ways' own rates (0054), as that till stored them; a till from before it sends none.
+        methodMapJson(parseMethodRates(typeof p.methodRatesBps === 'object' && p.methodRatesBps !== null ? JSON.stringify(p.methodRatesBps) : null)),
         p.createdAt ?? c.updatedAt,
         c.updatedAt,
         c.deviceId,

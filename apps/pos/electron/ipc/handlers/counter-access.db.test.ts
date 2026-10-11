@@ -832,9 +832,10 @@ const TEST_ORDERS_OWNER = (): Record<string, unknown> => ({
 });
 
 /**
- * How a paid order was paid, put right (v0.7.42; payment-method-repo.ts):
- * the OWNER (admin) login only — a manager and a cashier are refused before
- * anything is read.
+ * How a paid order was paid, put right (v0.7.42; payment-method-repo.ts).
+ * Since 0.7.45 the counter too, while the shift that took the money is open:
+ * a manager as they are, a cashier with a manager's PIN (asked before
+ * anything is read); the owner at any time.
  */
 const PAYMENT_METHOD_OWNER = (): Record<string, unknown> => ({
   'orders:changePaymentMethod': { orderId: s.paidNow, paymentId: 'no-such-payment', method: 'card' },
@@ -1132,19 +1133,22 @@ describe.skipIf(!Sqlite)('menu files from the costing PC (v0.7.32)', () => {
   });
 });
 
-describe.skipIf(!Sqlite)('how a paid order was paid: the owner (admin) login only (v0.7.42)', () => {
-  it('a cashier and a manager are refused in plain words and nothing is written; the owner gets past the guard', async () => {
+describe.skipIf(!Sqlite)('how a paid order was paid: the owner any time, the counter while the shift is open (0.7.45)', () => {
+  it('a cashier is asked for a manager’s PIN first and nothing is written; a manager and the owner get past the guard', async () => {
     const before = writtenRows();
-    for (const who of [CASHIER, MANAGER]) {
-      h.session = who;
-      for (const [channel, payload] of Object.entries(PAYMENT_METHOD_OWNER())) {
-        expect({ channel, who: who.role, o: await call(channel, payload) }).toEqual({
-          channel,
-          who: who.role,
-          o: { ok: false, code: 'forbidden', message: 'Changing how an order was paid needs the owner (admin) login' },
-        });
-      }
+    h.session = CASHIER;
+    for (const [channel, payload] of Object.entries(PAYMENT_METHOD_OWNER())) {
+      expect({ channel, o: await call(channel, payload) }).toEqual({
+        channel,
+        o: { ok: false, code: 'precondition_failed', message: "Changing how an order was paid needs a manager's PIN or password." },
+      });
     }
+    h.session = MANAGER;
+    expect(await call('orders:changePaymentMethod', PAYMENT_METHOD_OWNER()['orders:changePaymentMethod'])).toMatchObject({
+      ok: false,
+      code: 'precondition_failed',
+      message: 'That payment is not on this order.',
+    });
     h.session = null;
     for (const [channel, payload] of Object.entries(PAYMENT_METHOD_OWNER())) {
       expect({ channel, o: await call(channel, payload) }).toMatchObject({ channel, o: { ok: false, code: 'unauthenticated' } });

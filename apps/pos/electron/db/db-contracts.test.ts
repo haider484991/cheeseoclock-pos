@@ -301,7 +301,7 @@ describe('migrations: numbered in order, one file per number', () => {
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
-  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), then 0048 (when an order was sent), then 0049 (outside riders), then 0050 (the note count at close), then 0051 (the shift report at close), then 0052 (the card rate), then 0053 (the dashboard’s change indexes), by name', () => {
+  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), then 0048 (when an order was sent), then 0049 (outside riders), then 0050 (the note count at close), then 0051 (the shift report at close), then 0052 (the card rate), then 0053 (the dashboard’s change indexes), then 0054 (a tax rate for each way of paying), by name', () => {
     const numbers = files.map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? NaN));
     expect(numbers).toEqual(numbers.map((_, i) => i + 1));
     // 0040 / 0041 were released in v0.7.22: the drawer log and the test-order
@@ -322,6 +322,7 @@ describe('migrations: numbered in order, one file per number', () => {
       '0051_shift_close_report.sql',
       '0052_card_rate.sql',
       '0053_dashboard_change_indexes.sql',
+      '0054_tax_by_payment_method.sql',
     ]);
   });
 
@@ -454,6 +455,21 @@ describe('migrations: numbered in order, one file per number', () => {
       .filter(Boolean);
     expect(statements).toHaveLength(11);
     for (const st of statements) expect(st).toMatch(/^CREATE INDEX IF NOT EXISTS idx_[a-z_]+_updated ON [a-z_]+\(updated_at\)$/);
+  });
+
+  it('0054 only adds the three nullable JSON columns of a tax rate for each way of paying: no CHECK, no backfill, no index', () => {
+    const raw = readFileSync(join(MIGRATIONS_DIR, '0054_tax_by_payment_method.sql'), 'utf8');
+    const sql = stripComments(raw).trim();
+    expect(sql.replace(/\s+/g, ' ')).toBe(
+      'ALTER TABLE tax_categories ADD COLUMN method_rates_json TEXT; ' +
+        'ALTER TABLE order_items ADD COLUMN method_rates_snapshot_json TEXT; ' +
+        'ALTER TABLE orders ADD COLUMN method_totals_json TEXT;',
+    );
+    expect(/CHECK|UPDATE|INSERT|DELETE|DROP|CREATE|NOT NULL|DEFAULT/i.test(sql)).toBe(false);
+    // No BEGIN anywhere, comments included: the migrator runs it in its own transaction (migrator.ts managesOwnTransaction).
+    expect(/BEGIN/i.test(raw)).toBe(false);
+    // All three tables replicate: the columns travel in the row images, no sync-core change.
+    for (const t of ['tax_categories', 'order_items', 'orders']) expect(PURE_LOCAL_TABLES.has(t)).toBe(false);
   });
 
   it('0052 only adds the card-rate columns: tax_categories.digital_rate_bps, order_items.digital_rate_bps_snapshot, orders.digital_total_cents (nullable) and orders.digital_net_cents / digital_tax_cents (0 by default); no CHECK, no backfill, no index', () => {

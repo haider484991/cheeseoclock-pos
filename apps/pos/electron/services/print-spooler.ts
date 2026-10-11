@@ -145,6 +145,12 @@ export type OrderPrintEvent =
    */
   | 'sent_out_paid'
   | 'refunded'
+  /**
+   * How a paid order was paid changed while its shift is open (0.7.45): the
+   * cash given back (paid by card instead) or taken (paid in cash instead).
+   * The drawer opens for it; no paper — Print the bill again is a press.
+   */
+  | 'payment_changed'
   /** Cancelled or refunded in full while the kitchen still had it. */
   | 'cancelled';
 
@@ -401,6 +407,10 @@ class PrintSpooler {
         });
         break;
       }
+
+      case 'payment_changed':
+        drawer();
+        break;
 
       case 'cancelled':
         this.kitchenCancelSlip(snap, policy);
