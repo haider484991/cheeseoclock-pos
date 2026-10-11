@@ -71,7 +71,9 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
   });
 
   const setQty = (i: number, qty: number) => setTried((prev) => prev.map((l, j) => (j === i ? { ...l, qtyPerUnit: Math.max(0, Math.round(qty)) } : l)));
-  const costOf = (side: RecipeWhatIfSide | undefined, i: number) => side?.lines[i]?.costCents ?? null;
+  // Each side's lines by ingredient and choice: the main process lists the saved recipe in its own order.
+  const lineOf = (side: RecipeWhatIfSide | undefined, l: TryLine) =>
+    side?.lines.find((x) => x.ingredientId === l.ingredientId && (x.modifierId ?? null) === (l.modifierId ?? null)) ?? null;
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && !saveMut.isPending && onClose()}>
@@ -153,8 +155,8 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
                             <span className="w-8 text-xs text-stone-500">{unit}</span>
                           </div>
                         </td>
-                        <td className="py-2 text-right font-mono text-stone-500">{costText(costOf(w?.saved, i), w?.saved.lines[i]?.kind)}</td>
-                        <td className={cn('py-2 text-right font-mono', moved && 'font-semibold')}>{costText(costOf(w?.tried, i), w?.tried.lines[i]?.kind)}</td>
+                        <td className="py-2 text-right font-mono text-stone-500">{lineCostText(lineOf(w?.saved, saved[i] ?? l), w !== undefined)}</td>
+                        <td className={cn('py-2 text-right font-mono', moved && 'font-semibold')}>{lineCostText(lineOf(w?.tried, l), w !== undefined, l.qtyPerUnit === 0)}</td>
                       </tr>
                     );
                   })}
@@ -244,12 +246,13 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
   );
 }
 
-/** A line's cost in the table: "Rs 135", "no price", "free". */
-function costText(cents: number | null, kind: string | undefined): string {
-  if (cents === null) return '…';
-  if (kind === 'missing') return 'no price';
-  if (kind === 'free') return 'free';
-  return formatCents(cents);
+/** A line's cost in the table: "Rs 135", "no price", "free"; "taken off" for a line tried at 0; "…" while it is worked out. */
+function lineCostText(line: { costCents: number; kind: string } | null, answered: boolean, takenOff = false): string {
+  if (takenOff) return 'taken off';
+  if (!line) return answered ? '—' : '…';
+  if (line.kind === 'missing') return 'no price';
+  if (line.kind === 'free') return 'free';
+  return formatCents(line.costCents);
 }
 
 function Figure({ label, now, tried, diff }: { label: string; now: string; tried: string; diff: string }) {
