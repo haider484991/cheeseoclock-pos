@@ -28,7 +28,7 @@ const BATCH: VoucherBatchSummary = {
   lastNumber: 3,
 };
 
-const use = (orderNumber: string, paidAt: string | null) => ({
+const onOrder = (orderNumber: string, paidAt: string | null) => ({
   orderId: `o-${orderNumber}`,
   orderNumber,
   at: '2026-10-14T10:00:00.000Z',
@@ -42,8 +42,8 @@ const use = (orderNumber: string, paidAt: string | null) => ({
 });
 
 const ROWS: VoucherRow[] = [
-  { id: 'v1', number: 1, code: 'MF7U', state: 'used', use: use('20261014-0042', '2026-10-14T10:05:00.000Z'), alsoOn: [] },
-  { id: 'v2', number: 2, code: 'EQW6', state: 'on_order', use: use('20261014-0043', null), alsoOn: [] },
+  { id: 'v1', number: 1, code: 'MF7U', state: 'used', use: onOrder('20261014-0042', '2026-10-14T10:05:00.000Z'), alsoOn: [] },
+  { id: 'v2', number: 2, code: 'EQW6', state: 'on_order', use: onOrder('20261014-0043', null), alsoOn: [] },
   { id: 'v3', number: 3, code: '93XJ', state: 'not_used', use: null, alsoOn: [] },
 ];
 
@@ -78,7 +78,7 @@ describe('the Vouchers page', () => {
   });
 
   it('a voucher on two orders (both tills took it offline) is flagged to check', () => {
-    const twice: VoucherRow = { ...ROWS[0]!, alsoOn: [use('20261014-0050', '2026-10-14T11:00:00.000Z')] };
+    const twice: VoucherRow = { ...ROWS[0]!, alsoOn: [onOrder('20261014-0050', '2026-10-14T11:00:00.000Z')] };
     const words = text(render([BATCH], { batch: BATCH, vouchers: [twice, ROWS[1]!, ROWS[2]!] }));
     expect(words).toContain('One voucher was used on two orders');
     expect(words).toContain('No. 001. Check those orders.');
