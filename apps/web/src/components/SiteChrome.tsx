@@ -172,6 +172,11 @@ export async function SiteFooter() {
         <a href="/dashboard" rel="nofollow" className="hover:text-cheese">
           Staff login
         </a>
+        {' · '}
+        {/* Credit for the ordering system that runs this site (2026-10-13, with the owner's OK): a followed link. */}
+        <a href="https://pixelandoak.com/pos/online-ordering-system/" target="_blank" rel="noopener" className="hover:text-cheese">
+          Ordering by Pixel &amp; Oak POS
+        </a>
       </div>
     </footer>
   );

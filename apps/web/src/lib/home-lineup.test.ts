@@ -35,6 +35,7 @@ import {
   type WebsiteHome,
 } from '@cheeseoclock/shared-types';
 import { buildShopBlock } from '../../../../packages/pos-domain/src/shop-block';
+import { withFooterCredit } from './__fixtures__/footer-credit';
 import { goldenMenu } from './__fixtures__/golden-menu';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
 
@@ -148,7 +149,8 @@ function visible(html: string): string {
     .replace(/\s+/g, ' ');
 }
 
-const GOLDEN_HOME = () => golden.html[golden.pages['b']!['/']!]!;
+// The golden home page as served today: plus the footer's ordering-system credit (2026-10-13).
+const GOLDEN_HOME = () => withFooterCredit(golden.html[golden.pages['b']!['/']!]!);
 const GRID_BADGE = (rs: string) =>
   `<span class="absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-sm font-extrabold text-ink">${rs}</span>`;
 const SLIDE_BADGE = (rs: string) => `<span class="rounded-full bg-cheese px-4 py-1.5 font-cond text-lg font-extrabold text-ink">${rs}</span>`;
