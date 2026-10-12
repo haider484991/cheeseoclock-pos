@@ -7,6 +7,7 @@ import {
   batchTermsWords,
   pastedListWords,
   rupeesToCents,
+  voucherFileProblem,
   voucherListText,
   voucherMatches,
 } from './voucherPageWords';
@@ -49,37 +50,52 @@ describe('the Vouchers page in words', () => {
   });
 
   it('copies the list as printed, one a line — which the Add vouchers box reads back', () => {
-    const text = voucherListText([row(1, 'MF7U'), row(2, 'EQW6'), row(100, 'EJD3')]);
-    expect(text).toBe('001 MF7U\n002 EQW6\n100 EJD3');
+    const text = voucherListText([row(1, 'AB3C'), row(2, 'XK7P'), row(100, 'MA7H')]);
+    expect(text).toBe('001 AB3C\n002 XK7P\n100 MA7H');
     expect(parseVoucherList(text).vouchers).toEqual([
-      { number: 1, code: 'MF7U' },
-      { number: 2, code: 'EQW6' },
-      { number: 100, code: 'EJD3' },
+      { number: 1, code: 'AB3C' },
+      { number: 2, code: 'XK7P' },
+      { number: 100, code: 'MA7H' },
     ]);
   });
 
   it('finds a voucher by its number (with or without zeros), its code, or the order it was used on', () => {
-    const used = row(12, 'Q7TR', '20261014-0042');
+    const used = row(12, 'HM4W', '20261014-0042');
     expect(voucherMatches(used, '12')).toBe(true);
     expect(voucherMatches(used, '012')).toBe(true);
     expect(voucherMatches(used, 'No. 12')).toBe(true);
-    expect(voucherMatches(used, 'q7t')).toBe(true);
+    expect(voucherMatches(used, 'hm4')).toBe(true);
     expect(voucherMatches(used, '#0042')).toBe(true);
     expect(voucherMatches(used, '13')).toBe(false);
-    expect(voucherMatches(row(13, 'ADD9'), 'Q7')).toBe(false);
-    expect(voucherMatches(row(13, 'ADD9'), '  ')).toBe(true);
+    expect(voucherMatches(row(13, 'PQ6L'), 'HM')).toBe(false);
+    expect(voucherMatches(row(13, 'PQ6L'), '  ')).toBe(true);
   });
 
   it('reads a pasted list back to the owner: how many, which numbers, what is wrong, what was left out', () => {
     expect(pastedListWords(parseVoucherList(''))).toEqual({
-      summary: 'Paste the list: one voucher a line, its number then its code (001 MF7U).',
+      summary: 'Choose the CSV file, or paste the list: one voucher a line, its number then its code (001,AB3C).',
       problems: [],
       skipped: null,
     });
-    expect(pastedListWords(parseVoucherList('NO. CODE DATE\n001 MF7U\n002 EQW6\n002 AAAA\n003 MF7U'))).toEqual({
+    expect(pastedListWords(parseVoucherList('NO. CODE DATE\n001 AB3C\n002 XK7P\n002 AAAA\n003 AB3C'))).toEqual({
       summary: '4 vouchers read · No. 001–003',
-      problems: ['On the list twice: No. 002', 'The same code twice: MF7U'],
+      problems: ['On the list twice: No. 002', 'The same code twice: AB3C'],
       skipped: '1 line left out (not a number and a code): “NO. CODE DATE”',
+    });
+  });
+
+  it('a CSV file is read unless it is empty or far too big for a list of vouchers', () => {
+    expect(voucherFileProblem(1_500)).toBeNull();
+    expect(voucherFileProblem(0)).toBe('That file is empty.');
+    expect(voucherFileProblem(5_000_000)).toBe('That file is too big for a list of vouchers. Choose the CSV of numbers and codes.');
+  });
+
+  it('a CSV saved from a spreadsheet reads back to the numbers and codes', () => {
+    const read = parseVoucherList('No.,Code\r\n001,AB3C\r\n002,XK7P\r\n');
+    expect(pastedListWords(read)).toEqual({
+      summary: '2 vouchers read · No. 001–002',
+      problems: [],
+      skipped: '1 line left out (not a number and a code): “No.,Code”',
     });
   });
 
@@ -104,12 +120,12 @@ describe('the till’s words for a typed voucher', () => {
   };
 
   it('a voucher that can be used: its number, whose, what it gets and covers', () => {
-    expect(voucherCheckWords({ ok: true, voucherId: 'v1', number: 1, code: 'MF7U', batch })).toEqual({
+    expect(voucherCheckWords({ ok: true, voucherId: 'v1', number: 1, code: 'AB3C', batch })).toEqual({
       ok: true,
       title: 'Voucher No. 001 · abhi',
       detail: 'One Large pizza from the Regular menu · covers up to Rs 1,899',
     });
-    expect(voucherCheckWords({ ok: true, voucherId: 'v1', number: 1, code: 'MF7U', batch: { ...batch, goodUntil: '2026-12-31' } }).detail).toBe(
+    expect(voucherCheckWords({ ok: true, voucherId: 'v1', number: 1, code: 'AB3C', batch: { ...batch, goodUntil: '2026-12-31' } }).detail).toBe(
       'One Large pizza from the Regular menu · covers up to Rs 1,899 · until 31/12/2026',
     );
   });

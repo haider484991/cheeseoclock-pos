@@ -23,6 +23,7 @@ import { TenderDialog } from './TenderDialog';
 import { ReceiptDialog } from './ReceiptDialog';
 import { OrderDetailDrawer } from '../orders/OrderDetailDrawer';
 import { VoucherDialog, voucherLinesOfSnapshot } from './VoucherDialog';
+import { VoucherBatchDialog } from '../vouchers/VoucherBatchDialog';
 
 /** The props the last dialog rendered gave Radix's Content: the handlers Radix would call (on open, on a key). */
 const radix = vi.hoisted(() => ({ content: null as Record<string, unknown> | null }));
@@ -243,5 +244,17 @@ describe('a voucher on the till', () => {
     expect(words).toContain('One voucher per order.');
     // The pizza and the drink, never the value deal.
     expect(voucherLinesOfSnapshot(order()).map((l) => l.id)).toEqual(['l1', 'l2']);
+  });
+});
+
+describe('Add vouchers (the owner)', () => {
+  it('takes the vouchers from a CSV file, or a pasted list', () => {
+    signIn('admin');
+    const markup = render(<VoucherBatchDialog onClose={noop} onSaved={noop} />, RULES_SEED);
+    const words = text(markup);
+    expect(words).toContain('From a CSV file');
+    expect(words).toContain('Choose a CSV file');
+    expect(words).toContain('Number and code on each line (001,AB3C). Or paste the list below.');
+    expect(markup).toMatch(/<input[^>]*type="file"[^>]*accept="\.csv,\.txt,text\/csv,text\/plain"/);
   });
 });

@@ -45,12 +45,12 @@ describe('voucher words', () => {
 
 describe('what the cashier types', () => {
   it('reads a code in capitals, without spaces or dashes', () => {
-    expect(normalizeVoucherCode(' mf7u ')).toBe('MF7U');
-    expect(normalizeVoucherCode('MF-7U')).toBe('MF7U');
-    expect(normalizeVoucherCode('mf 7 u')).toBe('MF7U');
-    expect(isVoucherCode('MF7U')).toBe(true);
+    expect(normalizeVoucherCode(' ab3c ')).toBe('AB3C');
+    expect(normalizeVoucherCode('AB-3C')).toBe('AB3C');
+    expect(normalizeVoucherCode('ab 3 c')).toBe('AB3C');
+    expect(isVoucherCode('AB3C')).toBe(true);
     expect(isVoucherCode('M7')).toBe(false);
-    expect(isVoucherCode('MF7U!')).toBe(false);
+    expect(isVoucherCode('AB3C!')).toBe(false);
   });
 
   it('reads a number with or without its zeros, "No." or "#"', () => {
@@ -67,11 +67,11 @@ describe('what the cashier types', () => {
 
 describe('a pasted list (parseVoucherList)', () => {
   it('reads "number code" lines, as the abhi log prints them', () => {
-    const r = parseVoucherList('001 MF7U\n002 EQW6\n003 93XJ\n');
+    const r = parseVoucherList('001 AB3C\n002 XK7P\n003 RT9D\n');
     expect(r.vouchers).toEqual([
-      { number: 1, code: 'MF7U' },
-      { number: 2, code: 'EQW6' },
-      { number: 3, code: '93XJ' },
+      { number: 1, code: 'AB3C' },
+      { number: 2, code: 'XK7P' },
+      { number: 3, code: 'RT9D' },
     ]);
     expect(r.skipped).toEqual([]);
     expect(r.repeatedNumbers).toEqual([]);
@@ -79,37 +79,48 @@ describe('a pasted list (parseVoucherList)', () => {
   });
 
   it('reads a spreadsheet\'s two columns, commas, and a code that starts with a figure', () => {
-    const r = parseVoucherList('44\t6QNN\n45, KFR7\n46 - tgee\n47: 9MP9');
+    const r = parseVoucherList('44\t6DWK\n45, JN4R\n46 - lv6e\n47: 9FUT');
     expect(r.vouchers).toEqual([
-      { number: 44, code: '6QNN' },
-      { number: 45, code: 'KFR7' },
-      { number: 46, code: 'TGEE' },
-      { number: 47, code: '9MP9' },
+      { number: 44, code: '6DWK' },
+      { number: 45, code: 'JN4R' },
+      { number: 46, code: 'LV6E' },
+      { number: 47, code: '9FUT' },
     ]);
   });
 
-  it('splits a number and code run together as the PDF copies them: the last four letters are the code', () => {
-    const r = parseVoucherList('029CFNX\n0446QNN\n100EJD3');
+  it('reads a CSV file: its heading left out, quotes, semicolons, a byte-order mark and Windows line ends', () => {
+    const csv = '\uFEFFnumber,code\r\n"001","AB3C"\r\n002;XK7P\r\n3,RT9D,extra column\r\n';
+    const r = parseVoucherList(csv);
     expect(r.vouchers).toEqual([
-      { number: 29, code: 'CFNX' },
-      { number: 44, code: '6QNN' },
-      { number: 100, code: 'EJD3' },
+      { number: 1, code: 'AB3C' },
+      { number: 2, code: 'XK7P' },
+      { number: 3, code: 'RT9D' },
+    ]);
+    expect(r.skipped).toEqual(['number,code']);
+  });
+
+  it('splits a number and code run together as the PDF copies them: the last four letters are the code', () => {
+    const r = parseVoucherList('029CY7N\n0446DWK\n100MA7H');
+    expect(r.vouchers).toEqual([
+      { number: 29, code: 'CY7N' },
+      { number: 44, code: '6DWK' },
+      { number: 100, code: 'MA7H' },
     ]);
   });
 
   it('leaves the paper log\'s headings and empty columns out, and lists what it skipped', () => {
-    const r = parseVoucherList('NO. CODE DATE ORDER NO. FLAVOUR STAFF\n001 MF7U\n\nN\nO.CODEDATEORDERNO.FLAVOURSTAFF\n002 EQW6   \n');
+    const r = parseVoucherList('NO. CODE DATE ORDER NO. FLAVOUR STAFF\n001 AB3C\n\nN\nO.CODEDATEORDERNO.FLAVOURSTAFF\n002 XK7P   \n');
     expect(r.vouchers).toEqual([
-      { number: 1, code: 'MF7U' },
-      { number: 2, code: 'EQW6' },
+      { number: 1, code: 'AB3C' },
+      { number: 2, code: 'XK7P' },
     ]);
     expect(r.skipped).toEqual(['NO. CODE DATE ORDER NO. FLAVOUR STAFF', 'N', 'O.CODEDATEORDERNO.FLAVOURSTAFF']);
   });
 
   it('says which numbers and codes are on two lines', () => {
-    const r = parseVoucherList('001 MF7U\n001 AAAA\n002 MF7U');
+    const r = parseVoucherList('001 AB3C\n001 AAAA\n002 AB3C');
     expect(r.repeatedNumbers).toEqual([1]);
-    expect(r.repeatedCodes).toEqual(['MF7U']);
+    expect(r.repeatedCodes).toEqual(['AB3C']);
   });
 });
 
@@ -120,7 +131,7 @@ describe('making codes', () => {
       seed = (seed * 16807) % 2147483647;
       return (seed - 1) / 2147483646;
     };
-    const taken = new Set(['MF7U', 'EQW6']);
+    const taken = new Set(['AB3C', 'XK7P']);
     const codes = makeVoucherCodes(500, taken, random);
     expect(codes).toHaveLength(500);
     expect(new Set(codes).size).toBe(500);

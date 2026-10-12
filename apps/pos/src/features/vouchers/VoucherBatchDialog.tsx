@@ -1,13 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState, type ChangeEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { X } from 'lucide-react';
+import { FileUp, X } from 'lucide-react';
 import { Button, cn } from '@cheeseoclock/ui';
 import { parseVoucherList } from '@cheeseoclock/pos-domain';
 import { VOUCHER_BATCH_MAX, type VoucherBatchSummary } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import { pastedListWords, rupeesToCents } from './voucherPageWords';
+import { pastedListWords, rupeesToCents, voucherFileProblem } from './voucherPageWords';
 
 interface Props {
   /** The batch to change; none = add new vouchers. */
@@ -22,9 +22,11 @@ const INPUT =
 /**
  * Add a client's vouchers, or change a batch (v0.7.48). Who they are for
  * (prints on the bill), what one gets (shown at the till), the most one takes
- * off, and its last day if it has one. New vouchers come as printed — the
- * list pasted from the printer's file or the paper log, "001 MF7U" a line —
- * or the till makes the codes, to hand to whoever prints them.
+ * off, and its last day if it has one. New vouchers come as printed — a CSV
+ * file chosen here (v0.7.49; the owner: "i just want to upload csv into the
+ * pos so it get it all"), or the list pasted, "001 AB3C" a line — or the
+ * till makes the codes, to hand to whoever prints them. The file fills the
+ * list, so the owner sees what was read before Add vouchers.
  */
 export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
   const qc = useQueryClient();
@@ -36,6 +38,8 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
   const [goodUntil, setGoodUntil] = useState(batch?.goodUntil ?? '');
   const [from, setFrom] = useState<'list' | 'make'>('list');
   const [listText, setListText] = useState('');
+  const [fileName, setFileName] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [countText, setCountText] = useState('100');
   const [firstText, setFirstText] = useState('1');
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +57,7 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
     if (hasEnd && !/^\d{4}-\d{2}-\d{2}$/.test(goodUntil)) return 'Pick the last day, or untick it';
     if (batch) return null;
     if (from === 'list') {
-      if (read.vouchers.length === 0) return 'Paste the list of vouchers';
+      if (read.vouchers.length === 0) return 'Choose the CSV file of the vouchers, or paste the list';
       if (read.vouchers.length > VOUCHER_BATCH_MAX) return `At most ${VOUCHER_BATCH_MAX} vouchers at a time`;
       return listWords.problems[0] ?? null;
     }
@@ -61,6 +65,25 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
     if (first < 1) return 'The first number is 1 or more';
     return null;
   })();
+
+  /** A CSV (or text) file of the vouchers: read here, into the list, never sent anywhere as a file. */
+  async function onFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setError(null);
+    const tooBig = voucherFileProblem(file.size);
+    if (tooBig) {
+      setError(tooBig);
+      return;
+    }
+    try {
+      setListText(await file.text());
+      setFileName(file.name);
+    } catch {
+      setError('That file could not be read. Save it as CSV and choose it again.');
+    }
+  }
 
   const save = useMutation({
     mutationFn: async () => {
@@ -146,7 +169,7 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
                 <div className="flex gap-2" role="radiogroup" aria-label="The vouchers">
                   {(
                     [
-                      ['list', 'Paste the printed list'],
+                      ['list', 'From a CSV file'],
                       ['make', 'Make new codes'],
                     ] as const
                   ).map(([id, label]) => (
@@ -167,12 +190,32 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
                 </div>
                 {from === 'list' ? (
                   <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()}>
+                        <FileUp className="h-4 w-4" />
+                        Choose a CSV file
+                      </Button>
+                      <span className="text-xs text-stone-500">
+                        {fileName ? `Read from ${fileName}` : 'Number and code on each line (001,AB3C). Or paste the list below.'}
+                      </span>
+                      <input
+                        ref={fileRef}
+                        type="file"
+                        accept=".csv,.txt,text/csv,text/plain"
+                        className="hidden"
+                        aria-label="The CSV file of the vouchers"
+                        onChange={(e) => void onFile(e)}
+                      />
+                    </div>
                     <textarea
                       value={listText}
-                      onChange={(e) => setListText(e.target.value)}
+                      onChange={(e) => {
+                        setListText(e.target.value);
+                        setFileName(null);
+                      }}
                       rows={7}
                       spellCheck={false}
-                      placeholder={'001 MF7U\n002 EQW6\n003 93XJ'}
+                      placeholder={'001 AB3C\n002 XK7P\n003 RT9D'}
                       aria-label="The vouchers, one a line: number then code"
                       className={cn(INPUT, 'font-mono')}
                     />

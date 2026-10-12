@@ -239,9 +239,9 @@ const ABHI: { name: string; gives: string; coversCents: number; goodUntil: strin
   goodUntil: null,
 };
 const LIST = [
-  { number: 1, code: 'MF7U' },
-  { number: 2, code: 'EQW6' },
-  { number: 3, code: '93XJ' },
+  { number: 1, code: 'AB3C' },
+  { number: 2, code: 'XK7P' },
+  { number: 3, code: 'RT9D' },
 ];
 
 /** The owner adds the abhi vouchers (three of them, as printed). */
@@ -261,7 +261,7 @@ const snap = async (id: string) => {
   return (await data<OrderSnapshot | null>('orders:get', { id }))!;
 };
 const lineOf = (s: OrderSnapshot, menuItemId: string) => s.items.find((i) => i.menuItemId === menuItemId)!.id;
-const useVoucher = (s: OrderSnapshot, menuItemId: string, number = 1, code = 'MF7U') => {
+const useVoucher = (s: OrderSnapshot, menuItemId: string, number = 1, code = 'AB3C') => {
   h.session = CASHIER;
   return call('orders:applyVoucher', { orderId: s.order.id, number, code, lineId: lineOf(s, menuItemId) });
 };
@@ -304,9 +304,9 @@ describe.skipIf(!Sqlite)('Vouchers: adding a client’s vouchers', () => {
     expect(chainOk(db)).toBe(true);
     const detail = await batchDetail(batch.id);
     expect(detail.vouchers.map((v) => [v.number, v.code, v.state])).toEqual([
-      [1, 'MF7U', 'not_used'],
-      [2, 'EQW6', 'not_used'],
-      [3, '93XJ', 'not_used'],
+      [1, 'AB3C', 'not_used'],
+      [2, 'XK7P', 'not_used'],
+      [3, 'RT9D', 'not_used'],
     ]);
   });
 
@@ -354,7 +354,7 @@ describe.skipIf(!Sqlite)('Vouchers: adding a client’s vouchers', () => {
     ] as const) {
       expect(await call(channel, payload)).toEqual({ ok: false, code: 'forbidden', message: 'Only a manager or the owner can see or add vouchers.' });
     }
-    expect(await call('vouchers:check', { number: 1, code: 'mf7u' })).toMatchObject({ ok: true, data: { ok: true, number: 1, code: 'MF7U' } });
+    expect(await call('vouchers:check', { number: 1, code: 'ab3c' })).toMatchObject({ ok: true, data: { ok: true, number: 1, code: 'AB3C' } });
     h.session = MANAGER;
     expect((await data<VoucherBatchSummary[]>('vouchers:listBatches')).map((b) => b.name)).toEqual(['abhi']);
   });
@@ -410,12 +410,12 @@ describe.skipIf(!Sqlite)('Vouchers at the till', () => {
     const again = await useVoucher(next, menu.large);
     expect(again).toMatchObject({ ok: false });
     expect(again.ok ? '' : again.message).toMatch(/^Voucher No\. 001 was already used: order #\S+ on \d\d\/\d\d\/\d{4} \d\d:\d\d\.$/);
-    expect(await useVoucher(next, menu.large, 1, 'EQW6')).toMatchObject({
+    expect(await useVoucher(next, menu.large, 1, 'XK7P')).toMatchObject({
       ok: false,
-      message: 'No voucher No. 001 with the code EQW6. Check the number and the code on the voucher.',
+      message: 'No voucher No. 001 with the code XK7P. Check the number and the code on the voucher.',
     });
     h.session = CASHIER;
-    expect(await data<VoucherCheck>('vouchers:check', { number: 1, code: 'MF7U', orderId: next.order.id })).toMatchObject({ ok: false, problem: 'used' });
+    expect(await data<VoucherCheck>('vouchers:check', { number: 1, code: 'AB3C', orderId: next.order.id })).toMatchObject({ ok: false, problem: 'used' });
     // Nothing came off the second order.
     expect(totals(await snap(next.order.id))).toMatchObject({ discount: 0 });
   });
@@ -456,7 +456,7 @@ describe.skipIf(!Sqlite)('Vouchers at the till', () => {
     expect(r2.ok && totals(r2.data as OrderSnapshot)).toMatchObject({ subtotal: 379_800, discount: 189_900 });
 
     const dear = await takeaway(menu.premium);
-    const r3 = await useVoucher(dear, menu.premium, 2, 'EQW6');
+    const r3 = await useVoucher(dear, menu.premium, 2, 'XK7P');
     expect(r3.ok && totals(r3.data as OrderSnapshot)).toMatchObject({ subtotal: 249_900, discount: 189_900, total: 69_600 });
   });
 
@@ -468,11 +468,11 @@ describe.skipIf(!Sqlite)('Vouchers at the till', () => {
       message: 'A voucher can’t come off that line. Pick a food item, not a value deal or the delivery charge.',
     });
     expect((await useVoucher(s, menu.large)).ok).toBe(true);
-    expect(await useVoucher(s, menu.large, 2, 'EQW6')).toMatchObject({
+    expect(await useVoucher(s, menu.large, 2, 'XK7P')).toMatchObject({
       ok: false,
       message: 'This order already has a voucher. One voucher per order: start a new order for the next one.',
     });
-    expect(await useVoucher(s, menu.large, 1, 'MF7U')).toMatchObject({ ok: false, message: 'Voucher No. 001 is already on this order.' });
+    expect(await useVoucher(s, menu.large, 1, 'AB3C')).toMatchObject({ ok: false, message: 'Voucher No. 001 is already on this order.' });
   });
 
   it('its pizza swapped for another: the voucher follows it; no pizza left, it comes off (never onto the drink) and is free again', async () => {
@@ -597,7 +597,7 @@ describe.skipIf(!Sqlite)('Vouchers at the till', () => {
     expect(count(`SELECT COUNT(*) AS n FROM vouchers WHERE batch_id = ? AND deleted_at IS NULL`, batch.id)).toBe(0);
     expect(await data<VoucherBatchSummary[]>('vouchers:listBatches')).toEqual([]);
     h.session = CASHIER;
-    expect(await data<VoucherCheck>('vouchers:check', { number: 1, code: 'MF7U' })).toMatchObject({ ok: false, problem: 'not_found' });
+    expect(await data<VoucherCheck>('vouchers:check', { number: 1, code: 'AB3C' })).toMatchObject({ ok: false, problem: 'not_found' });
   });
 });
 
@@ -637,11 +637,11 @@ describe.skipIf(!Sqlite)('Vouchers on two tills', () => {
     const read = await import('../../db/vouchers-read.js');
     const there = read.listVouchersOfBatch(other as never, batch.id);
     expect(there.map((v) => [v.number, v.code, v.state])).toEqual([
-      [1, 'MF7U', 'used'],
-      [2, 'EQW6', 'not_used'],
-      [3, '93XJ', 'not_used'],
+      [1, 'AB3C', 'used'],
+      [2, 'XK7P', 'not_used'],
+      [3, 'RT9D', 'not_used'],
     ]);
-    expect(read.checkVoucher(other as never, { number: 1, code: 'MF7U' }, '2026-10-12')).toMatchObject({ ok: false, problem: 'used' });
-    expect(read.checkVoucher(other as never, { number: 2, code: 'EQW6' }, '2026-10-12')).toMatchObject({ ok: true });
+    expect(read.checkVoucher(other as never, { number: 1, code: 'AB3C' }, '2026-10-12')).toMatchObject({ ok: false, problem: 'used' });
+    expect(read.checkVoucher(other as never, { number: 2, code: 'XK7P' }, '2026-10-12')).toMatchObject({ ok: true });
   });
 });

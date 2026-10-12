@@ -176,7 +176,7 @@ export function VoucherDialog({ onClose }: Props) {
                 spellCheck={false}
                 value={codeText}
                 onChange={(e) => setCodeText(e.target.value.toUpperCase().slice(0, 14))}
-                placeholder="MF7U"
+                placeholder="AB3C"
                 className="h-12 w-full rounded-lg border border-stone-200 px-3 font-mono text-2xl font-bold tracking-[0.3em] focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
               />
             </label>

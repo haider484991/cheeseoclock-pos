@@ -42,9 +42,9 @@ const onOrder = (orderNumber: string, paidAt: string | null) => ({
 });
 
 const ROWS: VoucherRow[] = [
-  { id: 'v1', number: 1, code: 'MF7U', state: 'used', use: onOrder('20261014-0042', '2026-10-14T10:05:00.000Z'), alsoOn: [] },
-  { id: 'v2', number: 2, code: 'EQW6', state: 'on_order', use: onOrder('20261014-0043', null), alsoOn: [] },
-  { id: 'v3', number: 3, code: '93XJ', state: 'not_used', use: null, alsoOn: [] },
+  { id: 'v1', number: 1, code: 'AB3C', state: 'used', use: onOrder('20261014-0042', '2026-10-14T10:05:00.000Z'), alsoOn: [] },
+  { id: 'v2', number: 2, code: 'XK7P', state: 'on_order', use: onOrder('20261014-0043', null), alsoOn: [] },
+  { id: 'v3', number: 3, code: 'RT9D', state: 'not_used', use: null, alsoOn: [] },
 ];
 
 function render(batches: VoucherBatchSummary[], detail: VoucherBatchDetail | null): string {
@@ -69,9 +69,9 @@ describe('the Vouchers page', () => {
     expect(words).toContain('1 of 3 used · 1 on an order not paid yet · 1 not used');
     expect(words).toContain('Covers up to Rs 1,899 · no end date');
     // The used one: its day, its order, what it was used on, the customer and who put it on.
-    expect(words).toContain('001 MF7U Used 14 Oct, 3:05 pm #0042 Test Fajita Pizza — Large (−Rs 1,899) Test Customer Test Cashier');
-    expect(words).toContain('002 EQW6 On an order 14 Oct, 3:00 pm #0043');
-    expect(words).toContain('003 93XJ Not used — — — — —');
+    expect(words).toContain('001 AB3C Used 14 Oct, 3:05 pm #0042 Test Fajita Pizza — Large (−Rs 1,899) Test Customer Test Cashier');
+    expect(words).toContain('002 XK7P On an order 14 Oct, 3:00 pm #0043');
+    expect(words).toContain('003 RT9D Not used — — — — —');
     // A batch with a voucher on an order can't be deleted from here.
     expect(words).not.toContain('Delete');
     expect(words).toContain('Copy list');

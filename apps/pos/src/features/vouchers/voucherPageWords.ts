@@ -34,7 +34,7 @@ export function batchTermsWords(b: Pick<VoucherBatchSummary, 'coversCents' | 'go
   return `Covers up to ${formatCents(b.coversCents)} · ${b.goodUntil ? `until ${d}/${m}/${y}` : 'no end date'}`;
 }
 
-/** The list as printed, one voucher a line ("001 MF7U"): to copy for the printer, or into the till again. */
+/** The list as printed, one voucher a line ("001 AB3C"): to copy for the printer, or into the till again. */
 export function voucherListText(rows: ReadonlyArray<Pick<VoucherRow, 'number' | 'code'>>): string {
   return rows.map((r) => `${voucherNumberText(r.number)} ${r.code}`).join('\n');
 }
@@ -58,7 +58,7 @@ export function pastedListWords(read: VoucherListRead): { summary: string; probl
   const numbers = read.vouchers.map((v) => v.number);
   const summary =
     n === 0
-      ? 'Paste the list: one voucher a line, its number then its code (001 MF7U).'
+      ? 'Choose the CSV file, or paste the list: one voucher a line, its number then its code (001,AB3C).'
       : `${n} voucher${n === 1 ? '' : 's'} read · No. ${voucherNumberText(Math.min(...numbers))}–${voucherNumberText(Math.max(...numbers))}`;
   const problems: string[] = [];
   if (read.repeatedNumbers.length > 0) {
@@ -83,4 +83,14 @@ export function rupeesToCents(text: string): number | null {
   if (!/^\d+(\.\d{1,2})?$/.test(t)) return null;
   const cents = Math.round(Number(t) * 100);
   return cents > 0 ? cents : null;
+}
+
+/** The largest voucher file the till reads (a list of 2,000 vouchers is about 20 KB). */
+export const VOUCHER_FILE_MAX_BYTES = 1_000_000;
+
+/** Why a chosen voucher file is not read, or null. */
+export function voucherFileProblem(size: number): string | null {
+  if (size === 0) return 'That file is empty.';
+  if (size > VOUCHER_FILE_MAX_BYTES) return 'That file is too big for a list of vouchers. Choose the CSV of numbers and codes.';
+  return null;
 }

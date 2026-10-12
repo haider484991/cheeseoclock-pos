@@ -27,7 +27,7 @@ export function voucherBillReason(number: number, batchName: string): string {
 
 // ------------------------------------------------------ what was typed --
 
-/** A code as typed, the way it is stored: capitals, no spaces or dashes ("mf7u" / "MF 7U" → "MF7U"). */
+/** A code as typed, the way it is stored: capitals, no spaces or dashes ("ab3c" / "AB 3C" → "AB3C"). */
 export function normalizeVoucherCode(raw: string): string {
   return raw.toUpperCase().replace(/[\s\-–—_.]/g, '');
 }
@@ -61,10 +61,12 @@ const SEPARATED = /^(?:NO\.?\s*)?#?\s*(\d{1,6})\s*[\s,;:|.\-–—]+\s*([A-Z0-9]
 const GLUED = /^(\d{1,6})([A-Z0-9]+)$/;
 
 /**
- * A list of vouchers pasted from a sheet or the printer's file, one a line:
- * "001 MF7U", "1, MF7U", "001	MF7U" (a spreadsheet's two columns). Anything
- * after the code is left (the paper log's empty columns). A number and code
- * run together, as some PDFs copy them ("029CFNX"), read as the code's last
+ * A list of vouchers pasted from a sheet or the printer's file, or a CSV
+ * file chosen on Add vouchers (v0.7.49), one a line: "001 AB3C", "1, AB3C",
+ * "001	AB3C" (a spreadsheet's two columns), "001;AB3C", "\"001\",\"AB3C\""
+ * (a CSV's quotes are dropped). Anything after the code is left (the paper
+ * log's empty columns, a CSV's other columns). A number and code
+ * run together, as some PDFs copy them ("029CY7N"), read as the code's last
  * VOUCHER_CODE_LENGTH letters and the number before them. Lines that don't
  * read — a heading — are skipped and listed, so nothing is dropped unseen.
  */
@@ -72,7 +74,7 @@ export function parseVoucherList(text: string): VoucherListRead {
   const vouchers: VoucherNumberAndCode[] = [];
   const skipped: string[] = [];
   for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim().toUpperCase();
+    const line = raw.replace(/["']/g, '').trim().toUpperCase();
     if (line === '') continue;
     const sep = SEPARATED.exec(line);
     if (sep) {
