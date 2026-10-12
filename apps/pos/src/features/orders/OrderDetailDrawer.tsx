@@ -347,7 +347,11 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                   severalOffersOn(snap.discounts)
                     ?.filter((d) => d.amountCents > 0)
                     .map((d) => <Row key={d.id} k={d.reason ?? 'Automatic offer'} v={`− ${formatCents(d.amountCents)}`} tone="emerald" />)}
-                {o.discountCents > 0 && !severalOffersOn(snap.discounts) && (
+                {/* A client's voucher (v0.7.48): by its name alone, as the bill prints it. */}
+                {o.discountCents > 0 && snap.discounts[snap.discounts.length - 1]?.source === 'voucher' && (
+                  <Row k={snap.discounts[snap.discounts.length - 1]?.reason ?? 'Voucher'} v={`− ${formatCents(o.discountCents)}`} tone="emerald" />
+                )}
+                {o.discountCents > 0 && !severalOffersOn(snap.discounts) && snap.discounts[snap.discounts.length - 1]?.source !== 'voucher' && (
                   <Row
                     k={drawerDiscountLabel(
                       snap.discounts.find((d) => d.reason)?.reason,

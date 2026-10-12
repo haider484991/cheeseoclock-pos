@@ -170,7 +170,7 @@ export interface ShiftReportFacts {
 // -----------------------------------------------------------------------------
 
 /** The discount kinds in the paper's order. */
-const DISCOUNT_ORDER: readonly ShiftReportDiscountKind[] = ['foodpanda', 'staff', 'website', 'offer'];
+const DISCOUNT_ORDER: readonly ShiftReportDiscountKind[] = ['foodpanda', 'staff', 'website', 'offer', 'voucher'];
 
 /** The payment methods in the paper's order; any other comes after them, by name. */
 const METHOD_ORDER: readonly string[] = ['cash', 'card', 'easypaisa', 'jazzcash', 'bank_transfer', 'foodpanda'];
@@ -200,8 +200,9 @@ function inOrder(order: readonly string[], a: string, b: string): number {
  * discount row's source, and only when the order's stored discount is above
  * Rs 0 (a declined automatic offer keeps its row, re-worked to Rs 0, and
  * never counts). 'foodpanda' is the foodpanda deal, 'offer' an automatic
- * offer; a row with no source is the website's pick-up discount on a website
- * order and the staff's discount on a counter order.
+ * offer, 'voucher' a client's voucher (v0.7.48); a row with no source is
+ * the website's pick-up discount on a website order and the staff's
+ * discount on a counter order.
  */
 export function shiftReportDiscountKind(
   discountCents: number,
@@ -211,6 +212,7 @@ export function shiftReportDiscountKind(
   if (!(discountCents > 0)) return null;
   if (discountSource === 'foodpanda') return 'foodpanda';
   if (discountSource === 'offer') return 'offer';
+  if (discountSource === 'voucher') return 'voucher';
   return orderSource === 'web' ? 'website' : 'staff';
 }
 

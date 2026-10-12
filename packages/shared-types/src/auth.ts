@@ -111,7 +111,16 @@ export type Capability =
    * profit anywhere). Profit shows what a dish costs as well, so every check
    * also needs COST_CAPABILITY. Cashiers never.
    */
-  | 'profit.view';
+  | 'profit.view'
+  /**
+   * The Vouchers page (v0.7.48): every client's vouchers with their numbers
+   * and CODES, which are used and on which order, and adding or changing
+   * them. Using one at the till needs only `order.create` — the code printed
+   * on the voucher is the proof — so a cashier never sees the list of codes.
+   * The owner and managers (managers already give a Free order with their
+   * PIN).
+   */
+  | 'vouchers.manage';
 
 export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
   admin: new Set<Capability>([
@@ -133,6 +142,7 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'customers.manage',
     'order.history',
     'profit.view',
+    'vouchers.manage',
   ]),
   // A manager runs the shift: closes it with the drawer count, approves what
   // a cashier can't do alone, and looks after the menu, stock and customers.
@@ -155,6 +165,7 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'riders.manage',
     'customers.manage',
     'order.history',
+    'vouchers.manage',
   ]),
   // A cashier opens the shift (counts the float in the morning) but never
   // closes it: the close is the drawer count, done by a manager or the owner

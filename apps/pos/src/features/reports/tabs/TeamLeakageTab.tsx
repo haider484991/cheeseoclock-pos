@@ -392,7 +392,7 @@ export function DiscountsSection({ report }: { report: Pick<ReportTeamTab, 'kpis
           {hasStanding && (
             <Panel
               title="Standing offers"
-              note="Put on by the till from your own settings (Settings → foodpanda, and Money & discounts → Automatic offers), not given by staff. Each foodpanda order is on Channels → foodpanda orders to check; how orders came in is on Channels."
+              note="Put on by the till from your own settings (Settings → foodpanda, and Money & discounts → Automatic offers), or a client’s vouchers (Vouchers), not given by staff. Each foodpanda order is on Channels → foodpanda orders to check; how orders came in is on Channels."
               className="xl:col-span-2"
             >
               <DataTable

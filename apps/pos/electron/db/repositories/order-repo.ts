@@ -77,7 +77,16 @@ import {
   FREE_ORDER_NEEDS_MANAGER,
   FREE_ORDER_NEEDS_REASON,
   FREE_ORDER_NOT_FOODPANDA,
+  parseVoucherRule,
+  voucherAmountCents,
+  voucherBillReason,
+  voucherCanCover,
+  voucherLineOf,
+  voucherNumberText,
+  voucherRule,
+  type VoucherLine,
 } from '@cheeseoclock/pos-domain';
+import { checkVoucher, findVoucherBatch } from '../vouchers-read.js';
 import {
   readApprovalLimits,
   readDeliveryFeeItemIds,
@@ -108,6 +117,7 @@ import {
   type RatesByMethod,
 } from '@cheeseoclock/shared-types';
 import type {
+  ApplyVoucherRequest,
   CameBy,
   DiscountBaseRule,
   FoodpandaTenderCheck,
@@ -1405,7 +1415,11 @@ export function setOrderMode(
     if (wasFoodpanda && !isFoodpanda) {
       discountChanged = takeOffFoodpandaDeal(db, orderId, actor);
       if (leaveValueDealsOut(db, orderId, actor)) discountChanged = true;
-    } else if (!wasFoodpanda && isFoodpanda && order.source === 'pos') discountChanged = putOnFoodpandaDeal(db, updated, actor);
+    } else if (!wasFoodpanda && isFoodpanda) {
+      // A client's voucher is never on a foodpanda order: it comes off (free again).
+      if (takeOffVoucherRows(db, orderId, actor, 'voucher_off_foodpanda')) discountChanged = true;
+      if (order.source === 'pos' && putOnFoodpandaDeal(db, updated, actor)) discountChanged = true;
+    }
     // The owner's automatic offers depend on the order type: worked out again
     // on every change (a foodpanda order never carries one).
     if (applyOfferStep(db, orderId, actor)) discountChanged = true;
@@ -2747,6 +2761,9 @@ export function applyDiscount(
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
     assertOrderTakesChanges(order, opts, `This order is ${said(order.status)} — a discount can't be added now`);
+    // A client's voucher is the order's one discount: taken off first (the × frees it), never replaced unseen.
+    const voucherOn = liveVoucherRow(db, input.orderId);
+    if (voucherOn) throw new Error(VOUCHER_ON_ORDER(voucherNumberOn(voucherOn) ?? 0));
 
     // Validate the discount input shape (percent 0-100, value >= 0).
     const v = validateDiscountInput({ discountType: input.discountType, value: input.value });
@@ -3047,6 +3064,210 @@ export function clearDiscount(
 }
 
 // -----------------------------------------------------------------------------
+// Vouchers (v0.7.48) — a client's printed voucher, its number and code typed
+// at the till (Vouchers page; vouchers-read.ts says whether one is used)
+// -----------------------------------------------------------------------------
+
+export const VOUCHER_NOT_ON_FOODPANDA = 'A voucher is for the shop’s own orders, not a foodpanda order.';
+export const VOUCHER_NOT_ON_WEB = 'A voucher is used at the counter, not on a website order.';
+export const VOUCHER_LINE_GONE = 'That item is no longer on this order. Pick the item the voucher is for.';
+export const VOUCHER_LINE_CANT = 'A voucher can’t come off that line. Pick a food item, not a value deal or the delivery charge.';
+export const VOUCHER_ONE_PER_ORDER = 'This order already has a voucher. One voucher per order: start a new order for the next one.';
+/** What F3 hears on an order carrying a voucher: one discount per order, and taking the voucher off frees it. */
+export const VOUCHER_ON_ORDER = (number: number): string =>
+  `Voucher No. ${voucherNumberText(number)} is on this order. Take the voucher off first (the × beside it), then add a discount.`;
+
+/** An order's live lines as a voucher sees them, in the till's order ((created_at, id)). */
+function voucherLinesOf(db: AppDatabase, orderId: string): VoucherLine[] {
+  const rows = db
+    .prepare(
+      `SELECT oi.id, oi.menu_item_name, oi.menu_item_id, oi.quantity, oi.line_total_cents, oi.no_discount, oi.parent_order_item_id,
+              mi.category_id
+         FROM order_items oi
+         LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
+        WHERE oi.order_id = ? AND oi.deleted_at IS NULL
+        ORDER BY oi.created_at, oi.id`,
+    )
+    .all(orderId) as Array<{
+    id: string;
+    menu_item_name: string;
+    menu_item_id: string | null;
+    quantity: number;
+    line_total_cents: number;
+    no_discount: number;
+    parent_order_item_id: string | null;
+    category_id: string | null;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    menuItemName: r.menu_item_name,
+    menuItemId: r.menu_item_id,
+    quantity: r.quantity,
+    lineTotalCents: r.line_total_cents,
+    noDiscount: r.no_discount === 1,
+    parentOrderItemId: r.parent_order_item_id,
+    categoryId: r.category_id ?? null,
+  }));
+}
+
+/** The menu category of the item an order line sold (taken off or not); null when not known. */
+function lineCategoryOf(db: AppDatabase, lineId: string): string | null {
+  const row = db
+    .prepare(`SELECT mi.category_id FROM order_items oi LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id WHERE oi.id = ?`)
+    .get(lineId) as { category_id: string | null } | undefined;
+  return row?.category_id ?? null;
+}
+
+/** The order's live voucher row, if it carries one. */
+function liveVoucherRow(db: AppDatabase, orderId: string): { id: string; voucher_id: string | null; rule_json: string | null } | undefined {
+  return db
+    .prepare(
+      `SELECT id, voucher_id, rule_json FROM order_discounts
+        WHERE order_id = ? AND source = 'voucher' AND deleted_at IS NULL
+        ORDER BY created_at DESC, id DESC LIMIT 1`,
+    )
+    .get(orderId) as { id: string; voucher_id: string | null; rule_json: string | null } | undefined;
+}
+
+/**
+ * Take an order's voucher off — the voucher is free again (it is read from
+ * the live rows) — synced, one audit row each with why. Returns whether one
+ * came off. Inside the caller's transaction.
+ */
+function takeOffVoucherRows(db: AppDatabase, orderId: string, actor: Actor, action: string): boolean {
+  const rows = db
+    .prepare(
+      `SELECT id, voucher_id, reason, amount_cents, rule_json FROM order_discounts
+        WHERE order_id = ? AND source = 'voucher' AND deleted_at IS NULL`,
+    )
+    .all(orderId) as Array<{ id: string; voucher_id: string | null; reason: string | null; amount_cents: number; rule_json: string | null }>;
+  const now = nowIso();
+  for (const r of rows) {
+    db.prepare(`UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`).run(now, now, r.id);
+    enqueueSync(db, { entityType: 'order_discounts', entityId: r.id, op: 'delete', payload: { id: r.id, deletedAt: now } });
+    writeAudit(db, { entityType: 'order_discounts', entityId: r.id, action, actorUserId: actor.userId ?? null, before: r, after: null });
+  }
+  return rows.length > 0;
+}
+
+/** The voucher number on an order's voucher row (for the words), or null. */
+function voucherNumberOn(row: { rule_json: string | null } | undefined): number | null {
+  return row ? (parseVoucherRule(row.rule_json)?.voucher.number ?? null) : null;
+}
+
+/**
+ * Use a client's voucher on the order being rung up (orders:applyVoucher):
+ * its number and code checked again inside the transaction (a voucher no
+ * live order carries, not past its last day — vouchers-read checkVoucher),
+ * and the line it is for (food: not a value deal, the delivery charge or a
+ * combo's inside line). One of that line's items comes off, up to what the
+ * voucher covers (re-worked at every cart change, recomputeOrderTotals). It
+ * replaces any other discount on the order (one per order; an automatic
+ * offer stays off while it is on), audited. No PIN: the code is the proof;
+ * the row's approver is whoever added the vouchers. Never on a foodpanda or
+ * website order.
+ */
+export function applyVoucher(
+  db: AppDatabase,
+  input: ApplyVoucherRequest,
+  actor: Actor & { userId: string },
+  opts: OrderEditing = {},
+): void {
+  db.transaction(() => {
+    const order = findOrder(db, input.orderId);
+    if (!order) throw new Error('Order not found');
+    assertOrderTakesChanges(order, opts, `This order is ${said(order.status)} — a voucher can't be used now`);
+    if (order.mode === 'foodpanda') throw new Error(VOUCHER_NOT_ON_FOODPANDA);
+    if (order.source !== 'pos') throw new Error(VOUCHER_NOT_ON_WEB);
+    const now = nowIso();
+    const check = checkVoucher(db, { number: input.number, code: input.code, orderId: input.orderId }, tradingDayOfInstant(now) ?? now.slice(0, 10));
+    if (!check.ok) throw new Error(check.message);
+    if (liveVoucherRow(db, input.orderId)) throw new Error(VOUCHER_ONE_PER_ORDER);
+    const line = voucherLinesOf(db, input.orderId).find((l) => l.id === input.lineId);
+    if (!line) throw new Error(VOUCHER_LINE_GONE);
+    if (!voucherCanCover(line)) throw new Error(VOUCHER_LINE_CANT);
+    const batch = findVoucherBatch(db, check.batch.id);
+    if (!batch) throw new Error('Those vouchers are no longer on this till.');
+
+    const rule = voucherRule({
+      v: 1,
+      id: check.voucherId,
+      batchId: batch.id,
+      number: check.number,
+      batchName: batch.name,
+      gives: batch.gives,
+      coversCents: batch.coversCents,
+      lineId: line.id,
+    });
+    const amount = voucherAmountCents(batch.coversCents, line);
+
+    // One discount per order: whatever was on comes off (an automatic offer, a staff discount), on record.
+    const replaced = liveDiscountRows(db, input.orderId);
+    for (const r of replaced) {
+      db.prepare(`UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`).run(now, now, r.id);
+      enqueueSync(db, { entityType: 'order_discounts', entityId: r.id, op: 'delete', payload: { id: r.id, deletedAt: now } });
+    }
+    if (replaced.length > 0) {
+      writeAudit(db, {
+        entityType: 'order_discounts',
+        entityId: input.orderId,
+        action: 'replaced_by_voucher',
+        actorUserId: actor.userId,
+        before: replaced,
+        after: null,
+      });
+    }
+
+    // A flat discount whose value is kept equal to what it takes off, so a
+    // till that knows the rule but not vouchers works out the same rupees.
+    const discountId = uuidv7();
+    db.prepare(
+      `INSERT INTO order_discounts
+         (id, order_id, discount_type, value, reason, applied_by_user_id, approved_by_user_id,
+          amount_cents, source, rule_json, voucher_id, created_at, updated_at, device_id, version)
+       VALUES (?, ?, 'flat', ?, ?, ?, ?, ?, 'voucher', ?, ?, ?, ?, ?, 1)`,
+    ).run(
+      discountId,
+      input.orderId,
+      amount,
+      voucherBillReason(check.number, batch.name),
+      actor.userId,
+      batch.createdByUserId,
+      amount,
+      JSON.stringify(rule),
+      check.voucherId,
+      now,
+      now,
+      actor.deviceId,
+    );
+    enqueueSync(db, {
+      entityType: 'order_discounts',
+      entityId: discountId,
+      op: 'upsert',
+      payload: { id: discountId, orderId: input.orderId, source: 'voucher', voucherId: check.voucherId, rule },
+    });
+    writeAudit(db, {
+      entityType: 'order_discounts',
+      entityId: discountId,
+      action: 'apply_voucher',
+      actorUserId: actor.userId,
+      before: null,
+      after: {
+        orderId: input.orderId,
+        voucherId: check.voucherId,
+        number: check.number,
+        batchId: batch.id,
+        batchName: batch.name,
+        lineId: line.id,
+        amountCents: amount,
+        approverUserId: batch.createdByUserId,
+      },
+    });
+    recomputeOrderTotals(db, input.orderId, actor);
+  })();
+}
+
+// -----------------------------------------------------------------------------
 // Recompute totals (subtotal, discount, tax, total) — called after every mutation
 // -----------------------------------------------------------------------------
 
@@ -3144,6 +3365,50 @@ function recomputeOrderTotals(
           op: 'upsert',
           payload: { id: discountRow.id, amountCents: discount },
         });
+      }
+    } else if (discountRow.source === 'voucher') {
+      // A client's voucher: one of its line's items, up to what the voucher
+      // covers — from the terms frozen on the row, never the live batch;
+      // never cleared by the approval re-check (the code was its proof). Its
+      // line gone (the flavour swapped): the dearest line of the same menu
+      // category (a pizza for a pizza, never the drink beside it). None
+      // left: the voucher comes off the order, free again, and the owner's
+      // automatic offer may fit again in this same step. The flat
+      // value is kept equal to the amount, so a till without vouchers reads
+      // the same rupees. A rule this version can't read: its type and value
+      // on the base.
+      const vr = parseVoucherRule(discountRow.rule_json);
+      const line = vr ? voucherLineOf(vr.voucher.lineId, voucherLinesOf(db, orderId), lineCategoryOf(db, vr.voucher.lineId)) : null;
+      if (vr && !line) {
+        takeOffVoucherRows(db, orderId, actor, 'voucher_off_no_item');
+        if (applyOfferStep(db, orderId, actor)) {
+          recomputeOrderTotals(db, orderId, actor);
+          return;
+        }
+      } else {
+        discount = vr && line ? Math.min(voucherAmountCents(vr.voucher.coversCents, line), base) : computeDiscountCents(base, d);
+        const moved = vr && line && line.id !== vr.voucher.lineId ? voucherRule({ ...vr.voucher, lineId: line.id }) : null;
+        if (discount !== discountRow.amount_cents || (vr && discount !== discountRow.value) || moved) {
+          db.prepare(
+            `UPDATE order_discounts SET amount_cents = ?, value = ?, rule_json = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+          ).run(discount, vr ? discount : discountRow.value, moved ? JSON.stringify(moved) : discountRow.rule_json, now, discountRow.id);
+          enqueueSync(db, {
+            entityType: 'order_discounts',
+            entityId: discountRow.id,
+            op: 'upsert',
+            payload: { id: discountRow.id, amountCents: discount, ...(moved ? { rule: moved } : {}) },
+          });
+          if (moved) {
+            writeAudit(db, {
+              entityType: 'order_discounts',
+              entityId: discountRow.id,
+              action: 'voucher_moved',
+              actorUserId: actor.userId ?? null,
+              before: { lineId: vr!.voucher.lineId },
+              after: { lineId: moved.voucher.lineId, amountCents: discount },
+            });
+          }
+        }
       }
     } else if (discountRow.source === 'foodpanda') {
       discount = dealRule ? dealAmount(dealRule, base).shopCents : computeDiscountCents(subtotal, d);
@@ -4400,6 +4665,7 @@ export function getOrderSnapshot(
     const share = rule ? dealAmount(rule, dealBase) : null;
     // An automatic offer: its name and frozen terms (the cart, Pay and the bill say it).
     const offer = d.source === 'offer' ? parseOfferRule(d.rule_json) : null;
+    const voucher = d.source === 'voucher' ? (parseVoucherRule(d.rule_json)?.voucher ?? null) : null;
     return {
       id: d.id as OrderSnapshot['discounts'][number]['id'],
       orderId: orderId as OrderSnapshot['discounts'][number]['orderId'],
@@ -4409,7 +4675,7 @@ export function getOrderSnapshot(
       appliedByUserId: d.applied_by_user_id as OrderSnapshot['discounts'][number]['appliedByUserId'],
       approvedByUserId: (d.approved_by_user_id ?? null) as OrderSnapshot['discounts'][number]['approvedByUserId'],
       amountCents: d.amount_cents as OrderSnapshot['discounts'][number]['amountCents'],
-      source: d.source === 'foodpanda' ? 'foodpanda' : d.source === 'offer' ? 'offer' : null,
+      source: d.source === 'foodpanda' ? 'foodpanda' : d.source === 'offer' ? 'offer' : d.source === 'voucher' ? 'voucher' : null,
       foodpanda:
         rule && share
           ? {
@@ -4444,6 +4710,20 @@ export function getOrderSnapshot(
       skipsNoDiscountLines,
       // A Free order (v0.7.36): the screens and papers say "Free order · <reason>".
       ...(isFreeOrderRule(d.rule_json) ? { freeOrder: true } : {}),
+      // A client's voucher: its number, its batch and the line it is for, as frozen on the row.
+      ...(voucher
+        ? {
+            voucher: {
+              id: voucher.id,
+              batchId: voucher.batchId,
+              number: voucher.number,
+              batchName: voucher.batchName,
+              gives: voucher.gives,
+              coversCents: voucher.coversCents,
+              lineId: voucher.lineId,
+            },
+          }
+        : {}),
     };
   });
 

@@ -250,6 +250,11 @@ const STANDING_OFFER_NAME: Record<string, string> = { foodpanda: 'foodpanda deal
  * renamed offer shows its older orders under the old name, apart.
  */
 function standingKey(l: ReportDiscountLine): { key: string; name: string } {
+  // A client's vouchers (v0.7.48): one group per client, as frozen on the order — bought ahead, never the staff's.
+  if (l.source === 'voucher') {
+    const batch = l.voucherBatch?.trim() || 'a client';
+    return { key: `voucher:${batch.toLowerCase()}`, name: `Vouchers for ${batch}` };
+  }
   if (l.source === 'offer') {
     const name = l.reason && l.reason !== NO_DISCOUNT_REASON_LABEL ? l.reason : 'Automatic offer';
     return { key: `offer:${l.offerId ?? ''}:${name.toLowerCase()}`, name: `${name} (automatic offer)` };
@@ -1049,6 +1054,8 @@ function getDiscountLines(db: AppDatabase, range: ReportRange): ReportDiscountLi
               d.discount_type AS type, d.value AS value, d.reason AS reason, d.source AS source,
               CASE WHEN d.source = 'offer' AND json_valid(d.rule_json)
                    THEN CAST(json_extract(d.rule_json, '$.offer.id') AS TEXT) END AS offerId,
+              CASE WHEN d.source = 'voucher' AND json_valid(d.rule_json)
+                   THEN CAST(json_extract(d.rule_json, '$.voucher.batchName') AS TEXT) END AS voucherBatch,
               ua.full_name AS givenBy, uap.full_name AS approvedBy
          FROM orders o
          LEFT JOIN order_discounts d ON d.id = (
@@ -1070,6 +1077,7 @@ function getDiscountLines(db: AppDatabase, range: ReportRange): ReportDiscountLi
     reason: string | null;
     source: string | null;
     offerId: string | null;
+    voucherBatch: string | null;
     givenBy: string | null;
     approvedBy: string | null;
   }>;
@@ -1082,8 +1090,9 @@ function getDiscountLines(db: AppDatabase, range: ReportRange): ReportDiscountLi
     reason: r.reason?.trim() || NO_DISCOUNT_REASON_LABEL,
     givenBy: r.givenBy ?? 'Unknown',
     approvedBy: r.approvedBy,
-    source: r.source === 'foodpanda' ? 'foodpanda' : r.source === 'offer' ? 'offer' : null,
+    source: r.source === 'foodpanda' ? 'foodpanda' : r.source === 'offer' ? 'offer' : r.source === 'voucher' ? 'voucher' : null,
     ...(r.source === 'offer' ? { offerId: r.offerId } : {}),
+    ...(r.source === 'voucher' ? { voucherBatch: r.voucherBatch } : {}),
   }));
 }
 

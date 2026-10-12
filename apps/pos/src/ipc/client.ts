@@ -147,6 +147,8 @@ export const ipc = {
       unwrap(window.api.orders.updateItemOptions(input)),
     applyDiscount: (input: IpcRequest<'orders:applyDiscount'>) =>
       unwrap(window.api.orders.applyDiscount(input)),
+    /** A client's voucher (v0.7.48): its number and code as printed, and the line it is for. */
+    applyVoucher: (input: IpcRequest<'orders:applyVoucher'>) => unwrap(window.api.orders.applyVoucher(input)),
     /** A manager's PIN or password is needed to take the shop's foodpanda deal off. */
     clearDiscount: (orderId: string, approverPin?: string, discountId?: string) =>
       unwrap(
@@ -214,6 +216,15 @@ export const ipc = {
       unwrap(window.api.orders.markDelivered(input)),
     /** Rider paid: an outside rider pays the shop while still out (riderKeepsCents as the window showed it). */
     riderPaid: (input: IpcRequest<'orders:riderPaid'>) => unwrap(window.api.orders.riderPaid(input)),
+  },
+  vouchers: {
+    listBatches: () => unwrap(window.api.vouchers.listBatches()),
+    getBatch: (id: string) => unwrap(window.api.vouchers.getBatch({ id })),
+    addBatch: (input: IpcRequest<'vouchers:addBatch'>) => unwrap(window.api.vouchers.addBatch(input)),
+    updateBatch: (input: IpcRequest<'vouchers:updateBatch'>) => unwrap(window.api.vouchers.updateBatch(input)),
+    removeBatch: (id: string) => unwrap(window.api.vouchers.removeBatch({ id })),
+    /** The till: is this number and code a voucher that can be used now, or why not. */
+    check: (input: IpcRequest<'vouchers:check'>) => unwrap(window.api.vouchers.check(input)),
   },
   riders: {
     list: (input?: IpcRequest<'riders:list'>) => unwrap(window.api.riders.list(input)),

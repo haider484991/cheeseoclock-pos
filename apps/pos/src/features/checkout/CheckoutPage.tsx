@@ -21,6 +21,7 @@ import { ModifierModal } from './ModifierModal';
 import { TenderDialog } from './TenderDialog';
 import { ReceiptDialog } from './ReceiptDialog';
 import { DiscountDialog } from './DiscountDialog';
+import { VoucherDialog } from './VoucherDialog';
 import type { DiscountDialogIntent } from './discountPresets';
 import { useTenderGate } from './useTenderGate';
 import { useToast } from '../../components/toast/ToastProvider';
@@ -40,6 +41,8 @@ export function CheckoutPage() {
   const [tenderOpen, setTenderOpen] = useState(false);
   /** The Discount dialog, and why it was opened ('removeDeal': the × on the foodpanda deal). */
   const [discountOpen, setDiscountOpen] = useState<false | DiscountDialogIntent>(false);
+  // "Use a voucher" (v0.7.48): a client's voucher, its number and code typed.
+  const [voucherOpen, setVoucherOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [checkoutStep, setCheckoutStep] = useState<'items' | 'details'>('items');
@@ -290,7 +293,7 @@ export function CheckoutPage() {
       if (e.defaultPrevented) return;
       // The Save box of a change answers its own keys (Enter saves, Esc closes it).
       if (saveOpen) return;
-      if (pizzaChoice || modifierForItem || customizeLineId || tenderOpen || receiptOpen || discountOpen) {
+      if (pizzaChoice || modifierForItem || customizeLineId || tenderOpen || receiptOpen || discountOpen || voucherOpen) {
         if (e.key === 'Escape') {
           if (pizzaChoice) setPizzaChoice(null);
           else if (receiptOpen) {
@@ -298,6 +301,7 @@ export function CheckoutPage() {
             reset();
           } else if (tenderOpen) setTenderOpen(false);
           else if (discountOpen) setDiscountOpen(false);
+          else if (voucherOpen) setVoucherOpen(false);
           else if (modifierForItem) setModifierForItem(null);
           else if (customizeLineId) setCustomizeLineId(null);
         }
@@ -369,7 +373,7 @@ export function CheckoutPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pizzaChoice, modifierForItem, customizeLineId, tenderOpen, receiptOpen, discountOpen, snapshot, reset, gate, toast, checkoutStep, needsCustomer, hasItems, busy, mode, search, lastTouch, edit, saveOpen]);
+  }, [pizzaChoice, modifierForItem, customizeLineId, tenderOpen, receiptOpen, discountOpen, voucherOpen, snapshot, reset, gate, toast, checkoutStep, needsCustomer, hasItems, busy, mode, search, lastTouch, edit, saveOpen]);
 
   function handleChooseSize(choice: MenuChoice) {
     sizeTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -525,7 +529,7 @@ export function CheckoutPage() {
       {edit ? (
         <EditOrderTicket onSave={openSave} onCancel={() => void leaveEdit()} onDiscount={() => setDiscountOpen('change')} onCustomize={setCustomizeLineId} />
       ) : (
-        <CartPane step={checkoutStep} onContinue={() => setCheckoutStep('details')} onBack={() => setCheckoutStep('items')} onPay={() => void openPay()} onDiscount={() => setDiscountOpen('change')} onRemoveDeal={() => setDiscountOpen('removeDeal')} onSendToKitchen={handleSendToKitchen} onCustomize={setCustomizeLineId} />
+        <CartPane step={checkoutStep} onContinue={() => setCheckoutStep('details')} onBack={() => setCheckoutStep('items')} onPay={() => void openPay()} onDiscount={() => setDiscountOpen('change')} onVoucher={() => setVoucherOpen(true)} onRemoveDeal={() => setDiscountOpen('removeDeal')} onSendToKitchen={handleSendToKitchen} onCustomize={setCustomizeLineId} />
       )}
 
       {saveOpen && edit && <EditSaveDialog onClose={() => setSaveOpen(false)} onSaved={handleEditSaved} />}
@@ -584,6 +588,8 @@ export function CheckoutPage() {
       )}
 
       {discountOpen && snapshot && <DiscountDialog intent={discountOpen} onClose={() => setDiscountOpen(false)} />}
+
+      {voucherOpen && snapshot && <VoucherDialog onClose={() => setVoucherOpen(false)} />}
 
       {receiptOpen && snapshot && <ReceiptDialog snapshot={snapshot} onClose={handleReceiptClose} />}
     </div>

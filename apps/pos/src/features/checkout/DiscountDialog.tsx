@@ -83,6 +83,8 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   // One of the owner's automatic offers: a discount applied here replaces it under the usual rule
   // (no PIN of its own); Remove takes it off this order, and on one taken off it is put back.
   const offerOn = current?.source === 'offer' ? { declined: current.offer?.declined === true } : null;
+  // A client's voucher (v0.7.48) is the order's one discount: it comes off first, here or with its ×.
+  const voucherOn = current?.source === 'voucher' ? current : null;
   // A staff discount opens on itself; the deal opens on nothing (never re-applied as a staff discount).
   const start = discountDialogStart(current);
   const removingDeal = dealOn && intent === 'removeDeal';
@@ -357,6 +359,11 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                 )}
               </Dialog.Description>
               {currentWords?.ruleNote && <p className="mt-1 text-xs font-medium text-amber-800 dark:text-amber-300">{currentWords.ruleNote}</p>}
+              {voucherOn && (
+                <p className="mt-1 text-xs font-medium text-amber-800 dark:text-amber-300">
+                  {voucherOn.reason ?? 'A voucher'} is on this order. Take the voucher off first to give a discount instead.
+                </p>
+              )}
               {/* The limit in words, on what it is checked on: the food, when the delivery charge is left
                   out; the food without the value deals, when they are (the food and delivery charge
                   without them, with the owner's switch on). None when only value deals are left. */}
@@ -611,7 +618,9 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
               <Button variant="ghost" className="text-red-700 dark:text-red-400" disabled={saving || busy} onClick={() => void remove()}>
                 {dealOn
                   ? 'Take the deal off'
-                  : offerOn
+                  : voucherOn
+                    ? 'Take the voucher off'
+                    : offerOn
                     ? offerOn.declined
                       ? 'Put the offer back'
                       : 'Take the offer off'

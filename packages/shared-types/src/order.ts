@@ -2,6 +2,7 @@ import type { Cents } from './money.js';
 import type { UUID, OrderNumber } from './ids.js';
 import type { DiscountSource, FoodpandaDealShare, OfferShare, OrderCameBy } from './shop-settings.js';
 import type { MethodRatesBps, MethodTotalsCents } from './tax-by-method.js';
+import type { VoucherShare } from './vouchers.js';
 
 // 'dine_in' is retained for historical orders; the POS no longer offers it.
 export type OrderMode = 'dine_in' | 'takeaway' | 'delivery' | 'online' | 'foodpanda';
@@ -191,13 +192,17 @@ export interface OrderDiscount {
   /**
    * Where it came from (migration 0040): 'foodpanda' = the shop's standing
    * foodpanda deal, put on automatically; 'offer' = one of the owner's
-   * automatic offers (Money & discounts); null/absent = typed by staff (F3).
+   * automatic offers (Money & discounts); 'voucher' = a client's voucher,
+   * its number and code typed at the till (v0.7.48); null/absent = typed by
+   * staff (F3).
    */
   source?: DiscountSource | null;
   /** A foodpanda deal's figures on this order (the whole deal, foodpanda's part). */
   foodpanda?: FoodpandaDealShare | null;
   /** One of the owner's automatic offers (source 'offer'): its name and frozen terms, and whether the cashier took it off. */
   offer?: OfferShare | null;
+  /** A client's voucher (source 'voucher', v0.7.48): its number, its batch and the line it is for, as frozen on the row. */
+  voucher?: VoucherShare | null;
   /**
    * Whether this discount also came off the order's delivery charge, as
    * FROZEN on its row when it was given (order_discounts.rule_json; pos-domain

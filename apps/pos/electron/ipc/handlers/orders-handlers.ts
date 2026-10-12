@@ -18,6 +18,7 @@ import type {
   StockSettlement,
 } from '@cheeseoclock/shared-types';
 import {
+  applyVoucherInputSchema,
   cameBySchema,
   changePaymentMethodInputSchema,
   deleteTestOrderInputSchema,
@@ -54,6 +55,8 @@ import {
   updateOrderItemQuantity,
   updateOrderItemOptions,
   applyDiscount,
+  applyVoucher,
+  VOUCHER_ON_ORDER,
   clearDiscount,
   setOrderMode,
   syncOrderDeliveryCharge,
@@ -433,6 +436,10 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // The order's subtotal decides whether a flat amount is more than the % limit of it.
     const current = getOrderSnapshot(ctx.db, payload.orderId);
     if (!current) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    // A client's voucher is the order's one discount: taken off first, BEFORE any PIN is checked
+    // (so it never uses up a PIN attempt). The repository refuses too.
+    const voucherOn = current.discounts.find((d) => d.source === 'voucher');
+    if (voucherOn) throw new IpcGuardError({ code: 'precondition_failed', message: VOUCHER_ON_ORDER(voucherOn.voucher?.number ?? 0) });
 
     // A Free order (v0.7.36): 100% off the whole order, value deals and delivery charge
     // included — always with a reason and a manager's PIN or password, checked in that order
@@ -518,6 +525,21 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       { userId: s.id, deviceId: ctx.deviceId },
     );
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  // A client's voucher (v0.7.48): its number and code as printed, and the line it is for. Any
+  // login that takes orders — the code is the proof, so no PIN; the repository checks the voucher
+  // again inside its transaction (never used, not ended) and refuses a foodpanda or website order.
+  defineHandler('orders:applyVoucher', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    const parsed = applyVoucherInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new IpcGuardError({ code: 'validation_failed', message: parsed.error.issues[0]?.message ?? 'Type the voucher number and code' });
+    }
+    applyVoucher(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId });
+    const snap = getOrderSnapshot(ctx.db, parsed.data.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     return ok(snap);
   });

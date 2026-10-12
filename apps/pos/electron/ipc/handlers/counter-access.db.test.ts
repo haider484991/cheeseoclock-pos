@@ -721,6 +721,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'orders:removeItem': { orderId: s.draft, orderItemId: 'no-such-line' },
   'orders:updateItemOptions': { orderId: s.draft, orderItemId: 'no-such-line', modifierIds: [], notes: null },
   'orders:applyDiscount': { orderId: s.draft, discountType: 'percent', value: 5 },
+  // A client's voucher (v0.7.48): any login taking the order — the code printed on it is the proof.
+  'orders:applyVoucher': { orderId: s.draft, number: 1, code: 'NONE', lineId: 'no-such-line' },
   'orders:clearDiscount': { orderId: s.draft },
   'orders:resumeDraft': undefined,
   'orders:setMode': { orderId: s.draft, mode: 'takeaway' },

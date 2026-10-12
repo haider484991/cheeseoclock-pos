@@ -21,6 +21,8 @@ export const PAGE_ACCESS = {
   // What dishes cost to make (costing spec D6: COST_CAPABILITY, today menu.manage).
   '/costing': { capability: COST_CAPABILITY, label: 'Costing' },
   '/customers': { capability: 'customers.manage', label: 'Customers' },
+  // Clients' vouchers and who used them (v0.7.48): the owner's and the managers'; the till only checks one.
+  '/vouchers': { capability: 'vouchers.manage', label: 'Vouchers' },
   '/reports': { capability: 'report.view', label: 'Reports' },
   '/users': { capability: 'users.manage', label: 'Users' },
   // The owner's (printer.manage: managers lost it on 2026-09-27).

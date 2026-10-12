@@ -402,7 +402,8 @@ export function discountLeftAloneTags(
  * "WhatsApp 10% off (not on value deals)". Built from the discount's frozen
  * rule (discountLeftAloneTags), never the live setting, so a DUPLICATE of an
  * old order prints exactly what the first copy did. A Free order (v0.7.36)
- * prints as itself: "Free order (Staff meal)".
+ * prints as itself: "Free order (Staff meal)", and a client's voucher
+ * too: "Voucher No. 001 · abhi".
  */
 export function discountBillLabel(
   d: {
@@ -419,6 +420,8 @@ export function discountBillLabel(
   items: ReadonlyArray<{ readonly menuItemName?: string | null; readonly noDiscount?: boolean }>,
 ): string {
   if (d.freeOrder === true) return d.reason ? `Free order (${d.reason})` : 'Free order';
+  // A client's voucher prints as itself, "Voucher No. 001 · abhi" (v0.7.48): it came off one item, never a charge or a deal.
+  if (d.source === 'voucher' && d.reason) return d.reason;
   // An offer on some categories prints as its name alone: it never came off a delivery charge or a value deal.
   if (d.source === 'offer' && d.reason && (d.offer?.categoryIds?.length ?? 0) > 0) return d.reason;
   const tags = discountLeftAloneTags(d, items);

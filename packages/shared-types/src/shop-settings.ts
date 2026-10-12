@@ -1096,9 +1096,11 @@ export const FOODPANDA_ORDER_CODE_MAX = 40;
  * 'foodpanda' = the shop's foodpanda deal; 'offer' = one of the owner's
  * automatic offers (Money & discounts). Both of those are put on by the
  * till, approved by the owner who saved them, and listed in Reports as
- * "Standing offers", never against the cashier.
+ * "Standing offers", never against the cashier. 'voucher' = a client's
+ * printed voucher (v0.7.48, Vouchers): its number and code typed at the
+ * till, approved by whoever added the vouchers, listed apart in Reports too.
  */
-export type DiscountSource = 'foodpanda' | 'offer';
+export type DiscountSource = 'foodpanda' | 'offer' | 'voucher';
 
 /**
  * The foodpanda deal's terms, frozen onto the order's discount row

@@ -93,6 +93,7 @@ const api: RendererApi = {
     removeItem: (req) => invoke('orders:removeItem', req),
     updateItemOptions: (req) => invoke('orders:updateItemOptions', req),
     applyDiscount: (req) => invoke('orders:applyDiscount', req),
+    applyVoucher: (req) => invoke('orders:applyVoucher', req),
     clearDiscount: (req) => invoke('orders:clearDiscount', req),
     previewEdit: (req) => invoke('orders:previewEdit', req),
     saveEdit: (req) => invoke('orders:saveEdit', req),
@@ -174,6 +175,14 @@ const api: RendererApi = {
     create: (req) => invoke('riders:create', req),
     update: (req) => invoke('riders:update', req),
     deactivate: (req) => invoke('riders:deactivate', req),
+  },
+  vouchers: {
+    listBatches: () => invoke('vouchers:listBatches', undefined),
+    getBatch: (req) => invoke('vouchers:getBatch', req),
+    addBatch: (req) => invoke('vouchers:addBatch', req),
+    updateBatch: (req) => invoke('vouchers:updateBatch', req),
+    removeBatch: (req) => invoke('vouchers:removeBatch', req),
+    check: (req) => invoke('vouchers:check', req),
   },
   shifts: {
     current: () => invoke('shifts:current', undefined),

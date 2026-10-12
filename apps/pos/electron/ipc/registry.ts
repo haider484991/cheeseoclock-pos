@@ -23,6 +23,7 @@ import { registerCustomersHandlers } from './handlers/customers-handlers.js';
 import { registerBackupHandlers } from './handlers/backup-handlers.js';
 import { registerSyncHandlers } from './handlers/sync-handlers.js';
 import { registerRidersHandlers } from './handlers/riders-handlers.js';
+import { registerVouchersHandlers } from './handlers/vouchers-handlers.js';
 import { registerShiftsHandlers } from './handlers/shifts-handlers.js';
 import { registerWebBridgeHandlers } from './handlers/web-bridge-handlers.js';
 import { registerAuditHandlers } from './handlers/audit-handlers.js';
@@ -164,6 +165,7 @@ export function registerAllIpcHandlers(ctx: HandlerContext): void {
   registerSyncHandlers(ctx);
   registerBackupHandlers(ctx);
   registerRidersHandlers(ctx);
+  registerVouchersHandlers(ctx);
   registerShiftsHandlers(ctx);
   registerWebBridgeHandlers(ctx);
   registerAuditHandlers(ctx);

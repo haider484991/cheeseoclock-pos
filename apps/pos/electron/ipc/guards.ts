@@ -101,6 +101,7 @@ export const REFUSED = {
   settings: 'Only the owner can change the shop’s settings.',
   stockTakes: 'Only a manager or the owner can do a stock take or see what went missing.',
   profit: 'Only the owner can see profit.',
+  vouchers: 'Only a manager or the owner can see or add vouchers.',
   // The shift report printed again (shifts:printReport, v0.7.35).
   /** A cashier's login, with no manager's PIN or password typed. */
   shiftReportPin: "A manager's PIN or password is needed to print the shift report",

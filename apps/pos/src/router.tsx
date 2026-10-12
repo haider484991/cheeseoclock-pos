@@ -13,6 +13,7 @@ import { UsersPage } from './features/users/UsersPage';
 import { OrdersBoardPage } from './features/orders/OrdersBoardPage';
 import { OrderHistoryPage } from './features/orders/OrderHistoryPage';
 import { RidersPage } from './features/riders/RidersPage';
+import { VouchersPage } from './features/vouchers/VouchersPage';
 import { RecentOrdersPage } from './features/orders/RecentOrdersPage';
 import { useSessionStore } from './stores/sessionStore';
 import { canOpenPage, homeFor, type GatedPage } from './features/shell/navAccess';
@@ -63,6 +64,7 @@ export const router: ReturnType<typeof createHashRouter> = createHashRouter([
       gated('/costing', <CostingPage />),
       gated('/reports', <ReportsPage />),
       gated('/customers', <CustomersPage />),
+      gated('/vouchers', <VouchersPage />),
       gated('/users', <UsersPage />),
       gated('/settings', <SettingsPage />),
     ],

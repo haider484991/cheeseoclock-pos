@@ -12,6 +12,15 @@ import type { LicenceStatus } from './licence.js';
 import type { DashLoginMade, DashLoginView, DashPushStatus, DashRole } from './dashboard.js';
 import type { MethodRatesBps } from './tax-by-method.js';
 import type { RecipeLinkInput, RecipeLinkView } from './recipe-links.js';
+import type {
+  AddVoucherBatchRequest,
+  ApplyVoucherRequest,
+  CheckVoucherRequest,
+  UpdateVoucherBatchRequest,
+  VoucherBatchDetail,
+  VoucherBatchSummary,
+  VoucherCheck,
+} from './vouchers.js';
 import type { DeliveryChargeTaxSaved, DeliveryChargeTaxView, SaveDeliveryChargeTaxRequest } from './delivery-charge-tax.js';
 import type { AuthenticatedUser, User, Role } from './auth.js';
 import type {
@@ -732,6 +741,18 @@ export interface IpcContract {
     request: OrderEditSaveInput;
     response: ApiResult<OrderEditSaved>;
   };
+  /**
+   * A client's voucher on the order being rung up (v0.7.48): its number and
+   * code as printed, checked again here (never used, not ended), and the
+   * line it is for — one of that line's items comes off, up to what the
+   * voucher covers. Replaces any other discount (one per order); refused on
+   * a foodpanda or website order. No PIN: the code is the proof. Taken off
+   * with orders:clearDiscount, which frees it again.
+   */
+  'orders:applyVoucher': {
+    request: ApplyVoucherRequest;
+    response: ApiResult<OrderSnapshot>;
+  };
   'orders:clearDiscount': {
     /**
      * Taking the shop's foodpanda deal off an order needs a manager's PIN or
@@ -1283,6 +1304,37 @@ export interface IpcContract {
   'webBridge:diagnose': {
     request: undefined;
     response: ApiResult<Record<string, unknown>>;
+  };
+
+  // Vouchers (v0.7.48) — the Vouchers page needs vouchers.manage; vouchers:check is the till's (order.create).
+  'vouchers:listBatches': {
+    request: undefined;
+    response: ApiResult<VoucherBatchSummary[]>;
+  };
+  /** One batch and every voucher in it, with where each stands. */
+  'vouchers:getBatch': {
+    request: { id: string };
+    response: ApiResult<VoucherBatchDetail>;
+  };
+  /** Add a client's vouchers: a list as printed, or the till makes the codes. Codes are unique among the live vouchers. */
+  'vouchers:addBatch': {
+    request: AddVoucherBatchRequest;
+    response: ApiResult<VoucherBatchSummary>;
+  };
+  /** Change a batch's words, what it covers and its last day (orders it is already on keep their own terms). */
+  'vouchers:updateBatch': {
+    request: UpdateVoucherBatchRequest;
+    response: ApiResult<VoucherBatchSummary>;
+  };
+  /** Delete a batch added by mistake — only while none of its vouchers is on an order. */
+  'vouchers:removeBatch': {
+    request: { id: string };
+    response: ApiResult<{ id: string }>;
+  };
+  /** The till: what a typed number and code are — usable, or why not (used on which order, ended…). */
+  'vouchers:check': {
+    request: CheckVoucherRequest;
+    response: ApiResult<VoucherCheck>;
   };
 
   // Riders / delivery staff

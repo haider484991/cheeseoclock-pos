@@ -451,6 +451,8 @@ describe('shiftReportDiscountKind (what the till reads from the latest discount 
   it('foodpanda and offer as the row says; no source is the website’s on a website order and the staff’s on a counter order', () => {
     expect(shiftReportDiscountKind(40_000, 'foodpanda', 'pos')).toBe('foodpanda');
     expect(shiftReportDiscountKind(10_000, 'offer', 'pos')).toBe('offer');
+    // A client's voucher (v0.7.48): its own kind, never the staff's.
+    expect(shiftReportDiscountKind(189_900, 'voucher', 'pos')).toBe('voucher');
     expect(shiftReportDiscountKind(10_000, null, 'web')).toBe('website');
     expect(shiftReportDiscountKind(10_000, null, 'pos')).toBe('staff');
     expect(shiftReportDiscountKind(10_000, undefined, 'pos')).toBe('staff');

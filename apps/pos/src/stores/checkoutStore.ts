@@ -178,6 +178,11 @@ interface CheckoutState {
   /** `discountId`: one offer of several on the order (0.7.44) — taken off, or put back. */
   clearDiscount: (approverPin?: string, discountId?: string) => Promise<void>;
   /**
+   * A client's voucher (v0.7.48): its number and code as printed, off one
+   * of `lineId`'s items. Only on the order being rung up (never in an edit).
+   */
+  applyVoucher: (number: number, code: string, lineId: string) => Promise<void>;
+  /**
    * Before Pay opens: the customer typed in is saved on the order, so the
    * bill Pay shows is final — an automatic offer that needs the customer's
    * phone goes on NOW, not inside the payment (which would then no longer
@@ -650,6 +655,16 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
           ...(approverPin ? { approverPin } : {}),
           ...(opts.free ? { free: true } : {}),
         });
+        set({ snapshot: next });
+      });
+    },
+
+    applyVoucher(number, code, lineId) {
+      return run(async () => {
+        notWhileEditing();
+        const snap = get().snapshot;
+        if (!snap) return;
+        const next = await ipc.orders.applyVoucher({ orderId: snap.order.id, number, code, lineId });
         set({ snapshot: next });
       });
     },

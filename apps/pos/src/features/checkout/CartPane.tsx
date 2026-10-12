@@ -12,6 +12,7 @@ import {
   ArrowRight,
   ArrowLeft,
   RotateCcw,
+  Ticket,
 } from 'lucide-react';
 import { cn } from '@cheeseoclock/ui';
 import { useTenderGate } from './useTenderGate';
@@ -22,7 +23,15 @@ import { foodpandaDealLine } from './foodpandaDealLine';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { billsByMethod, isDeliveryChargeName, isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { waysWords } from './billByWay';
-import { cartDiscountDetail, cartOfferDetail, FREE_ORDER_LABEL, offerOnOrder, offerRowAction, severalOffersOn } from './discountWords';
+import {
+  cartDiscountDetail,
+  cartOfferDetail,
+  FREE_ORDER_LABEL,
+  offerOnOrder,
+  offerRowAction,
+  severalOffersOn,
+  voucherOnOrder,
+} from './discountWords';
 import { useCheckoutRules } from '../settings/shop-rules/useShopSetting';
 
 interface Props {
@@ -31,6 +40,8 @@ interface Props {
   onBack: () => void;
   onPay: () => void;
   onDiscount: () => void;
+  /** "Use a voucher": a client's voucher, its number and code typed (v0.7.48). None: no such link. */
+  onVoucher?: () => void;
   /** The × on the owner's foodpanda deal line: the Discount dialog, asking for a manager's PIN to take it off. */
   onRemoveDeal: () => void;
   onSendToKitchen: () => void;
@@ -71,7 +82,7 @@ export function offerHeldBackToast(held: { orderNumber: string; paid: boolean })
 }
 
 /** The ticket contains items, totals and checkout actions. */
-export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemoveDeal, onSendToKitchen, onCustomize }: Props) {
+export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onVoucher, onRemoveDeal, onSendToKitchen, onCustomize }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const busy = useCheckoutStore((s) => s.busy);
   const mode = useCheckoutStore((s) => s.mode);
@@ -101,6 +112,10 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
   const dealLine = discount?.source === 'foodpanda' ? foodpandaDealLine(discount, subtotalCents) : null;
   // One of the owner's automatic offers (Settings → Money & discounts): put on by the till itself.
   const offerOn = offerOnOrder(discount);
+  // A client's voucher (v0.7.48): its own line, its × frees it again.
+  const voucherOn = voucherOnOrder(discount);
+  // "Use a voucher": on a counter order being rung up, never a foodpanda one, once there is food on it.
+  const voucherCan = !!onVoucher && !voucherOn && order?.status === 'open' && order.source === 'pos' && order.mode !== 'foodpanda';
   // Several offers on one order (0.7.44: an offer on some categories beside the whole-menu one): one line each.
   const several = severalOffersOn(snapshot?.discounts ?? []);
   const rules = useCheckoutRules();
@@ -197,10 +212,11 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
       return;
     }
     // An automatic offer: the × takes it off this order (it stays off); on one
-    // taken off, the same button puts it back. Neither needs a PIN.
+    // taken off, the same button puts it back. Neither needs a PIN. A voucher:
+    // off this order, free to use again.
     clearDiscount().catch((e: unknown) => {
       toast({
-        title: offerOn?.declined ? 'Could not put the offer back' : 'Could not remove the discount',
+        title: voucherOn ? 'Could not take the voucher off' : offerOn?.declined ? 'Could not put the offer back' : 'Could not remove the discount',
         description: e instanceof Error ? e.message : 'Unknown error',
         variant: 'error',
       });
@@ -336,7 +352,20 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
           </div>
           {/* The owner's foodpanda deal shows even when it takes nothing off the shop's bill
               (foodpanda pays all of it, or the order is under its minimum). */}
-          {several ? (
+          {voucherOn ? (
+            <div className="is-discount">
+              <dt>
+                <span className="ticket-link" style={{ color: 'inherit' }} title={voucherOn.gives ?? undefined}>
+                  <Ticket className="h-3 w-3" aria-hidden="true" />
+                  {voucherOn.name}
+                </span>
+                <button type="button" onClick={removeDiscount} aria-label="Take the voucher off" title="Take the voucher off">
+                  <X className="h-3 w-3" />
+                </button>
+              </dt>
+              <dd>{`−${formatCents(discountCents, { showSymbol: false })}`}</dd>
+            </div>
+          ) : several ? (
             several.map((d) => (
               <div key={d.id} className="is-discount">
                 <dt>
@@ -421,6 +450,23 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
                   <Percent className="h-3 w-3" aria-hidden="true" />
                   {/* Said on the button itself: a tooltip never shows on a touch till. */}
                   {onlyValueDeals ? 'No discount on value deals' : 'Add discount'}
+                </button>
+              </dt>
+              <dd />
+            </div>
+          )}
+          {voucherCan && (
+            <div>
+              <dt>
+                <button
+                  type="button"
+                  className="ticket-link"
+                  disabled={items.length === 0 || onlyValueDeals}
+                  onClick={onVoucher}
+                  title="A client's voucher: type its number and code"
+                >
+                  <Ticket className="h-3 w-3" aria-hidden="true" />
+                  Use a voucher
                 </button>
               </dt>
               <dd />

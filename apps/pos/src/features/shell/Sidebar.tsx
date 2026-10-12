@@ -18,6 +18,7 @@ import {
   History,
   Receipt,
   Coins,
+  Ticket,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { StoreLogo, useImageAspect } from '../settings/StoreLogo';
@@ -53,6 +54,7 @@ const ITEMS: NavItem[] = [
   navItem('/inventory', Boxes),
   navItem('/costing', Coins),
   navItem('/customers', Contact),
+  navItem('/vouchers', Ticket),
   navItem('/reports', BarChart3),
   navItem('/users', Users),
   navItem('/settings', Settings),

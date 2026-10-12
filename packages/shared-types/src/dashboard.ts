@@ -275,7 +275,7 @@ export interface DashDiscount {
   value: number;
   amountCents: number;
   reason: string | null;
-  /** null = staff (or the website's pick-up / delivery %), else 'foodpanda' | 'offer'. */
+  /** null = staff (or the website's pick-up / delivery %), else 'foodpanda' | 'offer' | 'voucher' (a client's voucher, v0.7.48). */
   source: string | null;
   by: string | null;
   approvedBy: string | null;

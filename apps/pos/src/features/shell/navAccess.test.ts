@@ -7,7 +7,7 @@ const ALL_PAGES = Object.keys(PAGE_ACCESS) as GatedPage[];
 describe('who opens which page', () => {
   it('a cashier: Checkout, Live Orders, Recent Orders and Riders — nothing else', () => {
     expect(navPagesFor('cashier')).toEqual(['/checkout', '/orders', '/orders/recent', '/riders']);
-    for (const p of ['/customers', '/orders/history', '/reports', '/menu', '/inventory', '/costing', '/users', '/settings'] as const) {
+    for (const p of ['/customers', '/vouchers', '/orders/history', '/reports', '/menu', '/inventory', '/costing', '/users', '/settings'] as const) {
       expect(canOpenPage('cashier', p)).toBe(false);
     }
   });
@@ -24,7 +24,7 @@ describe('who opens which page', () => {
 
   it('a manager: everything but Users, Reports and Settings, with Order History instead of Recent Orders', () => {
     const pages = navPagesFor('manager');
-    expect(pages).toEqual(['/checkout', '/orders', '/orders/history', '/riders', '/menu', '/inventory', '/costing', '/customers']);
+    expect(pages).toEqual(['/checkout', '/orders', '/orders/history', '/riders', '/menu', '/inventory', '/costing', '/customers', '/vouchers']);
     expect(pages).not.toContain('/orders/recent');
     // Reports and Settings are the owner's (owner, 2026-09-27: "managers can't see the reports and settings").
     for (const p of ['/users', '/reports', '/settings'] as const) {

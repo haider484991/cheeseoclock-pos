@@ -23,7 +23,7 @@ import {
  */
 
 type Discount = Pick<OrderDiscount, 'discountType' | 'value' | 'reason'> &
-  Partial<Pick<OrderDiscount, 'source' | 'alsoOffDeliveryCharge' | 'skipsNoDiscountLines' | 'offer' | 'freeOrder' | 'lineIds'>>;
+  Partial<Pick<OrderDiscount, 'source' | 'alsoOffDeliveryCharge' | 'skipsNoDiscountLines' | 'offer' | 'freeOrder' | 'lineIds' | 'voucher'>>;
 type Line = { readonly menuItemName?: string | null; readonly noDiscount?: boolean };
 
 /** A Free order's name on every screen (v0.7.36: 100% off everything, with a manager's PIN), as the bill prints it. */
@@ -62,6 +62,8 @@ export function payDiscountLabel(
   discountCents: number,
 ): string {
   if (d?.freeOrder === true) return d.reason ? `${FREE_ORDER_LABEL} (${d.reason})` : FREE_ORDER_LABEL;
+  // A client's voucher, by its name: "Voucher No. 001 · abhi".
+  if (d?.source === 'voucher' && d.reason) return d.reason;
   const label = dealLabel ?? 'Discount';
   const tags = discountLeftAloneTags(d, items);
   return discountCents > 0 && tags.length > 0 ? `${label} (${tags.join(', ')})` : label;
@@ -96,12 +98,24 @@ export function drawerDiscountLabel(
  */
 export function receiptDiscountLabel(d: Discount, items: ReadonlyArray<Line>): string {
   if (d.freeOrder === true) return d.reason ? `${FREE_ORDER_LABEL} (${d.reason})` : FREE_ORDER_LABEL;
+  // A client's voucher (v0.7.48): its name alone, as the printed bill says it.
+  if (d.source === 'voucher' && d.reason) return d.reason;
   // An offer on some categories (0.7.44): its name alone, as the printed bill says it.
   if (d.source === 'offer' && d.reason && (d.offer?.categoryIds?.length ?? 0) > 0) return d.reason;
   const tags = discountLeftAloneTags(d, items).join(', ');
   if (d.source === 'offer' && d.reason) return tags ? `${d.reason} (${tags})` : d.reason;
   const what = d.reason ?? amountWords(d);
   return tags ? `Discount (${what}, ${tags})` : `Discount (${what})`;
+}
+
+/**
+ * A client's voucher on the order (v0.7.48), for the cart: its name as the
+ * bill prints it ("Voucher No. 001 · abhi") and what it is for. Null when
+ * the order's discount is not a voucher.
+ */
+export function voucherOnOrder(d: Discount | null | undefined): { name: string; gives: string | null } | null {
+  if (!d || d.source !== 'voucher') return null;
+  return { name: d.reason ?? 'Voucher', gives: d.voucher?.gives ?? null };
 }
 
 /**

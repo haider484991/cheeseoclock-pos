@@ -320,11 +320,14 @@ export interface ReportDiscountLine {
   /**
    * Where it came from: 'foodpanda' = the shop's standing foodpanda deal (put
    * on automatically, not given by the cashier); 'offer' = one of the owner's
-   * automatic offers (its name is `reason`); null = typed by staff.
+   * automatic offers (its name is `reason`); 'voucher' = a client's voucher
+   * (v0.7.48: bought ahead, its number and code typed); null = typed by staff.
    */
   source?: DiscountSource | null;
   /** An automatic offer's id, as frozen on the order (the Standing offers group by it). */
   offerId?: string | null;
+  /** A client's voucher (source 'voucher', v0.7.48): who the vouchers are for, as frozen on the order (Standing offers group by it). */
+  voucherBatch?: string | null;
 }
 
 export interface ReportDiscounts {

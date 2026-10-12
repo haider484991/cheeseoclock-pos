@@ -180,6 +180,7 @@ const DISCOUNT_LABEL: Record<ShiftReportDiscountKind, string> = {
   staff: 'Staff discounts',
   website: 'Pick-up discount',
   offer: 'Automatic offers',
+  voucher: 'Vouchers',
 };
 
 /** The paper being printed: the builder, its width and how ITEMS SOLD prints. */

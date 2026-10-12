@@ -43,9 +43,10 @@ export const SHIFT_REPORT_VERSION = 1;
 /**
  * What kind of discount an order had, in the paper's order: the foodpanda
  * deal, a staff discount (a button, a preset or a typed amount), the
- * website's pick-up discount, an automatic offer.
+ * website's pick-up discount, an automatic offer, a client's voucher
+ * (v0.7.48: what a client bought ahead, never the staff's).
  */
-export type ShiftReportDiscountKind = 'foodpanda' | 'staff' | 'website' | 'offer';
+export type ShiftReportDiscountKind = 'foodpanda' | 'staff' | 'website' | 'offer' | 'voucher';
 
 /** The parts of the paper the owner can switch off (Settings → Printers → Shift report). */
 export type ShiftReportSection =

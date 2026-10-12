@@ -301,7 +301,7 @@ describe('migrations: numbered in order, one file per number', () => {
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
-  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), then 0048 (when an order was sent), then 0049 (outside riders), then 0050 (the note count at close), then 0051 (the shift report at close), then 0052 (the card rate), then 0053 (the dashboard’s change indexes), then 0054 (a tax rate for each way of paying), then 0055 (recipes linked to other items), by name', () => {
+  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), then 0048 (when an order was sent), then 0049 (outside riders), then 0050 (the note count at close), then 0051 (the shift report at close), then 0052 (the card rate), then 0053 (the dashboard’s change indexes), then 0054 (a tax rate for each way of paying), then 0055 (recipes linked to other items), then 0056 (vouchers), by name', () => {
     const numbers = files.map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? NaN));
     expect(numbers).toEqual(numbers.map((_, i) => i + 1));
     // 0040 / 0041 were released in v0.7.22: the drawer log and the test-order
@@ -324,6 +324,7 @@ describe('migrations: numbered in order, one file per number', () => {
       '0053_dashboard_change_indexes.sql',
       '0054_tax_by_payment_method.sql',
       '0055_recipe_links.sql',
+      '0056_vouchers.sql',
     ]);
   });
 
@@ -456,6 +457,28 @@ describe('migrations: numbered in order, one file per number', () => {
       .filter(Boolean);
     expect(statements).toHaveLength(11);
     for (const st of statements) expect(st).toMatch(/^CREATE INDEX IF NOT EXISTS idx_[a-z_]+_updated ON [a-z_]+\(updated_at\)$/);
+  });
+
+  it('0056 creates voucher_batches and vouchers (replicable, with the sync columns) with their indexes, and one nullable voucher_id on order_discounts with its index: no row written', () => {
+    const raw = readFileSync(join(MIGRATIONS_DIR, '0056_vouchers.sql'), 'utf8');
+    const statements = stripComments(raw)
+      .split(';')
+      .map((x) => x.replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+    expect(statements).toHaveLength(9);
+    expect(statements[0]).toMatch(/^CREATE TABLE IF NOT EXISTS voucher_batches \(/);
+    expect(statements[3]).toMatch(/^CREATE TABLE IF NOT EXISTS vouchers \(/);
+    // A plain nullable column: no default, no CHECK, no REFERENCES (the row may land before its voucher).
+    expect(statements[7]).toBe('ALTER TABLE order_discounts ADD COLUMN voucher_id TEXT');
+    for (const i of [1, 2, 4, 5, 6, 8]) expect(statements[i]).toMatch(/^CREATE (UNIQUE )?INDEX IF NOT EXISTS idx_[a-z_]+ ON (voucher_batches|vouchers|order_discounts)\(/);
+    expect(/\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bDROP\b/i.test(stripComments(raw))).toBe(false);
+    // No BEGIN anywhere, comments included: the migrator runs it in its own transaction (migrator.ts managesOwnTransaction).
+    expect(/\bBEGIN\b/i.test(raw)).toBe(false);
+    // Both replicate: the vouchers travel to the other till as row images, no sync-core change.
+    for (const t of ['voucher_batches', 'vouchers']) {
+      expect(PURE_LOCAL_TABLES.has(t)).toBe(false);
+      expect(REPLICABLE_TABLES).toContain(t);
+    }
   });
 
   it('0055 only creates recipe_links (replicable, with the sync columns) and its four indexes: no other table is touched, no row written', () => {

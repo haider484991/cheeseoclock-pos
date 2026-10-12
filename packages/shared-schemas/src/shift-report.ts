@@ -35,7 +35,7 @@ const salesSchema = z.object({
   delivery: ordersCentsSchema,
   discounts: list(
     z.object({
-      kind: z.enum(['foodpanda', 'staff', 'website', 'offer']),
+      kind: z.enum(['foodpanda', 'staff', 'website', 'offer', 'voucher']),
       orderCount: count,
       cents,
     }),
