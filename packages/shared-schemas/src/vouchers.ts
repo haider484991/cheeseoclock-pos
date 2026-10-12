@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   VOUCHER_BATCH_MAX,
+  VOUCHER_SIZES,
+  type VoucherFor,
   type AddVoucherBatchRequest,
   type ApplyVoucherRequest,
   type CheckVoucherRequest,
@@ -40,6 +42,18 @@ const voucherCode = z
   .transform((v) => v.toUpperCase().replace(/[\s\-–—_.]/g, ''))
   .pipe(z.string().regex(/^[A-Z0-9]{3,12}$/, { message: 'A code is 3 to 12 letters and numbers' }));
 
+/** What a batch's vouchers are for (v0.7.50): its categories (none = any food), its size (null = any), the whole item or up to the cover. */
+export const voucherForSchema = z
+  .object({
+    categoryIds: z
+      .array(z.string().min(1).max(64))
+      .max(50, { message: 'Pick at most 50 categories' })
+      .refine((ids) => new Set(ids).size === ids.length, { message: 'A category is picked twice' }),
+    size: z.enum(VOUCHER_SIZES).nullable(),
+    wholeItem: z.boolean(),
+  })
+  .strict();
+
 const batchFields = {
   name: oneLine(40, 'who the vouchers are for'),
   gives: oneLine(80, 'what a voucher gets'),
@@ -49,6 +63,7 @@ const batchFields = {
     .min(100, { message: 'A voucher covers at least Rs 1' })
     .max(10_000_000, { message: 'That is more than a voucher can cover' }),
   goodUntil: lastDay.nullable(),
+  for: voucherForSchema.nullish(),
 };
 
 /** vouchers:addBatch — a list as printed, or the till makes the codes. */
@@ -105,3 +120,4 @@ const _addShape: Same<z.infer<typeof addVoucherBatchInputSchema>, AddVoucherBatc
 const _updateShape: Same<z.infer<typeof updateVoucherBatchInputSchema>, UpdateVoucherBatchRequest> = true;
 const _checkShape: Same<z.infer<typeof checkVoucherInputSchema>, CheckVoucherRequest> = true;
 const _applyShape: Same<z.infer<typeof applyVoucherInputSchema>, ApplyVoucherRequest> = true;
+const _forShape: Same<z.infer<typeof voucherForSchema>, VoucherFor> = true;

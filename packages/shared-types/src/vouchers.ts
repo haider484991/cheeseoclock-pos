@@ -24,6 +24,24 @@ export const VOUCHER_CODE_LENGTH = 4;
 /** The most vouchers one batch holds. */
 export const VOUCHER_BATCH_MAX = 2000;
 
+/** The sizes the till reads from an item's name ("Fajita Pizza — Large"). */
+export const VOUCHER_SIZES = ['Medium', 'Large'] as const;
+export type VoucherSize = (typeof VOUCHER_SIZES)[number];
+
+/**
+ * What a batch's vouchers are for (migration 0057 voucher_batches.for_json,
+ * v0.7.50; Settings → Vouchers). The till lets a voucher come off only an
+ * item that fits.
+ */
+export interface VoucherFor {
+  /** The menu categories its item may be in; empty = any food. */
+  categoryIds: string[];
+  /** The size in the item's name; null = any size. */
+  size: VoucherSize | null;
+  /** true = one of the item at its menu price (its extras paid); false = up to the batch's coversCents. */
+  wholeItem: boolean;
+}
+
 /** One client's vouchers (voucher_batches). */
 export interface VoucherBatch {
   id: string;
@@ -35,6 +53,10 @@ export interface VoucherBatch {
   coversCents: number;
   /** The last trading day it can be used (YYYY-MM-DD); null = no end. */
   goodUntil: string | null;
+  /** What its vouchers are for (v0.7.50); null = any food item, up to coversCents (a batch added before). */
+  for: VoucherFor | null;
+  /** The names of `for.categoryIds` as the menu has them now (a category gone since: left out). */
+  forCategoryNames: string[];
   createdAt: string;
   /** Who added them (the user's name now); null when not known. */
   createdByName: string | null;
@@ -112,6 +134,8 @@ export type AddVoucherBatchRequest = {
   gives: string;
   coversCents: number;
   goodUntil: string | null;
+  /** What its vouchers are for (v0.7.50); absent / null = any food item, up to coversCents. */
+  for?: VoucherFor | null;
 } & (
   | { from: 'list'; vouchers: VoucherNumberAndCode[] }
   | { from: 'make'; count: number; firstNumber: number }
@@ -124,6 +148,8 @@ export interface UpdateVoucherBatchRequest {
   gives: string;
   coversCents: number;
   goodUntil: string | null;
+  /** What its vouchers are for (v0.7.50); absent / null = any food item, up to coversCents. */
+  for?: VoucherFor | null;
 }
 
 /** Why a voucher can't be used now. */
@@ -137,6 +163,12 @@ export type VoucherCheck =
       number: number;
       code: string;
       batch: VoucherBatch;
+      /**
+       * Asked with an order: the lines of it this voucher can come off (what
+       * it is for), each with what it would take off — the dearest first.
+       * Empty: nothing on the order it is for yet.
+       */
+      lines?: VoucherCheckLine[];
     }
   | {
       ok: false;
@@ -146,6 +178,12 @@ export type VoucherCheck =
       /** The order it is on, for used / on_order. */
       use?: VoucherUse;
     };
+
+/** An order line a checked voucher can come off, and what it would take off. */
+export interface VoucherCheckLine {
+  lineId: string;
+  amountCents: number;
+}
 
 /**
  * A voucher's terms as they were when it went on an order, FROZEN on its
@@ -161,6 +199,8 @@ export interface VoucherTerms {
   batchName: string;
   gives: string;
   coversCents: number;
+  /** What it was for, frozen (v0.7.50); absent = any food item, up to coversCents. */
+  for?: VoucherFor;
   /**
    * The order line (order_items id) it is for. The line taken off: the
    * dearest line it can still come off takes it (the customer swapped the

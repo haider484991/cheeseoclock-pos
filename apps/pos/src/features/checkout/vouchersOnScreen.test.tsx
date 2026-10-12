@@ -13,7 +13,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
-import type { AuthenticatedUser, CheckoutRules, OrderSnapshot, UUID } from '@cheeseoclock/shared-types';
+import type { AuthenticatedUser, Category, CheckoutRules, OrderSnapshot, UUID, VoucherBatchSummary, VoucherCheck, VoucherCheckLine } from '@cheeseoclock/shared-types';
 import { ToastProvider } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useCheckoutStore } from '../../stores/checkoutStore';
@@ -22,8 +22,10 @@ import { CartPane } from './CartPane';
 import { TenderDialog } from './TenderDialog';
 import { ReceiptDialog } from './ReceiptDialog';
 import { OrderDetailDrawer } from '../orders/OrderDetailDrawer';
-import { VoucherDialog, voucherLinesOfSnapshot } from './VoucherDialog';
+import { VoucherDialog, voucherChoices, voucherLinesOfSnapshot } from './VoucherDialog';
 import { VoucherBatchDialog } from '../vouchers/VoucherBatchDialog';
+import { VoucherSettings } from '../settings/VoucherSettings';
+import { SettingsPage } from '../settings/SettingsPage';
 
 /** The props the last dialog rendered gave Radix's Content: the handlers Radix would call (on open, on a key). */
 const radix = vi.hoisted(() => ({ content: null as Record<string, unknown> | null }));
@@ -256,5 +258,102 @@ describe('Add vouchers (the owner)', () => {
     expect(words).toContain('Choose a CSV file');
     expect(words).toContain('Number and code on each line (001,AB3C). Or paste the list below.');
     expect(markup).toMatch(/<input[^>]*type="file"[^>]*accept="\.csv,\.txt,text\/csv,text\/plain"/);
+  });
+});
+
+/** The menu's categories as Settings reads them (every name made up but the regular pizza one's). */
+const CATEGORIES = [
+  { id: 'c1', name: 'Pizza', displayOrder: 1, isActive: true },
+  { id: 'c2', name: 'Test Signature Pizzas', displayOrder: 2, isActive: true },
+  { id: 'c3', name: 'Test Drinks', displayOrder: 3, isActive: true },
+  { id: 'c4', name: 'Test Old Menu', displayOrder: 4, isActive: false },
+] as unknown as Category[];
+const CATS_SEED: Array<[readonly unknown[], unknown]> = [...RULES_SEED, [['menu', 'categories', 'all'], CATEGORIES]];
+
+/** The radios of a group that are chosen, and the toggles pressed: their labels. */
+const chosenIn = (markup: string, group: string) => {
+  const at = markup.indexOf(`aria-label="${group}"`);
+  expect(at).toBeGreaterThan(-1);
+  return markup
+    .slice(at, markup.indexOf('</div>', at))
+    .split('<button')
+    .slice(1)
+    .filter((b) => b.includes('aria-checked="true"') || b.includes('aria-pressed="true"'))
+    .map((b) => text(`<x ${b}`));
+};
+
+const ABHI: VoucherBatchSummary = {
+  id: 'b1',
+  name: 'abhi',
+  gives: 'One Large pizza from the Regular menu',
+  coversCents: 100,
+  goodUntil: null,
+  for: { categoryIds: ['c1'], size: 'Large', wholeItem: true },
+  forCategoryNames: ['Pizza'],
+  createdAt: '2026-10-12T09:00:00.000Z',
+  createdByName: 'Test Owner',
+  count: 100,
+  used: 3,
+  onOrder: 0,
+  notUsed: 97,
+  firstNumber: 1,
+  lastNumber: 100,
+};
+
+describe('what a voucher is for (v0.7.50, Settings → Vouchers)', () => {
+  it('new vouchers start as one Large regular pizza, the whole item: no amount to type', () => {
+    signIn('admin');
+    const markup = render(<VoucherBatchDialog onClose={noop} onSaved={noop} />, CATS_SEED);
+    const words = text(markup);
+    expect(words).toContain('What it is for The till lets a voucher come off only such an item.');
+    expect(chosenIn(markup, 'Size')).toEqual(['Large']);
+    expect(chosenIn(markup, 'Menu categories')).toEqual(['Pizza']);
+    expect(chosenIn(markup, 'Takes off')).toEqual(['The whole item']);
+    expect(words).toContain('For: Large · Pizza · the whole item');
+    expect(words).toContain('One of the item at its menu price. Extras are paid.');
+    expect(words).not.toContain('Covers up to (Rs)');
+    // A category taken off the menu is not offered.
+    expect(words).not.toContain('Test Old Menu');
+  });
+
+  it('a batch added before says any food, up to its amount, until the owner changes it', () => {
+    signIn('admin');
+    const before = { ...ABHI, coversCents: 189_900, for: null, forCategoryNames: [] };
+    const markup = render(<VoucherBatchDialog batch={before} onClose={noop} onSaved={noop} />, CATS_SEED);
+    expect(chosenIn(markup, 'Size')).toEqual(['Any size']);
+    expect(chosenIn(markup, 'Menu categories')).toEqual([]);
+    expect(chosenIn(markup, 'Takes off')).toEqual(['Up to an amount']);
+    expect(text(markup)).toContain('For: Any food · up to Rs 1,899');
+    expect(markup).toMatch(/value="1899"/);
+  });
+
+  it('Settings → Vouchers lists each company’s vouchers and what they are for, to add, change or delete', () => {
+    signIn('admin');
+    const fresh = { ...ABHI, id: 'b2', name: 'Test Company', used: 0, notUsed: 100, for: null, forCategoryNames: [], coversCents: 70_000 };
+    const markup = render(<VoucherSettings />, [[['vouchers', 'batches'], [ABHI, fresh]]]);
+    const words = text(markup);
+    expect(words).toContain('Company vouchers');
+    expect(words).toContain('Add company vouchers');
+    expect(words).toContain('abhi No. 001–100 One Large pizza from the Regular menu For: Large · Pizza · the whole item · no end date 3 of 100 used · 97 not used');
+    expect(words).toContain('Test Company No. 001–100 One Large pizza from the Regular menu For: Any food · up to Rs 700 · no end date');
+    // Delete only while none is used: one button, the unused company's.
+    expect(words.match(/Delete/g)).toHaveLength(1);
+    expect(words.match(/Change/g)).toHaveLength(2);
+    expect(markup).toContain('href="/vouchers"');
+    // The tab is the owner's, beside Money & discounts.
+    expect(text(render(<SettingsPage />, RULES_SEED))).toContain('Money & discounts Vouchers Delivery areas & fees');
+  });
+
+  it('the voucher box offers only the items the till says it is for, the dearest first', () => {
+    const lines = voucherLinesOfSnapshot(order());
+    const ok = (extra: { lines?: VoucherCheckLine[] } = {}): VoucherCheck => ({ ok: true, voucherId: 'v1', number: 1, code: 'AB3C', batch: ABHI, ...extra });
+    // For a Large pizza: the pizza only, never the drink.
+    expect(voucherChoices(ok({ lines: [{ lineId: 'l1', amountCents: 189_900 }] }), lines).map((c) => [c.line.id, c.amountCents])).toEqual([['l1', 189_900]]);
+    // Nothing on the order it is for: nothing to pick.
+    expect(voucherChoices(ok({ lines: [] }), lines)).toEqual([]);
+    // Asked without an order: every food line, by what it takes off.
+    expect(voucherChoices(ok(), lines).map((c) => c.line.id)).toEqual(['l1', 'l2']);
+    expect(voucherChoices({ ok: false, problem: 'used', message: 'Used' }, lines)).toEqual([]);
+    expect(voucherChoices(null, lines)).toEqual([]);
   });
 });

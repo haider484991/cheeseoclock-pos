@@ -34,6 +34,7 @@ import type {
   VoucherBatchDetail,
   VoucherBatchSummary,
   VoucherCheck,
+  VoucherFor,
 } from '@cheeseoclock/shared-types';
 import { verifyAuditChain, type AuditChainRow } from '../../db/audit-chain.js';
 
@@ -161,7 +162,7 @@ const OWNER = session('u_admin', 'admin');
 
 type Db = ReturnType<typeof openMigrated>;
 let db: Db;
-let menu: { large: string; premium: string; coke: string; bigTwo: string; pizzas: string };
+let menu: { large: string; premium: string; medium: string; signature: string; coke: string; bigTwo: string; pizzas: string; signatures: string };
 
 type Outcome = { ok: true; data: unknown } | { ok: false; code: string; message: string };
 
@@ -209,14 +210,18 @@ async function seedTill(d: Db): Promise<typeof menu> {
   const drinks = createCategory(x, { name: 'Drinks', displayOrder: 2, colorHex: '#0055aa' }, mgr);
   // Never discounted by its name (0047): its lines are value deals.
   const deals = createCategory(x, { name: 'Value Deals', displayOrder: 3, colorHex: '#00aa55' }, mgr);
+  const signatures = createCategory(x, { name: 'Signature Pizzas', displayOrder: 4, colorHex: '#aa0055' }, mgr);
   const item = (categoryId: string, name: string, cents: number) =>
     createMenuItem(x, { categoryId, name, basePriceCents: cents, taxCategoryId: tax.id }, mgr).id;
   return {
     large: item(pizzas.id, 'Test Fajita Pizza — Large', 189_900),
     premium: item(pizzas.id, 'Test Royal Pizza — Large', 249_900),
+    medium: item(pizzas.id, 'Test Fajita Pizza — Medium', 149_900),
+    signature: item(signatures.id, 'Test Shawarma Pizza — Large', 219_900),
     coke: item(drinks.id, 'Test Cola', 15_000),
     bigTwo: item(deals.id, 'Test Big Two', 399_900),
     pizzas: pizzas.id,
+    signatures: signatures.id,
   };
 }
 
@@ -245,7 +250,7 @@ const LIST = [
 ];
 
 /** The owner adds the abhi vouchers (three of them, as printed). */
-async function addAbhi(extra: Partial<typeof ABHI> = {}): Promise<VoucherBatchSummary> {
+async function addAbhi(extra: Partial<typeof ABHI> & { for?: VoucherFor | null } = {}): Promise<VoucherBatchSummary> {
   h.session = OWNER;
   return data<VoucherBatchSummary>('vouchers:addBatch', { ...ABHI, ...extra, from: 'list', vouchers: LIST });
 }
@@ -598,6 +603,87 @@ describe.skipIf(!Sqlite)('Vouchers at the till', () => {
     expect(await data<VoucherBatchSummary[]>('vouchers:listBatches')).toEqual([]);
     h.session = CASHIER;
     expect(await data<VoucherCheck>('vouchers:check', { number: 1, code: 'AB3C' })).toMatchObject({ ok: false, problem: 'not_found' });
+  });
+});
+
+describe.skipIf(!Sqlite)('What a voucher is for (Settings → Vouchers, v0.7.50)', () => {
+  const LARGE_REGULAR = () => ({ categoryIds: [menu.pizzas], size: 'Large' as const, wholeItem: true });
+
+  it('a Large regular pizza voucher comes off a Large regular pizza only — the whole of it, a dearer one too', async () => {
+    await addAbhi({ for: LARGE_REGULAR(), gives: 'One Large pizza from the Regular menu' });
+    const s = await takeaway(menu.medium, menu.signature, menu.coke, menu.premium);
+    for (const wrong of [menu.medium, menu.signature, menu.coke]) {
+      expect(await useVoucher(s, wrong)).toMatchObject({
+        ok: false,
+        message: 'Voucher No. 001 is for: One Large pizza from the Regular menu. Pick that item, or add it to the order first.',
+      });
+    }
+    // The whole Large at its menu price, though it is dearer than the Rs 1,899 the batch says it covers.
+    const r = await useVoucher(s, menu.premium);
+    expect(r.ok && (r.data as OrderSnapshot).order.discountCents).toBe(249_900);
+    expect(r.ok && (r.data as OrderSnapshot).discounts[0]?.voucher).toMatchObject({ lineId: lineOf(s, menu.premium) });
+  });
+
+  it('the till is told which lines a voucher can come off, the dearest first, with what each takes off', async () => {
+    await addAbhi({ for: LARGE_REGULAR() });
+    const s = await takeaway(menu.medium, menu.large, menu.coke, menu.premium);
+    h.session = CASHIER;
+    const check = await data<VoucherCheck>('vouchers:check', { number: 1, code: 'AB3C', orderId: s.order.id });
+    expect(check).toMatchObject({
+      ok: true,
+      batch: { for: LARGE_REGULAR(), forCategoryNames: ['Pizza'] },
+      lines: [
+        { lineId: lineOf(s, menu.premium), amountCents: 249_900 },
+        { lineId: lineOf(s, menu.large), amountCents: 189_900 },
+      ],
+    });
+  });
+
+  it('its pizza swapped for a Medium: it moves to the other Large if there is one, else comes off', async () => {
+    const batch = await addAbhi({ for: LARGE_REGULAR() });
+    const s = await takeaway(menu.large, menu.medium);
+    await useVoucher(s, menu.large);
+    h.session = CASHIER;
+    const off = await data<OrderSnapshot>('orders:removeItem', { orderId: s.order.id, orderItemId: lineOf(s, menu.large) });
+    expect(off.discounts).toEqual([]);
+    expect((await stateOf(batch.id, 1)).state).toBe('not_used');
+  });
+
+  it('changed in Settings: the next order follows it; an order it is already on keeps what it was for', async () => {
+    const batch = await addAbhi();
+    const s = await takeaway(menu.medium);
+    // No rule yet (a batch added before 0.7.50): any food, up to Rs 1,899.
+    expect((await useVoucher(s, menu.medium)).ok).toBe(true);
+    h.session = OWNER;
+    const changed = await data<VoucherBatchSummary>('vouchers:updateBatch', { id: batch.id, ...ABHI, for: LARGE_REGULAR() });
+    expect(changed).toMatchObject({ for: LARGE_REGULAR(), forCategoryNames: ['Pizza'] });
+    // The order it is on keeps it (frozen); another item added re-works it the old way.
+    h.session = CASHIER;
+    const more = await data<OrderSnapshot>('orders:addItem', { orderId: s.order.id, menuItemId: menu.coke, quantity: 1 });
+    expect(more.discounts[0]).toMatchObject({ source: 'voucher', amountCents: 149_900 });
+    // The next voucher of the batch: a Large regular pizza only.
+    const next = await takeaway(menu.medium);
+    expect(await useVoucher(next, menu.medium, 2, 'XK7P')).toMatchObject({ ok: false });
+    // Back to any food (no rule).
+    h.session = OWNER;
+    expect(await data<VoucherBatchSummary>('vouchers:updateBatch', { id: batch.id, ...ABHI, for: null })).toMatchObject({ for: null, forCategoryNames: [] });
+    expect((await useVoucher(next, menu.medium, 2, 'XK7P')).ok).toBe(true);
+  });
+
+  it('what it is for travels to the other till with the batch', async () => {
+    const batch = await addAbhi({ for: LARGE_REGULAR() });
+    const other = openMigrated();
+    addUsersAndTill(other, TILL_2);
+    // The same menu categories on both tills (they sync too): copy them across first, then the batch.
+    const sync = await import('../../db/repositories/sync-repo.js');
+    const remote = await import('../../db/repositories/apply-remote.js');
+    const pending = sync.listPendingSync(db as never, 10_000);
+    expect(await remote.applyRemoteBatch(other as never, pending.map((p) => sync.pendingToChange(p, DEV)), { pause: async () => {} })).toMatchObject({
+      waiting: 0,
+      dropped: 0,
+    });
+    const read = await import('../../db/vouchers-read.js');
+    expect(read.findVoucherBatch(other as never, batch.id)).toMatchObject({ for: LARGE_REGULAR(), forCategoryNames: ['Pizza'] });
   });
 });
 

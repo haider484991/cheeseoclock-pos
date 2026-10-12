@@ -153,7 +153,7 @@ live('migrations at boot (migrator.ts)', () => {
     const names = ran(db);
     expect(names).toEqual(migrationFiles());
     expect(names.map((n) => Number(n.slice(0, 4)))).toEqual(names.map((_, i) => i + 1));
-    expect(names.slice(-18)).toEqual([
+    expect(names.slice(-19)).toEqual([
       '0039_shift_close_notes.sql',
       '0040_foodpanda_deal_and_terms.sql',
       '0041_channel_terms_uplift_and_fee.sql',
@@ -172,6 +172,7 @@ live('migrations at boot (migrator.ts)', () => {
       '0054_tax_by_payment_method.sql',
       '0055_recipe_links.sql',
       '0056_vouchers.sql',
+      '0057_voucher_for.sql',
     ]);
     expect(h.snapshots).toEqual([]);
   });
@@ -212,6 +213,7 @@ live('migrations at boot (migrator.ts)', () => {
       '0054_tax_by_payment_method.sql',
       '0055_recipe_links.sql',
       '0056_vouchers.sql',
+      '0057_voucher_for.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
     // Their columns and the log's start are there…
@@ -234,7 +236,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 15);
+    expect(ran(db)).toHaveLength(had.length + 16);
     expect(h.snapshots).toHaveLength(1);
 
     // The new code on the upgraded till: foodpanda's figures read the kept terms…
@@ -295,6 +297,7 @@ live('migrations at boot (migrator.ts)', () => {
       '0054_tax_by_payment_method.sql',
       '0055_recipe_links.sql',
       '0056_vouchers.sql',
+      '0057_voucher_for.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
     // Every row as it was, with the two new columns at "on the website" (and 0047's, empty: by its name).
@@ -317,7 +320,7 @@ live('migrations at boot (migrator.ts)', () => {
     ]);
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 12);
+    expect(ran(db)).toHaveLength(had.length + 13);
     expect(h.snapshots).toHaveLength(1);
   });
 
@@ -377,6 +380,7 @@ live('migrations at boot (migrator.ts)', () => {
       '0054_tax_by_payment_method.sql',
       '0055_recipe_links.sql',
       '0056_vouchers.sql',
+      '0057_voucher_for.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
     const added =['web_created_at', 'web_total_cents', 'acked_at', 'alert_seen_at', 'site_cancelled_at', 'cancel_noted_at'];
@@ -404,7 +408,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 11);
+    expect(ran(db)).toHaveLength(had.length + 12);
     expect(h.snapshots).toHaveLength(1);
   });
 
@@ -471,6 +475,7 @@ live('migrations at boot (migrator.ts)', () => {
       '0054_tax_by_payment_method.sql',
       '0055_recipe_links.sql',
       '0056_vouchers.sql',
+      '0057_voucher_for.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
     // Every row as it was — the same version and updated_at — with the new column: empty on a category, 0 on a line
@@ -493,7 +498,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 10);
+    expect(ran(db)).toHaveLength(had.length + 11);
     expect(h.snapshots).toHaveLength(1);
   });
 
@@ -564,6 +569,7 @@ live('migrations at boot (migrator.ts)', () => {
       '0054_tax_by_payment_method.sql',
       '0055_recipe_links.sql',
       '0056_vouchers.sql',
+      '0057_voucher_for.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
     // The copy was taken first: the database as v0.7.33 left it, before 0047 ran, with no note count or report column.
@@ -624,7 +630,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 10);
+    expect(ran(db)).toHaveLength(had.length + 11);
     expect(h.snapshots).toHaveLength(1);
   });
 
@@ -655,7 +661,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     await runMigrations(db);
 
-    expect(ran(db)).toEqual([...had, '0048_order_sent_at.sql', '0049_outside_rider.sql', '0050_shift_counted_notes.sql', '0051_shift_close_report.sql', '0052_card_rate.sql', '0053_dashboard_change_indexes.sql', '0054_tax_by_payment_method.sql', '0055_recipe_links.sql', '0056_vouchers.sql']);
+    expect(ran(db)).toEqual([...had, '0048_order_sent_at.sql', '0049_outside_rider.sql', '0050_shift_counted_notes.sql', '0051_shift_close_report.sql', '0052_card_rate.sql', '0053_dashboard_change_indexes.sql', '0054_tax_by_payment_method.sql', '0055_recipe_links.sql', '0056_vouchers.sql', '0057_voucher_for.sql']);
     expect(h.snapshots).toHaveLength(1);
     // Every order as it was — the same version and updated_at — with sent_at empty (no backfill), and 0049's rider_keeps_cents.
     expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, sent_at: null, rider_keeps_cents: null, digital_total_cents: null, digital_net_cents: 0, digital_tax_cents: 0, method_totals_json: null })));
@@ -673,7 +679,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 9);
+    expect(ran(db)).toHaveLength(had.length + 10);
     expect(h.snapshots).toHaveLength(1);
   });
 
@@ -721,7 +727,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     await runMigrations(db);
 
-    expect(ran(db)).toEqual([...had, '0049_outside_rider.sql', '0050_shift_counted_notes.sql', '0051_shift_close_report.sql', '0052_card_rate.sql', '0053_dashboard_change_indexes.sql', '0054_tax_by_payment_method.sql', '0055_recipe_links.sql', '0056_vouchers.sql']);
+    expect(ran(db)).toEqual([...had, '0049_outside_rider.sql', '0050_shift_counted_notes.sql', '0051_shift_close_report.sql', '0052_card_rate.sql', '0053_dashboard_change_indexes.sql', '0054_tax_by_payment_method.sql', '0055_recipe_links.sql', '0056_vouchers.sql', '0057_voucher_for.sql']);
     expect(h.snapshots).toHaveLength(1);
     // Every row as it was — the same version and updated_at — with the new column empty (no backfill).
     expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders.map((r) => ({ ...r, rider_keeps_cents: null, digital_total_cents: null, digital_net_cents: 0, digital_tax_cents: 0, method_totals_json: null })));
@@ -742,7 +748,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 8);
+    expect(ran(db)).toHaveLength(had.length + 9);
     expect(h.snapshots).toHaveLength(1);
   });
 
@@ -783,7 +789,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     await runMigrations(db);
 
-    expect(ran(db)).toEqual([...had, '0050_shift_counted_notes.sql', '0051_shift_close_report.sql', '0052_card_rate.sql', '0053_dashboard_change_indexes.sql', '0054_tax_by_payment_method.sql', '0055_recipe_links.sql', '0056_vouchers.sql']);
+    expect(ran(db)).toEqual([...had, '0050_shift_counted_notes.sql', '0051_shift_close_report.sql', '0052_card_rate.sql', '0053_dashboard_change_indexes.sql', '0054_tax_by_payment_method.sql', '0055_recipe_links.sql', '0056_vouchers.sql', '0057_voucher_for.sql']);
     expect(h.snapshots).toHaveLength(1);
     // Every shift as it was — the same version and updated_at — with the new columns empty (no backfill), last, in that order.
     expect(all(`SELECT * FROM shifts ORDER BY id`)).toEqual(before.shifts.map((r) => ({ ...r, counted_notes_json: null, close_report_json: null })));
@@ -810,7 +816,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 7);
+    expect(ran(db)).toHaveLength(had.length + 8);
     expect(h.snapshots).toHaveLength(1);
   });
 
@@ -885,7 +891,7 @@ live('migrations at boot (migrator.ts)', () => {
     await runMigrations(db);
 
     // In order, after the pre-migrate copy — the database as v0.7.34 left it, before 0050 ran.
-    expect(ran(db)).toEqual([...had, '0050_shift_counted_notes.sql', '0051_shift_close_report.sql', '0052_card_rate.sql', '0053_dashboard_change_indexes.sql', '0054_tax_by_payment_method.sql', '0055_recipe_links.sql', '0056_vouchers.sql']);
+    expect(ran(db)).toEqual([...had, '0050_shift_counted_notes.sql', '0051_shift_close_report.sql', '0052_card_rate.sql', '0053_dashboard_change_indexes.sql', '0054_tax_by_payment_method.sql', '0055_recipe_links.sql', '0056_vouchers.sql', '0057_voucher_for.sql']);
     expect(h.snapshots).toHaveLength(1);
     expect(h.copied).toEqual([{ lastRan: '0049_outside_rider.sql', shiftColumns: Object.keys(before.shifts[0] ?? {}) }]);
     // Every row as it was, the shift with the two new columns empty; the audit trail and the link's queue untouched.
@@ -939,7 +945,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 7);
+    expect(ran(db)).toHaveLength(had.length + 8);
     expect(h.snapshots).toHaveLength(1);
   });
 });

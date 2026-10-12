@@ -13,8 +13,13 @@ import {
   voucherBillReason,
   voucherCanCover,
   voucherEnded,
+  voucherFits,
+  voucherForJson,
   voucherLineOf,
+  voucherLinesFor,
   voucherNumberText,
+  menuItemSize,
+  parseVoucherForJson,
   voucherRule,
   type VoucherLine,
 } from './vouchers.js';
@@ -204,13 +209,13 @@ describe('the line it comes off, and how much', () => {
   });
 
   it('takes one of the line\'s items off, up to what it covers', () => {
-    expect(voucherAmountCents(189_900, pizza)).toBe(189_900);
+    expect(voucherAmountCents({ coversCents: 189_900 }, pizza)).toBe(189_900);
     // Two pizzas on one line: one is free.
-    expect(voucherAmountCents(189_900, { ...pizza, quantity: 2, lineTotalCents: 379_800 })).toBe(189_900);
+    expect(voucherAmountCents({ coversCents: 189_900 }, { ...pizza, quantity: 2, lineTotalCents: 379_800 })).toBe(189_900);
     // Extra cheese on the pizza: the voucher covers the pizza, the cheese is paid.
-    expect(voucherAmountCents(189_900, { ...pizza, lineTotalCents: 214_900 })).toBe(189_900);
+    expect(voucherAmountCents({ coversCents: 189_900 }, { ...pizza, lineTotalCents: 214_900 })).toBe(189_900);
     // A cheaper pizza: all of it.
-    expect(voucherAmountCents(189_900, { ...pizza, lineTotalCents: 149_900 })).toBe(149_900);
+    expect(voucherAmountCents({ coversCents: 189_900 }, { ...pizza, lineTotalCents: 149_900 })).toBe(149_900);
   });
 
   it('stays on its own line while it can, else moves to the dearest one of the same category; none, it comes off', () => {
@@ -227,5 +232,81 @@ describe('the line it comes off, and how much', () => {
     expect(voucherLineOf('line-pizza', [], PIZZAS)).toBeNull();
     // Its category not known: it never moves.
     expect(voucherLineOf('line-pizza', [other], null)).toBeNull();
+  });
+});
+
+describe('what a voucher is for (v0.7.50)', () => {
+  const PIZZA = 'cat-pizza';
+  const SIGNATURE = 'cat-signature';
+  const LARGE_REGULAR = { categoryIds: [PIZZA], size: 'Large' as const, wholeItem: true };
+  const line = (id: string, name: string, cents: number, categoryId: string, extra: Partial<VoucherLine> = {}): VoucherLine => ({
+    id,
+    menuItemName: name,
+    quantity: 1,
+    lineTotalCents: cents,
+    unitPriceCents: cents,
+    categoryId,
+    ...extra,
+  });
+  const large = line('l-large', 'Fajita Pizza — Large', 200_000, PIZZA);
+  const medium = line('l-medium', 'Fajita Pizza — Medium', 150_000, PIZZA);
+  const signature = line('l-sig', 'Shawarma Pizza — Large', 220_000, SIGNATURE);
+  const drink = line('l-drink', 'Cola', 15_000, 'cat-drinks');
+
+  it('reads the size after the dash in the name, as the menu writes it', () => {
+    expect(menuItemSize('Fajita Pizza — Large')).toBe('Large');
+    expect(menuItemSize('Fajita Pizza - medium')).toBe('Medium');
+    expect(menuItemSize('Fajita Pizza – Large ')).toBe('Large');
+    expect(menuItemSize('Large Fries')).toBeNull();
+    expect(menuItemSize('Cola')).toBeNull();
+  });
+
+  it('a Large regular pizza voucher fits only a Large in its categories — never a Medium, a Signature pizza or a drink', () => {
+    expect(voucherFits(LARGE_REGULAR, large)).toBe(true);
+    expect(voucherFits(LARGE_REGULAR, medium)).toBe(false);
+    expect(voucherFits(LARGE_REGULAR, signature)).toBe(false);
+    expect(voucherFits(LARGE_REGULAR, drink)).toBe(false);
+    // Any size of its categories; any category of its size; no rule: any food (a batch from before).
+    expect(voucherFits({ ...LARGE_REGULAR, size: null }, medium)).toBe(true);
+    expect(voucherFits({ ...LARGE_REGULAR, categoryIds: [] }, signature)).toBe(true);
+    expect(voucherFits(null, drink)).toBe(true);
+    // Never a value deal, whatever it is for.
+    expect(voucherFits({ categoryIds: [], size: null, wholeItem: true }, { ...large, noDiscount: true })).toBe(false);
+  });
+
+  it('for the whole item: one of it at its menu price, its extras paid, whatever the price is now', () => {
+    const terms = { coversCents: 100, for: LARGE_REGULAR };
+    expect(voucherAmountCents(terms, large)).toBe(200_000);
+    // Extra cheese on it: the pizza is free, the cheese is paid.
+    expect(voucherAmountCents(terms, { ...large, lineTotalCents: 225_000 })).toBe(200_000);
+    // Two on one line: one is free.
+    expect(voucherAmountCents(terms, { ...large, quantity: 2, lineTotalCents: 400_000 })).toBe(200_000);
+    // Not the whole item: up to what it covers, as before.
+    expect(voucherAmountCents({ coversCents: 150_000, for: { ...LARGE_REGULAR, wholeItem: false } }, large)).toBe(150_000);
+  });
+
+  it('lists the lines it can come off, dearest first; moves to another one that fits, never the drink', () => {
+    const terms = { coversCents: 100, for: { ...LARGE_REGULAR, size: null } };
+    expect(voucherLinesFor(terms, [drink, medium, large, signature]).map((x) => [x.line.id, x.amountCents])).toEqual([
+      ['l-large', 200_000],
+      ['l-medium', 150_000],
+    ]);
+    expect(voucherLineOf('gone', [drink, medium], PIZZA, terms)?.id).toBe('l-medium');
+    expect(voucherLineOf('gone', [drink, signature], PIZZA, { coversCents: 100, for: LARGE_REGULAR })).toBeNull();
+    // Its own line no longer fits (changed to a Medium): it moves to one that does, else comes off.
+    expect(voucherLineOf('l-medium', [medium, large], PIZZA, { coversCents: 100, for: LARGE_REGULAR })?.id).toBe('l-large');
+    expect(voucherLineOf('l-medium', [medium], PIZZA, { coversCents: 100, for: LARGE_REGULAR })).toBeNull();
+  });
+
+  it('is frozen on the order with the voucher, and stored on the batch, and read back', () => {
+    const rule = voucherRule({ ...TERMS, for: LARGE_REGULAR });
+    expect(parseVoucherRule(JSON.stringify(rule))).toEqual(rule);
+    // A rule from before 0.7.50 has none.
+    expect(parseVoucherRule(JSON.stringify(voucherRule(TERMS)))?.voucher.for).toBeUndefined();
+    // One this version can't read: not a voucher it reads.
+    expect(parseVoucherRule(JSON.stringify({ ...rule, voucher: { ...rule.voucher, for: { categoryIds: [], size: 'Huge', wholeItem: true } } }))).toBeNull();
+    expect(parseVoucherForJson(voucherForJson(LARGE_REGULAR))).toEqual(LARGE_REGULAR);
+    expect(parseVoucherForJson(null)).toBeNull();
+    expect(parseVoucherForJson('{"v":2}')).toBeNull();
   });
 });

@@ -438,9 +438,11 @@ describe('the owner’s cards', () => {
     signIn('admin');
     // Step 7 put Kitchen & stock (an owner's business-rules section) where the design has it: before Receipts & printing;
     // step 3 Delivery areas & fees, after Money & discounts.
-    expect(tabs(render(<SettingsPage />)).slice(0, 7)).toEqual([
+    expect(tabs(render(<SettingsPage />)).slice(0, 8)).toEqual([
       'foodpanda',
       'Money & discounts',
+      // v0.7.50: company vouchers and what they are for.
+      'Vouchers',
       'Delivery areas & fees',
       'Shop & logo',
       // "Staff & kitchen timing" up to v0.7.26, until the opening float and the reason buttons joined the timings.

@@ -5,9 +5,11 @@ import {
   batchCountWords,
   batchNumbersWords,
   batchTermsWords,
+  defaultVoucherFor,
   pastedListWords,
   rupeesToCents,
   voucherFileProblem,
+  voucherForWords,
   voucherListText,
   voucherMatches,
 } from './voucherPageWords';
@@ -45,8 +47,30 @@ describe('the Vouchers page in words', () => {
     expect(batchNumbersWords({ firstNumber: 1, lastNumber: 100 })).toBe('No. 001–100');
     expect(batchNumbersWords({ firstNumber: 7, lastNumber: 7 })).toBe('No. 007');
     expect(batchNumbersWords({ firstNumber: null, lastNumber: null })).toBe('');
-    expect(batchTermsWords({ coversCents: 189_900, goodUntil: null })).toBe('Covers up to Rs 1,899 · no end date');
-    expect(batchTermsWords({ coversCents: 189_900, goodUntil: '2026-12-31' })).toBe('Covers up to Rs 1,899 · until 31/12/2026');
+    expect(batchTermsWords({ coversCents: 189_900, goodUntil: null })).toBe('Any food · up to Rs 1,899 · no end date');
+    expect(batchTermsWords({ coversCents: 189_900, goodUntil: '2026-12-31' })).toBe('Any food · up to Rs 1,899 · until 31/12/2026');
+  });
+
+  it('says what a voucher is for (v0.7.50): its size, its categories, the whole item or up to its cover', () => {
+    const large = { categoryIds: ['c1'], size: 'Large' as const, wholeItem: true };
+    expect(voucherForWords({ coversCents: 100, for: large, forCategoryNames: ['Pizza'] })).toBe('Large · Pizza · the whole item');
+    expect(voucherForWords({ coversCents: 70_000, for: { categoryIds: ['c2', 'c3'], size: null, wholeItem: false }, forCategoryNames: ['Burgers', 'Wraps'] })).toBe(
+      'Any size · Burgers or Wraps · up to Rs 700',
+    );
+    expect(voucherForWords({ coversCents: 100, for: { categoryIds: [], size: null, wholeItem: true }, forCategoryNames: [] })).toBe('Any size · any food · the whole item');
+    expect(voucherForWords({ coversCents: 100, for: large, forCategoryNames: [] })).toBe('Large · a category no longer on the menu · the whole item');
+    expect(batchTermsWords({ coversCents: 100, goodUntil: null, for: large, forCategoryNames: ['Pizza'] })).toBe('Large · Pizza · the whole item · no end date');
+  });
+
+  it('new vouchers are for one Large regular pizza, the whole item, until the owner says otherwise', () => {
+    const cats = [
+      { id: 'c1', name: 'Pizza' },
+      { id: 'c2', name: 'Signature Pizzas' },
+      { id: 'c3', name: 'Burgers' },
+      { id: 'c4', name: 'Regular Pizza' },
+    ];
+    expect(defaultVoucherFor(cats)).toEqual({ categoryIds: ['c1', 'c4'], size: 'Large', wholeItem: true });
+    expect(defaultVoucherFor([])).toEqual({ categoryIds: [], size: 'Large', wholeItem: true });
   });
 
   it('copies the list as printed, one a line — which the Add vouchers box reads back', () => {
@@ -117,16 +141,22 @@ describe('the till’s words for a typed voucher', () => {
     goodUntil: null,
     createdAt: '2026-10-12T00:00:00.000Z',
     createdByName: 'Owner',
+    for: null,
+    forCategoryNames: [],
   };
 
-  it('a voucher that can be used: its number, whose, what it gets and covers', () => {
+  it('a voucher that can be used: its number, whose, what it gets and what it is for', () => {
     expect(voucherCheckWords({ ok: true, voucherId: 'v1', number: 1, code: 'AB3C', batch })).toEqual({
       ok: true,
       title: 'Voucher No. 001 · abhi',
-      detail: 'One Large pizza from the Regular menu · covers up to Rs 1,899',
+      detail: 'One Large pizza from the Regular menu · Any food · up to Rs 1,899',
     });
     expect(voucherCheckWords({ ok: true, voucherId: 'v1', number: 1, code: 'AB3C', batch: { ...batch, goodUntil: '2026-12-31' } }).detail).toBe(
-      'One Large pizza from the Regular menu · covers up to Rs 1,899 · until 31/12/2026',
+      'One Large pizza from the Regular menu · Any food · up to Rs 1,899 · until 31/12/2026',
+    );
+    const large = { ...batch, for: { categoryIds: ['c1'], size: 'Large' as const, wholeItem: true }, forCategoryNames: ['Pizza'] };
+    expect(voucherCheckWords({ ok: true, voucherId: 'v1', number: 1, code: 'AB3C', batch: large }).detail).toBe(
+      'One Large pizza from the Regular menu · Large · Pizza · the whole item',
     );
   });
 

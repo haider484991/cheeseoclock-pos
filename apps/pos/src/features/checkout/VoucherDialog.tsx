@@ -8,7 +8,6 @@ import {
   parseVoucherNumber,
   voucherAmountCents,
   voucherCanCover,
-  voucherLineEachCents,
   voucherNumberText,
   type VoucherLine,
 } from '@cheeseoclock/pos-domain';
@@ -16,6 +15,7 @@ import type { OrderSnapshot, VoucherCheck } from '@cheeseoclock/shared-types';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { useToast } from '../../components/toast/ToastProvider';
 import { ipc } from '../../ipc/client';
+import { voucherForWords } from '../vouchers/voucherPageWords';
 import { voucherCheckWords, voucherLineWords } from './voucherWords';
 
 interface Props {
@@ -38,10 +38,26 @@ export function voucherLinesOfSnapshot(snapshot: OrderSnapshot | null): VoucherL
 }
 
 /**
+ * The lines a voucher that can be used may come off, and what it takes off
+ * each — the dearest first. The till says which (what the voucher is for,
+ * v0.7.50: `check.lines`); asked without an order, every food line.
+ */
+export function voucherChoices(check: VoucherCheck | null, lines: readonly VoucherLine[]): Array<{ line: VoucherLine; amountCents: number }> {
+  if (check?.ok !== true) return [];
+  if (!check.lines) {
+    return lines.map((line) => ({ line, amountCents: voucherAmountCents(check.batch, line) })).sort((a, b) => b.amountCents - a.amountCents);
+  }
+  return check.lines.flatMap((f) => {
+    const line = lines.find((l) => l.id === f.lineId);
+    return line ? [{ line, amountCents: f.amountCents }] : [];
+  });
+}
+
+/**
  * "Use a voucher" (v0.7.48): the cashier types the number and the code
  * printed on a client's voucher; the till says at once whether it can be
  * used (never used, not ended) or why not, and which item it comes off —
- * the dearest one by default. One of that item comes off, up to what the
+ * only an item it is for (v0.7.50), the dearest one by default. One of that item comes off, up to what the
  * voucher covers; extras are paid. No PIN: the code is the proof. The main
  * process checks everything again when it is put on.
  */
@@ -59,14 +75,7 @@ export function VoucherDialog({ onClose }: Props) {
   const [saving, setSaving] = useState(false);
 
   const lines = useMemo(() => voucherLinesOfSnapshot(snapshot), [snapshot]);
-  const dearest = useMemo(
-    () => lines.reduce<VoucherLine | null>((best, l) => (!best || voucherLineEachCents(l) > voucherLineEachCents(best) ? l : best), null),
-    [lines],
-  );
-  const [lineId, setLineId] = useState<string | null>(dearest?.id ?? null);
-  useEffect(() => {
-    if (lineId === null || !lines.some((l) => l.id === lineId)) setLineId(dearest?.id ?? null);
-  }, [lines, lineId, dearest]);
+  const [lineId, setLineId] = useState<string | null>(null);
 
   const number = parseVoucherNumber(numberText);
   const code = normalizeVoucherCode(codeText);
@@ -99,9 +108,14 @@ export function VoucherDialog({ onClose }: Props) {
     };
   }, [typed, number, code, orderId]);
 
-  const line = lines.find((l) => l.id === lineId) ?? null;
   const ok = check?.ok === true ? check : null;
-  const off = ok && line ? voucherAmountCents(ok.batch.coversCents, line) : 0;
+  const choices = useMemo(() => voucherChoices(check, lines), [check, lines]);
+  useEffect(() => {
+    if (lineId === null || !choices.some((c) => c.line.id === lineId)) setLineId(choices[0]?.line.id ?? null);
+  }, [choices, lineId]);
+  const choice = choices.find((c) => c.line.id === lineId) ?? null;
+  const line = choice?.line ?? null;
+  const off = choice?.amountCents ?? 0;
   const canApply = ok !== null && line !== null && !saving && !busy;
 
   async function apply() {
@@ -210,11 +224,13 @@ export function VoucherDialog({ onClose }: Props) {
           {ok && (
             <section className="mt-2">
               <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-stone-500">It comes off</h3>
-              {lines.length === 0 ? (
-                <p className="text-sm text-stone-600 dark:text-stone-300">Add the item the voucher is for to the order first.</p>
+              {choices.length === 0 ? (
+                <p className="text-sm text-stone-600 dark:text-stone-300">
+                  Nothing on the order is what it is for ({ok.batch.for ? voucherForWords(ok.batch) : ok.batch.gives}). Add that item to the order first.
+                </p>
               ) : (
                 <ul className="space-y-1.5" role="radiogroup" aria-label="The item the voucher is for">
-                  {lines.map((l) => {
+                  {choices.map(({ line: l, amountCents }) => {
                     const picked = l.id === lineId;
                     return (
                       <li key={l.id}>
@@ -232,7 +248,7 @@ export function VoucherDialog({ onClose }: Props) {
                         >
                           <span className="font-medium">{voucherLineWords(l)}</span>
                           <span className="shrink-0 font-mono font-semibold text-emerald-700 dark:text-emerald-400">
-                            −{formatCents(voucherAmountCents(ok.batch.coversCents, l), { showSymbol: false })}
+                            −{formatCents(amountCents, { showSymbol: false })}
                           </span>
                         </button>
                       </li>

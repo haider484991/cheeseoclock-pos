@@ -20,6 +20,7 @@ import {
   Timer,
   Boxes,
   Bike,
+  Ticket,
 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { SoundSettings } from '../notifications/SoundSettings';
@@ -42,11 +43,13 @@ import { KitchenStockSettings } from './KitchenStockSettings';
 import { DeliveryAreasSettings } from './DeliveryAreasSettings';
 import { DeliveryChargeTaxCard } from './DeliveryChargeTaxCard';
 import { WebsiteShopSettings } from './WebsiteShopSettings';
+import { VoucherSettings } from './VoucherSettings';
 import { useSessionStore } from '../../stores/sessionStore';
 
 export type SettingsTab =
   | 'foodpanda'
   | 'money'
+  | 'vouchers'
   | 'delivery'
   | 'store'
   | 'timing'
@@ -67,7 +70,7 @@ interface TabDef {
 
 /**
  * The owner's business rules come first, in the design's order (foodpanda,
- * Money & discounts, Delivery areas & fees, Shop & logo, Staff & kitchen
+ * Money & discounts, company Vouchers, Delivery areas & fees, Shop & logo, Staff & kitchen
  * — timings, the opening float, reason buttons —, Kitchen & stock — stock
  * rules, waste reasons, what a menu file may change), then this till's
  * printers (Receipts & printing), sounds,
@@ -76,6 +79,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: 'foodpanda', label: 'foodpanda', icon: BadgePercent },
   { id: 'money', label: 'Money & discounts', icon: Banknote },
+  { id: 'vouchers', label: 'Vouchers', icon: Ticket },
   { id: 'delivery', label: 'Delivery areas & fees', icon: Bike },
   { id: 'store', label: 'Shop & logo', icon: Store },
   { id: 'timing', label: 'Staff & kitchen', icon: Timer },
@@ -184,6 +188,7 @@ export function SettingsPage() {
       <div role="tabpanel" className="space-y-6">
         {tab === 'foodpanda' && <FoodpandaSettings />}
         {tab === 'money' && <MoneySettings />}
+        {tab === 'vouchers' && <VoucherSettings />}
         {tab === 'delivery' && (
           <>
             <DeliveryCityCard />

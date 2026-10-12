@@ -1,0 +1,21 @@
+-- 0057_voucher_for.sql
+-- What a client's vouchers are for (v0.7.50; the owner, 12 Oct 2026: "its
+-- for large regular pizza all shuould be change abele in settings so we can
+-- add more vouchers and add other companies"). Settings → Vouchers says which
+-- menu categories and which size a batch's vouchers are for, and whether one
+-- takes the whole item off. The till then lets a voucher come off only such
+-- an item.
+--
+--   voucher_batches.for_json   {"v":1,"categoryIds":[…],"size":"Large"|"Medium"|null,
+--                               "wholeItem":true|false} (shared-types VoucherFor):
+--                              categoryIds empty = any food; size = the word
+--                              after the dash in the item's name ("Fajita Pizza
+--                              — Large"), null = any size; wholeItem = one of
+--                              the item at its menu price, its extras paid,
+--                              else up to covers_cents. NULL = any food line,
+--                              up to covers_cents (every batch added before
+--                              0.7.50).
+--
+-- A plain nullable column: no existing row is touched, and a till before
+-- 0057 ignores it.
+ALTER TABLE voucher_batches ADD COLUMN for_json TEXT;

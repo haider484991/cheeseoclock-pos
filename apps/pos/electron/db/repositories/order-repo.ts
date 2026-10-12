@@ -80,13 +80,12 @@ import {
   parseVoucherRule,
   voucherAmountCents,
   voucherBillReason,
-  voucherCanCover,
+  voucherFits,
   voucherLineOf,
   voucherNumberText,
   voucherRule,
-  type VoucherLine,
 } from '@cheeseoclock/pos-domain';
-import { checkVoucher, findVoucherBatch } from '../vouchers-read.js';
+import { checkVoucher, findVoucherBatch, orderLinesForVoucher } from '../vouchers-read.js';
 import {
   readApprovalLimits,
   readDeliveryFeeItemIds,
@@ -3072,43 +3071,13 @@ export const VOUCHER_NOT_ON_FOODPANDA = 'A voucher is for the shop’s own order
 export const VOUCHER_NOT_ON_WEB = 'A voucher is used at the counter, not on a website order.';
 export const VOUCHER_LINE_GONE = 'That item is no longer on this order. Pick the item the voucher is for.';
 export const VOUCHER_LINE_CANT = 'A voucher can’t come off that line. Pick a food item, not a value deal or the delivery charge.';
+/** The line picked is not what the voucher is for (Settings → Vouchers, v0.7.50). */
+export const VOUCHER_NOT_FOR = (number: number, gives: string): string =>
+  `Voucher No. ${voucherNumberText(number)} is for: ${gives}. Pick that item, or add it to the order first.`;
 export const VOUCHER_ONE_PER_ORDER = 'This order already has a voucher. One voucher per order: start a new order for the next one.';
 /** What F3 hears on an order carrying a voucher: one discount per order, and taking the voucher off frees it. */
 export const VOUCHER_ON_ORDER = (number: number): string =>
   `Voucher No. ${voucherNumberText(number)} is on this order. Take the voucher off first (the × beside it), then add a discount.`;
-
-/** An order's live lines as a voucher sees them, in the till's order ((created_at, id)). */
-function voucherLinesOf(db: AppDatabase, orderId: string): VoucherLine[] {
-  const rows = db
-    .prepare(
-      `SELECT oi.id, oi.menu_item_name, oi.menu_item_id, oi.quantity, oi.line_total_cents, oi.no_discount, oi.parent_order_item_id,
-              mi.category_id
-         FROM order_items oi
-         LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
-        WHERE oi.order_id = ? AND oi.deleted_at IS NULL
-        ORDER BY oi.created_at, oi.id`,
-    )
-    .all(orderId) as Array<{
-    id: string;
-    menu_item_name: string;
-    menu_item_id: string | null;
-    quantity: number;
-    line_total_cents: number;
-    no_discount: number;
-    parent_order_item_id: string | null;
-    category_id: string | null;
-  }>;
-  return rows.map((r) => ({
-    id: r.id,
-    menuItemName: r.menu_item_name,
-    menuItemId: r.menu_item_id,
-    quantity: r.quantity,
-    lineTotalCents: r.line_total_cents,
-    noDiscount: r.no_discount === 1,
-    parentOrderItemId: r.parent_order_item_id,
-    categoryId: r.category_id ?? null,
-  }));
-}
 
 /** The menu category of the item an order line sold (taken off or not); null when not known. */
 function lineCategoryOf(db: AppDatabase, lineId: string): string | null {
@@ -3183,11 +3152,12 @@ export function applyVoucher(
     const check = checkVoucher(db, { number: input.number, code: input.code, orderId: input.orderId }, tradingDayOfInstant(now) ?? now.slice(0, 10));
     if (!check.ok) throw new Error(check.message);
     if (liveVoucherRow(db, input.orderId)) throw new Error(VOUCHER_ONE_PER_ORDER);
-    const line = voucherLinesOf(db, input.orderId).find((l) => l.id === input.lineId);
+    const line = orderLinesForVoucher(db, input.orderId).find((l) => l.id === input.lineId);
     if (!line) throw new Error(VOUCHER_LINE_GONE);
-    if (!voucherCanCover(line)) throw new Error(VOUCHER_LINE_CANT);
     const batch = findVoucherBatch(db, check.batch.id);
     if (!batch) throw new Error('Those vouchers are no longer on this till.');
+    // Only an item it is for (v0.7.50: Settings → Vouchers): a Large regular pizza voucher, a Large regular pizza.
+    if (!voucherFits(batch.for, line)) throw new Error(batch.for ? VOUCHER_NOT_FOR(check.number, batch.gives) : VOUCHER_LINE_CANT);
 
     const rule = voucherRule({
       v: 1,
@@ -3197,9 +3167,11 @@ export function applyVoucher(
       batchName: batch.name,
       gives: batch.gives,
       coversCents: batch.coversCents,
+      // What it is for, frozen with it: a later change in Settings never moves an order it is on.
+      ...(batch.for ? { for: batch.for } : {}),
       lineId: line.id,
     });
-    const amount = voucherAmountCents(batch.coversCents, line);
+    const amount = voucherAmountCents(rule.voucher, line);
 
     // One discount per order: whatever was on comes off (an automatic offer, a staff discount), on record.
     const replaced = liveDiscountRows(db, input.orderId);
@@ -3370,15 +3342,15 @@ function recomputeOrderTotals(
       // A client's voucher: one of its line's items, up to what the voucher
       // covers — from the terms frozen on the row, never the live batch;
       // never cleared by the approval re-check (the code was its proof). Its
-      // line gone (the flavour swapped): the dearest line of the same menu
-      // category (a pizza for a pizza, never the drink beside it). None
+      // line gone (the flavour swapped): the dearest line that fits what it
+      // is for (a pizza for a pizza, never the drink beside it). None
       // left: the voucher comes off the order, free again, and the owner's
       // automatic offer may fit again in this same step. The flat
       // value is kept equal to the amount, so a till without vouchers reads
       // the same rupees. A rule this version can't read: its type and value
       // on the base.
       const vr = parseVoucherRule(discountRow.rule_json);
-      const line = vr ? voucherLineOf(vr.voucher.lineId, voucherLinesOf(db, orderId), lineCategoryOf(db, vr.voucher.lineId)) : null;
+      const line = vr ? voucherLineOf(vr.voucher.lineId, orderLinesForVoucher(db, orderId), lineCategoryOf(db, vr.voucher.lineId), vr.voucher) : null;
       if (vr && !line) {
         takeOffVoucherRows(db, orderId, actor, 'voucher_off_no_item');
         if (applyOfferStep(db, orderId, actor)) {
@@ -3386,7 +3358,7 @@ function recomputeOrderTotals(
           return;
         }
       } else {
-        discount = vr && line ? Math.min(voucherAmountCents(vr.voucher.coversCents, line), base) : computeDiscountCents(base, d);
+        discount = vr && line ? Math.min(voucherAmountCents(vr.voucher, line), base) : computeDiscountCents(base, d);
         const moved = vr && line && line.id !== vr.voucher.lineId ? voucherRule({ ...vr.voucher, lineId: line.id }) : null;
         if (discount !== discountRow.amount_cents || (vr && discount !== discountRow.value) || moved) {
           db.prepare(

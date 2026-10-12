@@ -1,5 +1,5 @@
 import { formatCents, voucherNumberText, type VoucherListRead } from '@cheeseoclock/pos-domain';
-import type { VoucherBatchSummary, VoucherRow, VoucherState } from '@cheeseoclock/shared-types';
+import type { VoucherBatchSummary, VoucherFor, VoucherRow, VoucherState } from '@cheeseoclock/shared-types';
 
 /**
  * The Vouchers page's words (v0.7.48): plain, for the owner and managers.
@@ -28,10 +28,41 @@ export function batchNumbersWords(b: Pick<VoucherBatchSummary, 'firstNumber' | '
   return `No. ${voucherNumberText(b.firstNumber)}–${voucherNumberText(b.lastNumber)}`;
 }
 
-/** "Covers up to Rs 1,899 · until 31/12/2026" / "· no end". */
-export function batchTermsWords(b: Pick<VoucherBatchSummary, 'coversCents' | 'goodUntil'>): string {
+/**
+ * What a voucher is for, in a few words (v0.7.50): "Large · Pizza · the whole
+ * item", "Any size · Burgers · up to Rs 700", "Any food · up to Rs 1,899" (a
+ * batch from before, or one for any item). A category gone from the menu
+ * since is left out.
+ */
+export function voucherForWords(
+  b: Pick<VoucherBatchSummary, 'coversCents'> & { for?: VoucherFor | null; forCategoryNames?: readonly string[] },
+): string {
+  const f = b.for ?? null;
+  const take = f?.wholeItem ? 'the whole item' : `up to ${formatCents(b.coversCents)}`;
+  if (!f) return `Any food · ${take}`;
+  const cats = (b.forCategoryNames ?? []).length > 0 ? (b.forCategoryNames ?? []).join(' or ') : f.categoryIds.length > 0 ? 'a category no longer on the menu' : 'any food';
+  return `${f.size ?? 'Any size'} · ${cats} · ${take}`;
+}
+
+/**
+ * What new vouchers are for until the owner says otherwise: one Large from
+ * the regular pizza menu (the category named "Pizza" or "Regular Pizza"), the
+ * whole item. Every voucher printed so far is that one.
+ */
+export function defaultVoucherFor(categories: ReadonlyArray<{ id: string; name: string }>): VoucherFor {
+  return {
+    categoryIds: categories.filter((c) => /^\s*(regular\s+)?pizzas?\s*$/i.test(c.name)).map((c) => c.id),
+    size: 'Large',
+    wholeItem: true,
+  };
+}
+
+/** "Large · Pizza · the whole item · no end date" / "Any food · up to Rs 1,899 · until 31/12/2026". */
+export function batchTermsWords(
+  b: Pick<VoucherBatchSummary, 'coversCents' | 'goodUntil'> & { for?: VoucherFor | null; forCategoryNames?: readonly string[] },
+): string {
   const [y, m, d] = (b.goodUntil ?? '').split('-');
-  return `Covers up to ${formatCents(b.coversCents)} · ${b.goodUntil ? `until ${d}/${m}/${y}` : 'no end date'}`;
+  return `${voucherForWords(b)} · ${b.goodUntil ? `until ${d}/${m}/${y}` : 'no end date'}`;
 }
 
 /** The list as printed, one voucher a line ("001 AB3C"): to copy for the printer, or into the till again. */

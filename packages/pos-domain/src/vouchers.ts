@@ -8,8 +8,11 @@ import {
   isDeliveryChargeLine,
   VOUCHER_CODE_LENGTH,
   VOUCHER_CODE_LETTERS,
+  VOUCHER_SIZES,
+  type VoucherFor,
   type VoucherNumberAndCode,
   type VoucherRule,
+  type VoucherSize,
   type VoucherTerms,
 } from '@cheeseoclock/shared-types';
 
@@ -172,6 +175,10 @@ export function parseVoucherRule(json: string | null | undefined): VoucherRule |
   if (t['v'] !== 1 || !isId(t['id']) || !isId(t['batchId']) || !isId(t['lineId'])) return null;
   if (!isWhole(t['number'], 1) || !isWhole(t['coversCents'], 1)) return null;
   if (typeof t['batchName'] !== 'string' || typeof t['gives'] !== 'string') return null;
+  // What it was for (v0.7.50): absent = any food item; one this version can't read = not a voucher it reads.
+  const forRaw = t['for'];
+  const forTerms = forRaw === undefined ? null : readVoucherFor(forRaw);
+  if (forRaw !== undefined && forTerms === null) return null;
   return voucherRule({
     v: 1,
     id: t['id'],
@@ -180,8 +187,38 @@ export function parseVoucherRule(json: string | null | undefined): VoucherRule |
     batchName: t['batchName'],
     gives: t['gives'],
     coversCents: t['coversCents'],
+    ...(forTerms ? { for: forTerms } : {}),
     lineId: t['lineId'],
   });
+}
+
+/** A VoucherFor read from stored JSON (its own object, or for_json's), or null when it does not read. */
+function readVoucherFor(raw: unknown): VoucherFor | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const f = raw as Record<string, unknown>;
+  const cats = f['categoryIds'];
+  if (!Array.isArray(cats) || cats.length > 50 || !cats.every(isId) || new Set(cats).size !== cats.length) return null;
+  const size = f['size'];
+  if (size !== null && !(VOUCHER_SIZES as readonly unknown[]).includes(size)) return null;
+  if (typeof f['wholeItem'] !== 'boolean') return null;
+  return { categoryIds: [...(cats as string[])], size: size as VoucherSize | null, wholeItem: f['wholeItem'] };
+}
+
+/** voucher_batches.for_json as stored (format 1). */
+export function voucherForJson(f: VoucherFor): string {
+  return JSON.stringify({ v: 1, categoryIds: f.categoryIds, size: f.size, wholeItem: f.wholeItem });
+}
+
+/** voucher_batches.for_json back; null when there is none (any food item) or it is not format 1. */
+export function parseVoucherForJson(json: string | null | undefined): VoucherFor | null {
+  if (!json) return null;
+  try {
+    const raw = JSON.parse(json) as unknown;
+    if (typeof raw !== 'object' || raw === null || (raw as Record<string, unknown>)['v'] !== 1) return null;
+    return readVoucherFor(raw);
+  } catch {
+    return null;
+  }
 }
 
 // ------------------------------------------------ the line it comes off --
@@ -193,11 +230,13 @@ export interface VoucherLine {
   menuItemId?: string | null;
   quantity: number;
   lineTotalCents: number;
+  /** One of the item at its menu price, without its choices (order_items.unit_price_cents); absent = not known. */
+  unitPriceCents?: number;
   /** A value deal (order_items.no_discount): a voucher never comes off one. */
   noDiscount?: boolean;
   /** A line inside a combo: the combo's own line is the one sold. */
   parentOrderItemId?: string | null;
-  /** The menu category its item is in (a pizza swapped for a pizza keeps its voucher); absent = not known. */
+  /** The menu category its item is in now; absent = not known. */
   categoryId?: string | null;
 }
 
@@ -206,7 +245,7 @@ export function voucherLineEachCents(line: Pick<VoucherLine, 'lineTotalCents' | 
   return Math.floor(line.lineTotalCents / Math.max(1, line.quantity));
 }
 
-/** Can a voucher come off this line? Food the customer pays for: not a delivery charge, not a value deal, not inside a combo. */
+/** Can a voucher come off this line at all? Food the customer pays for: not a delivery charge, not a value deal, not inside a combo. */
 export function voucherCanCover(line: VoucherLine): boolean {
   return (
     !line.parentOrderItemId &&
@@ -216,17 +255,68 @@ export function voucherCanCover(line: VoucherLine): boolean {
   );
 }
 
+/** The size after the dash in an item's name, as the menu writes it ("Fajita Pizza — Large" → 'Large'); null = none. */
+export function menuItemSize(name: string): VoucherSize | null {
+  const m = /\s[—–-]\s*(medium|large)\s*$/i.exec(name);
+  if (!m) return null;
+  return m[1]!.toLowerCase() === 'large' ? 'Large' : 'Medium';
+}
+
+/**
+ * Does a line fit what a voucher is for (v0.7.50)? Food it can come off at
+ * all, in one of its categories (none named = any) and of its size (null =
+ * any). A batch with no rule (added before 0.7.50): any food line.
+ */
+export function voucherFits(rule: VoucherFor | null | undefined, line: VoucherLine): boolean {
+  if (!voucherCanCover(line)) return false;
+  if (!rule) return true;
+  if (rule.categoryIds.length > 0 && !(line.categoryId && rule.categoryIds.includes(line.categoryId))) return false;
+  return rule.size === null || menuItemSize(line.menuItemName) === rule.size;
+}
+
+/**
+ * What a voucher takes off a line: for the whole item (v0.7.50), one of the
+ * item at its menu price — its extras paid; else one of the line's items as
+ * sold, never more than the voucher covers.
+ */
+export function voucherAmountCents(
+  terms: { coversCents: number; for?: VoucherFor | null },
+  line: Pick<VoucherLine, 'lineTotalCents' | 'quantity' | 'unitPriceCents'>,
+): number {
+  const each = voucherLineEachCents(line);
+  if (terms.for?.wholeItem) return Math.max(0, Math.min(each, line.unitPriceCents ?? each));
+  return Math.max(0, Math.min(terms.coversCents, each));
+}
+
+/** The lines a voucher can come off (what it is for), each with what it would take off: the dearest first, then the till's order. */
+export function voucherLinesFor(
+  terms: { coversCents: number; for?: VoucherFor | null },
+  lines: ReadonlyArray<VoucherLine>,
+): Array<{ line: VoucherLine; amountCents: number }> {
+  return lines
+    .filter((l) => voucherFits(terms.for, l))
+    .map((line) => ({ line, amountCents: voucherAmountCents(terms, line) }))
+    .sort((a, b) => b.amountCents - a.amountCents);
+}
+
 /**
  * The line a voucher comes off now: the one it was put on, while it is on
- * the order and can be; else — the cashier swapped the flavour — the
- * dearest line of the SAME menu category as the one it was put on
- * (`categoryId`: a pizza for a pizza, never the drink left beside it; one
- * item each, the first of equals). Null when there is none: the voucher
- * comes off the order and is free again.
+ * the order and still fits; else — the cashier swapped the flavour — the
+ * dearest line that fits what it is for (a voucher for a Large regular pizza
+ * moves to the other Large regular pizza, never the drink). A voucher with no
+ * rule (before 0.7.50) moves only within the menu category of the line it
+ * was put on (`categoryId`). Null when there is none: the voucher comes off
+ * the order and is free again.
  */
-export function voucherLineOf(lineId: string, lines: ReadonlyArray<VoucherLine>, categoryId: string | null | undefined): VoucherLine | null {
+export function voucherLineOf(
+  lineId: string,
+  lines: ReadonlyArray<VoucherLine>,
+  categoryId: string | null | undefined,
+  terms: { coversCents: number; for?: VoucherFor | null } = { coversCents: 0 },
+): VoucherLine | null {
   const own = lines.find((l) => l.id === lineId);
-  if (own && voucherCanCover(own)) return own;
+  if (own && voucherFits(terms.for, own)) return own;
+  if (terms.for) return voucherLinesFor(terms, lines)[0]?.line ?? null;
   if (!categoryId) return null;
   let best: VoucherLine | null = null;
   for (const l of lines) {
@@ -234,9 +324,4 @@ export function voucherLineOf(lineId: string, lines: ReadonlyArray<VoucherLine>,
     if (!best || voucherLineEachCents(l) > voucherLineEachCents(best)) best = l;
   }
   return best;
-}
-
-/** What a voucher takes off its line: one of the line's items, never more than the voucher covers. */
-export function voucherAmountCents(coversCents: number, line: Pick<VoucherLine, 'lineTotalCents' | 'quantity'>): number {
-  return Math.max(0, Math.min(coversCents, voucherLineEachCents(line)));
 }

@@ -139,9 +139,10 @@ describe('Settings → Kitchen & stock', () => {
         .map((t) => text(`<x ${t.slice(0, t.indexOf('</button>'))}`));
     signIn('admin');
     const all = tabs(render(<SettingsPage />));
-    expect(all.slice(0, 7)).toEqual([
+    expect(all.slice(0, 8)).toEqual([
       'foodpanda',
       'Money & discounts',
+      'Vouchers',
       'Delivery areas & fees',
       'Shop & logo',
       'Staff & kitchen',

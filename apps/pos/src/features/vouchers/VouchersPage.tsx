@@ -122,7 +122,7 @@ export function VouchersPage() {
           <div className="py-10 text-center">
             <Ticket className="mx-auto mb-3 h-10 w-10 text-stone-300" />
             <p className="text-sm text-stone-500">No vouchers yet.</p>
-            <p className="mt-1 text-xs text-stone-400">Add a client’s vouchers: paste the printed list, or let the till make the codes.</p>
+            <p className="mt-1 text-xs text-stone-400">Add a client’s vouchers: choose the CSV of the printed list, or let the till make the codes. Settings → Vouchers says what they are for.</p>
           </div>
         </Card>
       ) : (

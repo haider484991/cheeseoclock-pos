@@ -1,9 +1,10 @@
 import { formatCents, voucherLineEachCents, voucherNumberText, type VoucherLine } from '@cheeseoclock/pos-domain';
 import type { VoucherCheck } from '@cheeseoclock/shared-types';
+import { voucherForWords } from '../vouchers/voucherPageWords';
 
 /**
  * The till's words for a typed voucher (v0.7.48, Use a voucher): what it
- * gets and covers when it can be used, else why not (the main process's own
+ * gets and what it is for (v0.7.50) when it can be used, else why not (the main process's own
  * words: used on which order, ended…).
  */
 export function voucherCheckWords(check: VoucherCheck): { ok: boolean; title: string; detail: string | null } {
@@ -13,7 +14,7 @@ export function voucherCheckWords(check: VoucherCheck): { ok: boolean; title: st
   return {
     ok: true,
     title: `Voucher No. ${voucherNumberText(check.number)} · ${b.name}`,
-    detail: `${b.gives} · covers up to ${formatCents(b.coversCents)}${until}`,
+    detail: `${b.gives} · ${voucherForWords(b)}${until}`,
   };
 }
 

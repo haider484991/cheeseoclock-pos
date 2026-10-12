@@ -1,5 +1,12 @@
 import type { AppDatabase } from './connection.js';
-import { parseVoucherRule, voucherEnded, voucherNumberText } from '@cheeseoclock/pos-domain';
+import {
+  parseVoucherForJson,
+  parseVoucherRule,
+  voucherEnded,
+  voucherLinesFor,
+  voucherNumberText,
+  type VoucherLine,
+} from '@cheeseoclock/pos-domain';
 import {
   paperDateTime,
   type VoucherBatch,
@@ -31,29 +38,83 @@ interface BatchRow {
   created_by_user_id: string | null;
   created_at: string;
   created_by_name: string | null;
+  for_json: string | null;
 }
 
 const BATCH_SELECT = `SELECT b.id, b.name, b.gives, b.covers_cents, b.good_until, b.created_by_user_id, b.created_at,
-                             u.full_name AS created_by_name
+                             b.for_json, u.full_name AS created_by_name
                         FROM voucher_batches b
                         LEFT JOIN users u ON u.id = b.created_by_user_id`;
 
-function batchOf(r: BatchRow): VoucherBatch {
+function batchOf(db: AppDatabase, r: BatchRow): VoucherBatch {
+  const forRule = parseVoucherForJson(r.for_json);
   return {
     id: r.id,
     name: r.name,
     gives: r.gives,
     coversCents: r.covers_cents,
     goodUntil: r.good_until,
+    for: forRule,
+    forCategoryNames: forRule ? categoryNamesOf(db, forRule.categoryIds) : [],
     createdAt: r.created_at,
     createdByName: r.created_by_name,
   };
 }
 
+/** These categories' names as the menu has them now, in the rule's order (one gone since: left out). */
+function categoryNamesOf(db: AppDatabase, ids: readonly string[]): string[] {
+  const names: string[] = [];
+  for (const id of ids) {
+    const row = db.prepare(`SELECT name FROM categories WHERE id = ? AND deleted_at IS NULL`).get(id) as { name: string } | undefined;
+    if (row) names.push(row.name);
+  }
+  return names;
+}
+
+/**
+ * An order's live lines as a voucher sees them, in the till's order
+ * ((created_at, id)): what they came to, one item's menu price, the category
+ * its item is in now — what applyVoucher, the cart's re-working and the
+ * till's check all read.
+ */
+export function orderLinesForVoucher(db: AppDatabase, orderId: string): VoucherLine[] {
+  const rows = db
+    .prepare(
+      `SELECT oi.id, oi.menu_item_name, oi.menu_item_id, oi.quantity, oi.unit_price_cents, oi.line_total_cents, oi.no_discount,
+              oi.parent_order_item_id, mi.category_id
+         FROM order_items oi
+         LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
+        WHERE oi.order_id = ? AND oi.deleted_at IS NULL
+        ORDER BY oi.created_at, oi.id`,
+    )
+    .all(orderId) as Array<{
+    id: string;
+    menu_item_name: string;
+    menu_item_id: string | null;
+    quantity: number;
+    unit_price_cents: number;
+    line_total_cents: number;
+    no_discount: number;
+    parent_order_item_id: string | null;
+    category_id: string | null;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    menuItemName: r.menu_item_name,
+    menuItemId: r.menu_item_id,
+    quantity: r.quantity,
+    unitPriceCents: r.unit_price_cents,
+    lineTotalCents: r.line_total_cents,
+    noDiscount: r.no_discount === 1,
+    parentOrderItemId: r.parent_order_item_id,
+    categoryId: r.category_id ?? null,
+  }));
+}
+
 /** A live batch, or null. */
 export function findVoucherBatch(db: AppDatabase, id: string): (VoucherBatch & { createdByUserId: string | null }) | null {
   const r = db.prepare(`${BATCH_SELECT} WHERE b.id = ? AND b.deleted_at IS NULL`).get(id) as BatchRow | undefined;
-  return r ? { ...batchOf(r), createdByUserId: r.created_by_user_id } : null;
+  return r ? { ...batchOf(db, r), createdByUserId: r.created_by_user_id } : null;
 }
 
 interface VoucherDbRow {
@@ -170,7 +231,7 @@ export function voucherBatchSummary(db: AppDatabase, batchId: string): VoucherBa
 /** Every live batch, the newest first, with its counts. */
 export function listVoucherBatchSummaries(db: AppDatabase): VoucherBatchSummary[] {
   const batches = db.prepare(`${BATCH_SELECT} WHERE b.deleted_at IS NULL ORDER BY b.created_at DESC, b.id DESC`).all() as BatchRow[];
-  return batches.map((b) => summaryOf(batchOf(b), listVouchersOfBatch(db, b.id)));
+  return batches.map((b) => summaryOf(batchOf(db, b), listVouchersOfBatch(db, b.id)));
 }
 
 /** Every live voucher's code (the codes a new batch may not repeat), with whose it is. */
@@ -256,7 +317,11 @@ export function checkVoucher(
   }
   const { createdByUserId: _by, ...batch } = found.batch;
   void _by;
-  return { ok: true, voucherId: found.id, number: found.number, code: found.code, batch };
+  // Asked with an order: the lines of it this voucher can come off (what it is for), the dearest first.
+  const lines = input.orderId
+    ? voucherLinesFor(batch, orderLinesForVoucher(db, input.orderId)).map((x) => ({ lineId: x.line.id, amountCents: x.amountCents }))
+    : undefined;
+  return { ok: true, voucherId: found.id, number: found.number, code: found.code, batch, ...(lines ? { lines } : {}) };
 }
 
 /** Is any voucher of this batch on a live order? (A batch with one is never deleted.) */

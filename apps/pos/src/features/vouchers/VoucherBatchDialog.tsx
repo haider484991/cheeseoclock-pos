@@ -1,13 +1,13 @@
-import { useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FileUp, X } from 'lucide-react';
 import { Button, cn } from '@cheeseoclock/ui';
 import { parseVoucherList } from '@cheeseoclock/pos-domain';
-import { VOUCHER_BATCH_MAX, type VoucherBatchSummary } from '@cheeseoclock/shared-types';
+import { VOUCHER_BATCH_MAX, VOUCHER_SIZES, type VoucherBatchSummary, type VoucherFor, type VoucherSize } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import { pastedListWords, rupeesToCents, voucherFileProblem } from './voucherPageWords';
+import { defaultVoucherFor, pastedListWords, rupeesToCents, voucherFileProblem, voucherForWords } from './voucherPageWords';
 
 interface Props {
   /** The batch to change; none = add new vouchers. */
@@ -15,6 +15,12 @@ interface Props {
   onClose: () => void;
   onSaved: (batch: VoucherBatchSummary) => void;
 }
+
+const CHIP = (on: boolean) =>
+  cn(
+    'rounded-full px-3 py-1 text-sm font-semibold ring-1',
+    on ? 'bg-stone-900 text-white ring-stone-900 dark:bg-amber-500 dark:text-stone-900' : 'ring-stone-200 dark:ring-stone-700',
+  );
 
 const INPUT =
   'w-full rounded-lg border border-stone-200 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800';
@@ -27,13 +33,27 @@ const INPUT =
  * pos so it get it all"), or the list pasted, "001 AB3C" a line — or the
  * till makes the codes, to hand to whoever prints them. The file fills the
  * list, so the owner sees what was read before Add vouchers.
+ *
+ * What they are for (v0.7.50; the owner: "its for large regular pizza all
+ * shuould be change abele in settings"): the menu categories and the size an
+ * item must be, and whether a voucher takes the whole item off or up to an
+ * amount. The till then lets one come off only such an item. New vouchers
+ * start as one Large regular pizza, the whole item.
  */
 export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [name, setName] = useState(batch?.name ?? '');
   const [gives, setGives] = useState(batch?.gives ?? 'One Large pizza from the Regular menu');
-  const [covers, setCovers] = useState(batch ? String(batch.coversCents / 100) : '');
+  const [covers, setCovers] = useState(batch && !batch.for?.wholeItem ? String(batch.coversCents / 100) : '');
+  // What it is for. Any category, any size and up to an amount is a batch with no rule (as before 0.7.50).
+  const catsQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
+  const [catIds, setCatIds] = useState<string[]>(() =>
+    batch ? (batch.for?.categoryIds ?? []) : defaultVoucherFor(catsQ.data ?? []).categoryIds,
+  );
+  const [size, setSize] = useState<VoucherSize | null>(batch ? (batch.for?.size ?? null) : 'Large');
+  const [whole, setWhole] = useState(batch ? batch.for?.wholeItem === true : true);
+  const forTouched = useRef(batch !== undefined || (catsQ.data?.length ?? 0) > 0);
   const [hasEnd, setHasEnd] = useState(batch?.goodUntil != null);
   const [goodUntil, setGoodUntil] = useState(batch?.goodUntil ?? '');
   const [from, setFrom] = useState<'list' | 'make'>('list');
@@ -44,6 +64,20 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
   const [firstText, setFirstText] = useState('1');
   const [error, setError] = useState<string | null>(null);
 
+  const categories = useMemo(
+    () => [...(catsQ.data ?? [])].sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name)),
+    [catsQ.data],
+  );
+  // New vouchers: the regular pizza category, once the menu has loaded (unless the owner picked already).
+  useEffect(() => {
+    if (forTouched.current || categories.length === 0) return;
+    forTouched.current = true;
+    setCatIds(defaultVoucherFor(categories).categoryIds);
+  }, [categories]);
+  const shownCats = categories.filter((c) => c.isActive || catIds.includes(c.id));
+  const forValue: VoucherFor | null = catIds.length === 0 && size === null && !whole ? null : { categoryIds: catIds, size, wholeItem: whole };
+  const forNames = categories.filter((c) => catIds.includes(c.id)).map((c) => c.name);
+
   const read = useMemo(() => parseVoucherList(listText), [listText]);
   const listWords = pastedListWords(read);
   const coversCents = rupeesToCents(covers);
@@ -53,7 +87,7 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
   const problem = (() => {
     if (name.trim() === '') return 'Say who the vouchers are for';
     if (gives.trim() === '') return 'Say what one voucher gets';
-    if (coversCents === null) return 'Say the most one voucher takes off, in rupees';
+    if (!whole && coversCents === null) return 'Say the most one voucher takes off, in rupees';
     if (hasEnd && !/^\d{4}-\d{2}-\d{2}$/.test(goodUntil)) return 'Pick the last day, or untick it';
     if (batch) return null;
     if (from === 'list') {
@@ -87,7 +121,14 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
 
   const save = useMutation({
     mutationFn: async () => {
-      const fields = { name, gives, coversCents: coversCents ?? 0, goodUntil: hasEnd ? goodUntil : null };
+      // The whole item: no amount asked; the one stored stays (or Rs 1), and is not used.
+      const fields = {
+        name,
+        gives,
+        coversCents: whole ? (coversCents ?? batch?.coversCents ?? 100) : (coversCents ?? 0),
+        goodUntil: hasEnd ? goodUntil : null,
+        for: forValue,
+      };
       if (batch) return ipc.vouchers.updateBatch({ id: batch.id, ...fields });
       return from === 'list'
         ? ipc.vouchers.addBatch({ ...fields, from: 'list', vouchers: read.vouchers })
@@ -115,7 +156,7 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
               <Dialog.Title className="text-lg font-bold">{batch ? 'Change these vouchers' : 'Add vouchers'}</Dialog.Title>
               <Dialog.Description className="text-sm text-stone-500">
                 {batch
-                  ? 'The vouchers stay as printed. Orders already using one keep what it covered then.'
+                  ? 'The vouchers stay as printed. Orders already using one keep what it was for then.'
                   : 'Vouchers a client bought to hand out. Each one is used once, at the till, with its number and code.'}
               </Dialog.Description>
             </div>
@@ -145,23 +186,79 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
               <span className="mb-1 block text-sm font-semibold">What one voucher gets</span>
               <input value={gives} maxLength={80} onChange={(e) => setGives(e.target.value)} className={INPUT} />
             </label>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="mb-1 block text-sm font-semibold">Covers up to (Rs)</span>
-                <input inputMode="decimal" value={covers} onChange={(e) => setCovers(e.target.value)} placeholder="1899" className={INPUT} />
-                <span className="mt-1 block text-xs text-stone-500">The price of that item. A dearer one: the rest is paid.</span>
-              </label>
+            <section className="space-y-3 rounded-xl border border-stone-200 p-3 dark:border-stone-700" aria-label="What it is for">
               <div>
-                <label className="mb-1 flex items-center gap-2 text-sm font-semibold">
-                  <input type="checkbox" checked={hasEnd} onChange={(e) => setHasEnd(e.target.checked)} />
-                  Last day to use them
-                </label>
-                {hasEnd ? (
-                  <input type="date" value={goodUntil} onChange={(e) => setGoodUntil(e.target.value)} className={INPUT} />
+                <h3 className="text-sm font-semibold">What it is for</h3>
+                <p className="text-xs text-stone-500">The till lets a voucher come off only such an item.</p>
+              </div>
+              <div>
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">Size</span>
+                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Size">
+                  {([null, ...VOUCHER_SIZES] as const).map((s) => (
+                    <button key={s ?? 'any'} type="button" role="radio" aria-checked={size === s} onClick={() => setSize(s)} className={CHIP(size === s)}>
+                      {s ?? 'Any size'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">From the menu</span>
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Menu categories">
+                  {shownCats.map((c) => {
+                    const on = catIds.includes(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => {
+                          forTouched.current = true;
+                          setCatIds((ids) => (on ? ids.filter((x) => x !== c.id) : [...ids, c.id]));
+                        }}
+                        className={CHIP(on)}
+                      >
+                        {c.name}
+                      </button>
+                    );
+                  })}
+                </div>
+                <span className="mt-1 block text-xs text-stone-500">None picked: any food.</span>
+              </div>
+              <div>
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">Takes off</span>
+                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Takes off">
+                  <button type="button" role="radio" aria-checked={whole} onClick={() => setWhole(true)} className={CHIP(whole)}>
+                    The whole item
+                  </button>
+                  <button type="button" role="radio" aria-checked={!whole} onClick={() => setWhole(false)} className={CHIP(!whole)}>
+                    Up to an amount
+                  </button>
+                </div>
+                {whole ? (
+                  <span className="mt-1 block text-xs text-stone-500">One of the item at its menu price. Extras are paid.</span>
                 ) : (
-                  <p className="text-sm text-stone-500">No end date</p>
+                  <label className="mt-2 block">
+                    <span className="mb-1 block text-sm font-semibold">Covers up to (Rs)</span>
+                    <input inputMode="decimal" value={covers} onChange={(e) => setCovers(e.target.value)} placeholder="1899" className={INPUT} />
+                    <span className="mt-1 block text-xs text-stone-500">A dearer item: the rest is paid.</span>
+                  </label>
                 )}
               </div>
+              <p className="text-sm font-medium">
+                For: {voucherForWords({ coversCents: coversCents ?? 0, for: forValue, forCategoryNames: forNames })}
+              </p>
+            </section>
+
+            <div>
+              <label className="mb-1 flex items-center gap-2 text-sm font-semibold">
+                <input type="checkbox" checked={hasEnd} onChange={(e) => setHasEnd(e.target.checked)} />
+                Last day to use them
+              </label>
+              {hasEnd ? (
+                <input type="date" value={goodUntil} onChange={(e) => setGoodUntil(e.target.value)} className={INPUT} />
+              ) : (
+                <p className="text-sm text-stone-500">No end date</p>
+              )}
             </div>
 
             {!batch && (
@@ -173,17 +270,7 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
                       ['make', 'Make new codes'],
                     ] as const
                   ).map(([id, label]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      role="radio"
-                      aria-checked={from === id}
-                      onClick={() => setFrom(id)}
-                      className={cn(
-                        'rounded-full px-3 py-1 text-sm font-semibold ring-1',
-                        from === id ? 'bg-stone-900 text-white ring-stone-900 dark:bg-amber-500 dark:text-stone-900' : 'ring-stone-200 dark:ring-stone-700',
-                      )}
-                    >
+                    <button key={id} type="button" role="radio" aria-checked={from === id} onClick={() => setFrom(id)} className={CHIP(from === id)}>
                       {label}
                     </button>
                   ))}

@@ -3,7 +3,7 @@ import type { AppDatabase } from '../connection.js';
 import { nowIso, writeWithSync, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
-import { makeVoucherCodes, voucherNumberText } from '@cheeseoclock/pos-domain';
+import { makeVoucherCodes, voucherForJson, voucherNumberText } from '@cheeseoclock/pos-domain';
 import type {
   AddVoucherBatchRequest,
   UpdateVoucherBatchRequest,
@@ -93,9 +93,20 @@ export function addVoucherBatch(
     batchId = uuidv7();
     db.prepare(
       `INSERT INTO voucher_batches
-         (id, name, gives, covers_cents, good_until, created_by_user_id, created_at, updated_at, device_id, version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-    ).run(batchId, input.name, input.gives, input.coversCents, input.goodUntil, actor.userId, now, now, actor.deviceId);
+         (id, name, gives, covers_cents, good_until, for_json, created_by_user_id, created_at, updated_at, device_id, version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    ).run(
+      batchId,
+      input.name,
+      input.gives,
+      input.coversCents,
+      input.goodUntil,
+      input.for ? voucherForJson(input.for) : null,
+      actor.userId,
+      now,
+      now,
+      actor.deviceId,
+    );
     enqueueSync(db, { entityType: 'voucher_batches', entityId: batchId, op: 'upsert', payload: { id: batchId, name: input.name } });
     const insert = db.prepare(
       `INSERT INTO vouchers (id, batch_id, number, code, created_at, updated_at, device_id, version)
@@ -118,6 +129,7 @@ export function addVoucherBatch(
         gives: input.gives,
         coversCents: input.coversCents,
         goodUntil: input.goodUntil,
+        for: input.for ?? null,
         from: input.from,
         count: vouchers.length,
         firstNumber: Math.min(...numbers),
@@ -129,15 +141,23 @@ export function addVoucherBatch(
 }
 
 /**
- * Change a batch's name, what it gives, what it covers and its last day. The
- * vouchers stay as printed; an order a voucher is already on keeps the terms
- * frozen on it.
+ * Change a batch's name, what it gives, what it is for (v0.7.50), what it
+ * covers and its last day. The vouchers stay as printed; an order a voucher
+ * is already on keeps the terms frozen on it.
  */
 export function updateVoucherBatch(db: AppDatabase, input: UpdateVoucherBatchRequest, actor: Actor): VoucherBatchSummary {
   const before = findVoucherBatch(db, input.id);
   if (!before) throw new Error(VOUCHER_BATCH_GONE);
   const at = nowIso();
-  const after = { ...before, name: input.name, gives: input.gives, coversCents: input.coversCents, goodUntil: input.goodUntil, updatedAt: at };
+  const after = {
+    ...before,
+    name: input.name,
+    gives: input.gives,
+    coversCents: input.coversCents,
+    goodUntil: input.goodUntil,
+    for: input.for ?? null,
+    updatedAt: at,
+  };
   writeWithSync({
     db,
     entityType: 'voucher_batches',
@@ -149,9 +169,9 @@ export function updateVoucherBatch(db: AppDatabase, input: UpdateVoucherBatchReq
     after,
     writeRow: () => {
       db.prepare(
-        `UPDATE voucher_batches SET name = ?, gives = ?, covers_cents = ?, good_until = ?, updated_at = ?, version = version + 1
+        `UPDATE voucher_batches SET name = ?, gives = ?, covers_cents = ?, good_until = ?, for_json = ?, updated_at = ?, version = version + 1
           WHERE id = ? AND deleted_at IS NULL`,
-      ).run(input.name, input.gives, input.coversCents, input.goodUntil, at, input.id);
+      ).run(input.name, input.gives, input.coversCents, input.goodUntil, input.for ? voucherForJson(input.for) : null, at, input.id);
     },
   });
   return voucherBatchSummary(db, input.id)!;

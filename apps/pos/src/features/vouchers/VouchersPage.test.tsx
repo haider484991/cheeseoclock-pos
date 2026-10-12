@@ -18,6 +18,8 @@ const BATCH: VoucherBatchSummary = {
   gives: 'One Large pizza from the Regular menu',
   coversCents: 189_900,
   goodUntil: null,
+  for: { categoryIds: ['c1'], size: 'Large', wholeItem: true },
+  forCategoryNames: ['Pizza'],
   createdAt: '2026-10-12T09:00:00.000Z',
   createdByName: 'Test Owner',
   count: 3,
@@ -67,7 +69,7 @@ describe('the Vouchers page', () => {
     const words = text(render([BATCH], { batch: BATCH, vouchers: ROWS }));
     expect(words).toContain('abhi No. 001–003 One Large pizza from the Regular menu');
     expect(words).toContain('1 of 3 used · 1 on an order not paid yet · 1 not used');
-    expect(words).toContain('Covers up to Rs 1,899 · no end date');
+    expect(words).toContain('Large · Pizza · the whole item · no end date');
     // The used one: its day, its order, what it was used on, the customer and who put it on.
     expect(words).toContain('001 AB3C Used 14 Oct, 3:05 pm #0042 Test Fajita Pizza — Large (−Rs 1,899) Test Customer Test Cashier');
     expect(words).toContain('002 XK7P On an order 14 Oct, 3:00 pm #0043');
@@ -92,7 +94,7 @@ describe('the Vouchers page', () => {
 
   it('no vouchers yet: how to add them', () => {
     expect(text(render([], null))).toContain(
-      'No vouchers yet. Add a client’s vouchers: paste the printed list, or let the till make the codes.',
+      'No vouchers yet. Add a client’s vouchers: choose the CSV of the printed list, or let the till make the codes. Settings → Vouchers says what they are for.',
     );
   });
 });
