@@ -97,8 +97,14 @@ export function settingsBlockFor(
   const online = readOnlineOptions(db);
   const block = buildSettingsBlock({
     zones: readDeliveryZones(db),
-    // alsoDelivery (v0.7.37) reaches the block only when ticked (buildSettingsBlock).
-    pickup: { offered: pickup.offered, percent: pickup.percent, alsoDelivery: pickup.alsoDelivery },
+    // alsoDelivery (v0.7.37) reaches the block only when ticked, and a category's own % (v0.7.50)
+    // only when there is one (buildSettingsBlock): otherwise the block is the one before, byte for byte.
+    pickup: {
+      offered: pickup.offered,
+      percent: pickup.percent,
+      alsoDelivery: pickup.alsoDelivery,
+      ...(pickup.categoryPercents ? { categoryPercents: pickup.categoryPercents } : {}),
+    },
     stamps,
     menuItems,
     deviceId,

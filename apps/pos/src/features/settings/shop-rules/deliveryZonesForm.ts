@@ -12,6 +12,7 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import {
   DELIVERY_FEE_MAX_CENTS,
   SHOP_SETTING_FORMAT,
+  WEBSITE_CATEGORY_PERCENTS_MAX,
   WEBSITE_PICKUP_MAX_PERCENT,
   deliveryChargeItemName,
   newDeliveryZoneId,
@@ -20,6 +21,7 @@ import {
   type DeliveryZoneSetting,
   type DeliveryZones,
   type SettingsPublishStatus,
+  type WebsiteCategoryPercent,
   type WebsitePickup,
 } from '@cheeseoclock/shared-types';
 import { centsFromRupeesText } from './foodpandaWords';
@@ -184,15 +186,28 @@ export const PICKUP_INTRO =
 
 // --------------------------------------------------------------- pick-up --
 
+/** One category with its own % (v0.7.50), as typed: '' = not picked yet. */
+export interface PickupCategoryRow {
+  categoryId: string;
+  percent: string;
+}
+
 export interface PickupForm {
   offered: boolean;
   percent: string;
   /** v0.7.37: the % also comes off a website delivery's food. */
   alsoDelivery: boolean;
+  /** v0.7.50 (WEBSITE DISCOUNT BY CATEGORY): categories at their own %, in the owner's order. */
+  categories: PickupCategoryRow[];
 }
 
 export function pickupToForm(p: WebsitePickup): PickupForm {
-  return { offered: p.offered, percent: String(p.percent), alsoDelivery: p.alsoDelivery };
+  return {
+    offered: p.offered,
+    percent: String(p.percent),
+    alsoDelivery: p.alsoDelivery,
+    categories: (p.categoryPercents ?? []).map((c) => ({ categoryId: c.categoryId, percent: String(c.percent) })),
+  };
 }
 
 export function pickupFromForm(f: PickupForm): Parsed<WebsitePickup> {
@@ -203,21 +218,44 @@ export function pickupFromForm(f: PickupForm): Parsed<WebsitePickup> {
       problem: `The website discount is a whole % from 0 to ${WEBSITE_PICKUP_MAX_PERCENT}.`,
     };
   }
+  const categoryPercents: WebsiteCategoryPercent[] = [];
+  for (const row of f.categories) {
+    if (!row.categoryId) return { value: null, problem: 'Pick a category on every row, or remove the row.' };
+    const pt = row.percent.trim();
+    if (!/^\d{1,3}$/.test(pt) || Number(pt) < 1 || Number(pt) > WEBSITE_PICKUP_MAX_PERCENT) {
+      return { value: null, problem: `A category's own % is a whole % from 1 to ${WEBSITE_PICKUP_MAX_PERCENT}.` };
+    }
+    if (categoryPercents.some((c) => c.categoryId === row.categoryId)) {
+      return { value: null, problem: 'A category is listed twice: give it one %.' };
+    }
+    categoryPercents.push({ categoryId: row.categoryId, percent: Number(pt) });
+  }
+  if (categoryPercents.length > WEBSITE_CATEGORY_PERCENTS_MAX) {
+    return { value: null, problem: `At most ${WEBSITE_CATEGORY_PERCENTS_MAX} categories can have their own %.` };
+  }
   return {
     value: {
       v: SHOP_SETTING_FORMAT['discounts.websitePickup'],
       offered: f.offered,
       percent: Number(t),
       alsoDelivery: f.alsoDelivery,
+      // Written only when there is one: with none the value is the one before, byte for byte.
+      ...(categoryPercents.length > 0 ? { categoryPercents } : {}),
     },
     problem: null,
   };
 }
 
-export function pickupSummary(p: WebsitePickup): string {
+/** "Pizza 20%, Signature Pizzas 15%": the categories with their own %, by name (one gone from the menu: "a category"). */
+export function categoryPercentsWords(list: ReadonlyArray<WebsiteCategoryPercent>, nameOf: (id: string) => string | null): string {
+  return list.map((c) => `${nameOf(c.categoryId) ?? 'a category'} ${c.percent}%`).join(', ');
+}
+
+export function pickupSummary(p: WebsitePickup, nameOf: (id: string) => string | null = () => null): string {
   const delivery = p.alsoDelivery && p.percent > 0 ? `; delivery orders ${p.percent}% off the food` : '';
-  if (!p.offered) return `Pick-up not offered on the website${delivery}`;
-  return (p.percent > 0 ? `Pick-up offered, ${p.percent}% off` : 'Pick-up offered, no discount') + delivery;
+  const own = p.categoryPercents && p.categoryPercents.length > 0 ? `; ${categoryPercentsWords(p.categoryPercents, nameOf)} instead` : '';
+  if (!p.offered) return `Pick-up not offered on the website${delivery}${own}`;
+  return (p.percent > 0 ? `Pick-up offered, ${p.percent}% off` : 'Pick-up offered, no discount') + delivery + own;
 }
 
 /** Rs 2,000 of food: the example's order. */
@@ -233,6 +271,19 @@ export function pickupExample(p: Pick<WebsitePickup, 'offered' | 'percent'> & { 
   if (p.percent === 0)
     return `A ${formatCents(PICKUP_EXAMPLE_CENTS)} pick-up order pays ${formatCents(PICKUP_EXAMPLE_CENTS)} (no discount).`;
   return `A ${formatCents(PICKUP_EXAMPLE_CENTS)} pick-up order gets ${p.percent}% off: ${formatCents(off)} off, ${formatCents(PICKUP_EXAMPLE_CENTS - off)} before tax.${delivery} The till bills exactly what the website showed.`;
+}
+
+/** The categories' own %: what it means, in the owner's words. */
+export const PICKUP_CATEGORIES_NOTE =
+  'Like Pizza at 20% while the rest of the menu gets the % above. It goes wherever the website discount goes (pick-up, and delivery when ticked), never on value deals or a delivery charge. The till bills exactly what the website showed.';
+
+/** "Pizza gets 20% instead: a Rs 2,000 one is Rs 400 off." — the first category's, for the example. */
+export function categoryPercentsExample(list: ReadonlyArray<WebsiteCategoryPercent>, nameOf: (id: string) => string | null): string {
+  const first = list[0];
+  if (!first) return '';
+  const off = Math.round((PICKUP_EXAMPLE_CENTS * first.percent) / 100);
+  const more = list.length > 1 ? ` (and ${categoryPercentsWords(list.slice(1), nameOf)})` : '';
+  return `${nameOf(first.categoryId) ?? 'That category'} gets ${first.percent}% instead${more}: a ${formatCents(PICKUP_EXAMPLE_CENTS)} one is ${formatCents(off)} off.`;
 }
 
 export const PICKUP_PRINTED_MENU_NOTE =

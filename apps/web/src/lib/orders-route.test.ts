@@ -935,3 +935,134 @@ describe('POST /api/orders — Buy 1 Get 1 deals (owner, 7 Oct 2026)', () => {
     expect((await stored(social.json.data!.orderId)).notes).toBe('Social: @ahmed_k');
   });
 });
+
+describe('POST /api/orders — a category’s own % (v0.7.50, WEBSITE DISCOUNT BY CATEGORY)', () => {
+  const PIZZA_20 = [{ categoryId: 'c-pizza', percent: 20 }];
+  /** menu(true) with Big Two marked as a value deal (v0.7.34+). */
+  function dealsMenu(): PublishedMenu {
+    const m = menu(true);
+    m.categories.splice(2, 0, {
+      posCategoryId: 'c-deals',
+      name: 'Value Deals',
+      displayOrder: 5,
+      items: [item('big-two', 'Big Two', 3600, { noDiscount: true })],
+    });
+    return m;
+  }
+  /** The till's block by its own code: 10% off, Pizza its own 20% (or none), "also on delivery orders" as given. */
+  function tillBlock(m: PublishedMenu, alsoDelivery: boolean, categoryPercents = PIZZA_20, version = 1): PublishedSettings {
+    return buildSettingsBlock({
+      zones: DEFAULT_DELIVERY_ZONES.zones.map((z) => ({ ...z, aliases: [...z.aliases], hints: [...z.hints] })),
+      pickup: { offered: true, percent: 10, alsoDelivery, categoryPercents },
+      stamps: [{ version, updatedAt: `2026-10-13T10:0${version}:00.000Z` }],
+      menuItems: m.categories.flatMap((c) => c.items.map((i) => ({ id: i.posItemId, name: i.name, basePriceCents: i.basePriceCents }))),
+      deviceId: 'till-1',
+    });
+  }
+  async function setUp(alsoDelivery: boolean, categoryPercents = PIZZA_20, version = 1) {
+    const m = dealsMenu();
+    expect((await bridgeMenu.PUT(bridge('/api/bridge/menu', { method: 'PUT', body: m }))).status).toBe(200);
+    const save = await bridgeSettings.PUT(
+      bridge('/api/bridge/settings', {
+        method: 'PUT',
+        body: { settings: tillBlock(m, alsoDelivery, categoryPercents, version), feeItems: [] },
+      }),
+    );
+    expect(save.status).toBe(200);
+  }
+  async function shown(): Promise<Record<string, unknown>> {
+    return ((await (await storeStatus.GET()).json()) as { data: Record<string, unknown> }).data;
+  }
+  async function partsStored(id: string): Promise<unknown> {
+    const rows = (await db.pg.query('SELECT discount_parts_json FROM web_orders WHERE id = $1', [id])).rows as Array<{
+      discount_parts_json: string | null;
+    }>;
+    return rows[0]!.discount_parts_json;
+  }
+  /** The order as the till pulls it (every earlier order set aside, so the pull's 25 are never in the way). */
+  async function toTill(id: string): Promise<Record<string, unknown>> {
+    await db.pg.query(`UPDATE web_orders SET status = 'accepted' WHERE status = 'new' AND id <> $1`, [id]);
+    const json = (await (await bridgeOrders.GET(bridge('/api/bridge/orders'))).json()) as { data: Array<Record<string, unknown>> };
+    return json.data.find((o) => o['id'] === id)!;
+  }
+  const line = (posItemId: string) => ({ posItemId, quantity: 1, modifierIds: [] });
+  const ALL = ['pickup', 'delivery_discount', 'category_discount'];
+
+  it('off while the listening till cannot bill the parts: a pizza gets the main 10%, nothing stored, nothing shown', async () => {
+    await heartbeat(['pickup', 'delivery_discount']);
+    await setUp(true);
+    const s = await shown();
+    expect(s['pickupDiscountPercent']).toBe(10);
+    expect(s).not.toHaveProperty('pickupCategoryPercents');
+    expect(s).not.toHaveProperty('deliveryCategoryPercents');
+    const r = await place({ fulfilment: 'pickup', addressLine: undefined, items: [line('fajita-l')] });
+    expect(r.json.data).toMatchObject({ subtotalCents: 200_000, discountCents: 20_000 });
+    expect(await partsStored(r.json.data!.orderId)).toBeNull();
+    expect(await toTill(r.json.data!.orderId)).not.toHaveProperty('discountParts');
+  });
+
+  it('on: a pick-up of Big Two + a pizza + fries — 20% off the pizza, 10% off the fries, Big Two in full; the parts go to the till', async () => {
+    await heartbeat(ALL);
+    await setUp(true);
+    expect(await shown()).toMatchObject({ pickupCategoryPercents: PIZZA_20, deliveryCategoryPercents: PIZZA_20 });
+    const r = await place({ fulfilment: 'pickup', addressLine: undefined, items: [line('big-two'), line('fajita-l'), line('loaded')] });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    // Rs 400 off the Rs 2,000 pizza, Rs 70 off the Rs 700 fries; tax 15% on what is left of each line.
+    expect(r.json.data).toEqual({
+      orderId: r.json.data!.orderId,
+      fulfilment: 'pickup',
+      subtotalCents: 630_000,
+      discountCents: 47_000,
+      taxCents: 54_000 + 24_000 + 9_450,
+      totalCents: 630_000 - 47_000 + 87_450,
+      replayed: false,
+    });
+    const parts = [
+      { percent: 20, categoryId: 'c-pizza' },
+      { percent: 10, categoryId: null },
+    ];
+    expect(await partsStored(r.json.data!.orderId)).toBe(JSON.stringify(parts));
+    const order = await toTill(r.json.data!.orderId);
+    expect(order).toMatchObject({ fulfilment: 'pickup', discountCents: 47_000, discountParts: parts });
+  });
+
+  it('an order with no pizza is priced, stored and pulled exactly as before', async () => {
+    await heartbeat(ALL);
+    await setUp(true);
+    const r = await place({ fulfilment: 'pickup', addressLine: undefined, items: [line('big-two'), line('loaded')] });
+    expect(r.json.data).toMatchObject({ subtotalCents: 430_000, discountCents: 7_000 });
+    expect(await partsStored(r.json.data!.orderId)).toBeNull();
+    const order = await toTill(r.json.data!.orderId);
+    expect(order).not.toHaveProperty('discountParts');
+    expect(webOrderPickupPercent(order as unknown as Parameters<typeof webOrderPickupPercent>[0])).toBe(10);
+  });
+
+  it('a delivery: the pizza’s 20% only with "Also on delivery orders" ticked, and never on the charge', async () => {
+    await heartbeat(ALL);
+    await setUp(false);
+    expect(await shown()).not.toHaveProperty('deliveryCategoryPercents');
+    let r = await place({ zoneId: 'dha-6', items: [line('fajita-l')] });
+    expect(r.json.data).toMatchObject({ subtotalCents: 220_000, discountCents: 0 });
+    expect(await partsStored(r.json.data!.orderId)).toBeNull();
+    await setUp(true, PIZZA_20, 2);
+    r = await place({ zoneId: 'dha-6', items: [line('fajita-l')] });
+    // Rs 400 off the pizza; the Rs 200 charge in full; no other food, so no main part.
+    expect(r.json.data).toMatchObject({ subtotalCents: 220_000, discountCents: 40_000, taxCents: 24_000 + 3_000 });
+    expect(await partsStored(r.json.data!.orderId)).toBe(JSON.stringify([{ percent: 20, categoryId: 'c-pizza' }]));
+  });
+
+  it('a till before 0.7.50 beating in turns it off again; the owner removing the row does too', async () => {
+    await heartbeat(ALL);
+    await setUp(true);
+    await heartbeat(['pickup', 'delivery_discount']);
+    expect(await shown()).not.toHaveProperty('pickupCategoryPercents');
+    let r = await place({ fulfilment: 'pickup', addressLine: undefined, items: [line('fajita-l')] });
+    expect(r.json.data).toMatchObject({ discountCents: 20_000 });
+    await heartbeat(ALL);
+    await setUp(true, [], 2);
+    expect(await shown()).not.toHaveProperty('pickupCategoryPercents');
+    r = await place({ fulfilment: 'pickup', addressLine: undefined, items: [line('fajita-l')] });
+    expect(r.json.data).toMatchObject({ discountCents: 20_000 });
+    expect(await partsStored(r.json.data!.orderId)).toBeNull();
+  });
+});

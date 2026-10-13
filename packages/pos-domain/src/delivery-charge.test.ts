@@ -486,6 +486,24 @@ describe('buildSettingsBlock (the website’s settings block)', () => {
     expect(settingsBlockProblem(on, menu)).toBeNull();
   });
 
+  it('v0.7.50: a category’s own % goes in the block only when there is one — none, the pick-up is byte-for-byte today’s', () => {
+    const base = { zones: DEFAULT_DELIVERY_ZONES.zones, stamps: [], menuItems, deviceId: 'till-a' };
+    const pizza = [{ categoryId: 'cat-pizza', percent: 20 }];
+    const own = buildSettingsBlock({ ...base, pickup: { offered: true, percent: 10, alsoDelivery: true, categoryPercents: pizza } });
+    expect(own.pickup).toEqual({ offered: true, percent: 10, alsoDelivery: true, categoryPercents: pizza });
+    // Only the two fields go, whatever the caller's rows carry.
+    const extra = buildSettingsBlock({
+      ...base,
+      pickup: { offered: true, percent: 10, categoryPercents: [{ ...pizza[0]!, name: 'Pizza' } as (typeof pizza)[number]] },
+    });
+    expect(JSON.stringify(extra.pickup)).toBe('{"offered":true,"percent":10,"categoryPercents":[{"categoryId":"cat-pizza","percent":20}]}');
+    for (const categoryPercents of [[], undefined]) {
+      const none = buildSettingsBlock({ ...base, pickup: { offered: true, percent: 10, alsoDelivery: true, categoryPercents } });
+      expect(JSON.stringify(none.pickup)).toBe('{"offered":true,"percent":10,"alsoDelivery":true}');
+    }
+    expect(settingsBlockProblem(own, menu)).toBeNull();
+  });
+
   it('a switched-off area is still in the block (its page stays), and a missing fee item is caught before sending', () => {
     const zones = zonesWith((z) =>
       z.id === 'emaar'

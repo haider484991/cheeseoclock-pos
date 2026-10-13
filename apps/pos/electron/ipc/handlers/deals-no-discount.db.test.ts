@@ -989,4 +989,199 @@ live('website orders: the bridge follows what the website showed the customer', 
     expect(orderRow(orderId)).toEqual({ subtotal_cents: 510_000, discount_cents: 15_000, tax_cents: 74_250, total_cents: 569_250 });
     receivedWithoutMismatch(orderId, web.totalCents);
   });
+
+  /**
+   * v0.7.50 (WEBSITE DISCOUNT BY CATEGORY): an order the website priced with a category's own % (the
+   * pizzas at 20% beside 10% off the rest) carries its parts; the bridge bills them as the owner's
+   * offers' rows, each over its own lines (the offers engine) — the website's total, no "total changed",
+   * and the same shares on the snapshot and the FBR invoice. Burgers are a category of their own here.
+   */
+  type PartsPriceOrder = (
+    lines: Array<PricedLine & { categoryId?: string | null }>,
+    pct?: number,
+    own?: Array<{ categoryId: string; percent: number }>,
+  ) => ReturnType<PriceOrder> & { discountParts?: Array<{ percent: number; categoryId: string | null }> };
+  async function addBurger(): Promise<string> {
+    const { createCategory } = await import('../../db/repositories/category-repo.js');
+    const { createMenuItem } = await import('../../db/repositories/menu-item-repo.js');
+    const taxCategoryId = String((db.prepare(`SELECT tax_category_id FROM menu_items WHERE id = ?`).get(menu.pizza) as Row)['tax_category_id']);
+    const burgers = createCategory(db as never, { name: 'Test Burgers', displayOrder: 4, colorHex: '#225500' }, MGR_ACTOR);
+    return createMenuItem(db as never, { categoryId: burgers.id, name: 'Test Burger', basePriceCents: 80_000, taxCategoryId }, MGR_ACTOR).id;
+  }
+  const categoryOf = (itemId: string) => String((db.prepare(`SELECT category_id FROM menu_items WHERE id = ?`).get(itemId) as Row)['category_id']);
+  /** A website order priced by the website's own maths with categories of their own: [menu item id, quantity, flagged]. */
+  async function webOrderByParts(
+    id: string,
+    fulfilment: 'pickup' | 'delivery',
+    lines: Array<[string, number, true?]>,
+    pct: number,
+    own: Array<{ categoryId: string; percent: number }>,
+  ): Promise<WebOrder> {
+    const priceOrder = (await websitePricing()) as unknown as PartsPriceOrder;
+    const items = lines.map(([itemId, quantity, flagged]) => {
+      const row = db.prepare(`SELECT name, base_price_cents FROM menu_items WHERE id = ?`).get(itemId) as Row;
+      return {
+        posItemId: itemId,
+        name: String(row['name']),
+        quantity,
+        unitPriceCents: Number(row['base_price_cents']),
+        modifiers: [],
+        notes: null,
+        ...(flagged ? { noDiscount: true } : {}),
+      };
+    });
+    const shown = priceOrder(
+      items.map((i) => ({
+        lineTotalCents: i.unitPriceCents * i.quantity,
+        taxRateBps: 1_500,
+        ...(i.noDiscount || /^delivery charge/i.test(i.name) ? { noDiscount: true } : {}),
+        categoryId: categoryOf(i.posItemId),
+      })),
+      pct,
+      own,
+    );
+    return {
+      id,
+      status: 'new',
+      customerName: 'Web Customer',
+      customerPhone: '03111234567',
+      addressLine: fulfilment === 'pickup' ? 'Collect from the shop' : 'Flat 2, Web Road',
+      area: fulfilment === 'pickup' ? null : 'Test Area',
+      notes: null,
+      fulfilment,
+      items,
+      subtotalCents: shown.subtotalCents,
+      discountCents: shown.discountCents,
+      taxCents: shown.taxCents,
+      totalCents: shown.totalCents,
+      paymentMethod: 'cod',
+      createdAt: new Date().toISOString(),
+      posOrderId: null,
+      posOrderNumber: null,
+      ...(shown.discountParts ? { discountParts: shown.discountParts } : {}),
+    };
+  }
+  /** Each live discount row's offer: its name, %, amount and the lines it came off (by the names they were sold under). */
+  const offerRows = (orderId: string) => {
+    const names = new Map(
+      (db.prepare(`SELECT id, menu_item_name AS name FROM order_items WHERE order_id = ?`).all(orderId) as Row[]).map((r) => [r['id'], r['name']]),
+    );
+    return liveDiscounts(orderId).map((r) => {
+      const rule = ruleOf(r) as { from: string; offer: { id: string; name: string; categoryIds?: string[] }; lines?: string[] };
+      return {
+        source: r['source'],
+        value: r['value'],
+        amount: r['amount_cents'],
+        from: rule.from,
+        offerId: rule.offer.id,
+        name: rule.offer.name,
+        lines: (rule.lines ?? []).map((l) => names.get(l)),
+      };
+    });
+  };
+
+  it('v0.7.50: a pick-up of Big Two (flagged) + 2 pizzas + a burger, the pizzas at 20%, the rest 10% — two offer rows, the website’s total, no “total changed”', async () => {
+    const burger = await addBurger();
+    const pizzas = categoryOf(menu.pizza);
+    const web = await webOrderByParts('web-parts-pickup', 'pickup', [[menu.bigTwo, 1, true], [menu.pizza, 2], [burger, 1]], 10, [
+      { categoryId: pizzas, percent: 20 },
+    ]);
+    // 20% of the Rs 3,000 of pizza, 10% of the Rs 800 burger; Big Two in full. Tax 15% of what is left of each line.
+    expect(web).toMatchObject({
+      subtotalCents: 740_000,
+      discountCents: 68_000,
+      taxCents: 54_000 + 36_000 + 10_800,
+      totalCents: 740_000 - 68_000 + 100_800,
+      discountParts: [
+        { percent: 20, categoryId: pizzas },
+        { percent: 10, categoryId: null },
+      ],
+    });
+    const orderId = await importWebOrder(web);
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 740_000, discount_cents: 68_000, tax_cents: 100_800, total_cents: 772_800 });
+    expect(marks(orderId)).toEqual({ 'Big Two': 1, 'Test Fajita Pizza': 0, 'Test Burger': 0 });
+    expect(offerRows(orderId)).toEqual([
+      {
+        source: 'offer',
+        value: 20,
+        amount: 60_000,
+        from: 'till',
+        offerId: `website-category-${pizzas}`,
+        name: 'Website 20% off Test Pizzas',
+        lines: ['Test Fajita Pizza'],
+      },
+      { source: 'offer', value: 10, amount: 8_000, from: 'till', offerId: 'website', name: 'Website pick-up 10% off', lines: ['Test Burger'] },
+    ]);
+    expect(liveDiscounts(orderId).every((r) => r['approved_by_user_id'] === 'u_admin')).toBe(true);
+    receivedWithoutMismatch(orderId, 772_800);
+    const s = await snap(orderId);
+    expect(s.discounts).toHaveLength(2);
+    expect(fbrLines(s)).toEqual({
+      'Test Fajita Pizza': { net: 2_400, tax: 360, discount: 600 },
+      'Test Burger': { net: 720, tax: 108, discount: 80 },
+      'Big Two': { net: 3_600, tax: 540, discount: undefined },
+    });
+    expect(fbrTax(s)).toBe(100_800);
+  });
+
+  it('v0.7.50: a delivery of a pizza + a burger + the Rs 200 charge, the pizza at 20%, the food 10% — never the charge', async () => {
+    const burger = await addBurger();
+    const pizzas = categoryOf(menu.pizza);
+    const web = await webOrderByParts('web-parts-delivery', 'delivery', [[menu.pizza, 1], [burger, 1], [menu.charge, 1]], 10, [
+      { categoryId: pizzas, percent: 20 },
+    ]);
+    // Rs 300 off the pizza, Rs 80 off the burger, the charge in full.
+    expect(web).toMatchObject({ subtotalCents: 250_000, discountCents: 38_000, taxCents: 18_000 + 10_800 + 3_000, totalCents: 243_800 });
+    const orderId = await importWebOrder(web);
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 250_000, discount_cents: 38_000, tax_cents: 31_800, total_cents: 243_800 });
+    expect(offerRows(orderId).map((r) => [r.name, r.amount, r.lines])).toEqual([
+      ['Website 20% off Test Pizzas', 30_000, ['Test Fajita Pizza']],
+      ['Website delivery 10% off', 8_000, ['Test Burger']],
+    ]);
+    receivedWithoutMismatch(orderId, 243_800);
+    expect(fbrLines(await snap(orderId))['Delivery Charge (Rs 200)']).toMatchObject({ net: 200, discount: undefined });
+  });
+
+  it('v0.7.50: only pizzas (and a deal): one row, the pizzas’ own %; an order with no pizza carries no parts and imports as before', async () => {
+    const burger = await addBurger();
+    const pizzas = categoryOf(menu.pizza);
+    const own = [{ categoryId: pizzas, percent: 20 }];
+    const onlyPizza = await webOrderByParts('web-parts-only-pizza', 'pickup', [[menu.pizza, 1], [menu.bigTwo, 1, true]], 10, own);
+    expect(onlyPizza).toMatchObject({ discountCents: 30_000, discountParts: [{ percent: 20, categoryId: pizzas }] });
+    let orderId = await importWebOrder(onlyPizza);
+    expect(offerRows(orderId).map((r) => [r.name, r.amount])).toEqual([['Website 20% off Test Pizzas', 30_000]]);
+    expect(orderRow(orderId)).toMatchObject({ discount_cents: 30_000, total_cents: onlyPizza.totalCents });
+    receivedWithoutMismatch(orderId, onlyPizza.totalCents);
+
+    h.received = [];
+    const noPizza = await webOrderByParts('web-parts-no-pizza', 'pickup', [[burger, 1], [menu.bigTwo, 1, true]], 10, own);
+    expect(noPizza).not.toHaveProperty('discountParts');
+    expect(noPizza.discountCents).toBe(8_000);
+    orderId = await importWebOrder(noPizza);
+    const [row] = liveDiscounts(orderId);
+    expect(liveDiscounts(orderId)).toHaveLength(1);
+    expect(row).toMatchObject({ source: null, value: 10, amount_cents: 8_000 });
+    expect(ruleOf(row)).toEqual({ kind: 'discount_base', v: 1, alsoOffDeliveryCharge: true, from: 'website', skipsNoDiscountLines: true });
+    receivedWithoutMismatch(orderId, noPizza.totalCents);
+  });
+
+  it('v0.7.50: parts the till cannot read (a % over 50, a category twice, no category part) import the order as before, by its %', async () => {
+    const pizzas = categoryOf(menu.pizza);
+    for (const [i, bad] of [
+      [{ percent: 60, categoryId: pizzas }],
+      [
+        { percent: 20, categoryId: pizzas },
+        { percent: 25, categoryId: pizzas },
+      ],
+      [{ percent: 10, categoryId: null }],
+      'Pizza 20%',
+    ].entries()) {
+      h.received = [];
+      const web = await webOrder(`web-parts-bad-${i}`, 'pickup', [['pizza', 1]], 10);
+      const orderId = await importWebOrder({ ...web, discountParts: bad as never });
+      expect(liveDiscounts(orderId)).toHaveLength(1);
+      expect(liveDiscounts(orderId)[0]).toMatchObject({ source: null, value: 10, amount_cents: 15_000 });
+      receivedWithoutMismatch(orderId, web.totalCents);
+    }
+  });
 });

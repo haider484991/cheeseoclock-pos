@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DELIVERY_ZONES } from '@cheeseoclock/shared-types';
 import {
+  PICKUP_CATEGORIES_NOTE,
   PICKUP_INTRO,
   ZONES_SAVED_TOAST,
   ZONES_SAVE_NOTE,
   moveZoneRow,
   newZoneRow,
+  categoryPercentsExample,
   pickupExample,
   pickupFromForm,
   pickupSummary,
@@ -85,12 +87,12 @@ describe('Settings → Delivery areas: the form', () => {
 
 describe('Settings → Money & discounts: website pick-up', () => {
   it('a whole % from 0 to 50; the example is built from the value', () => {
-    expect(pickupFromForm({ offered: true, percent: '15', alsoDelivery: false })).toEqual({
+    expect(pickupFromForm({ offered: true, percent: '15', alsoDelivery: false, categories: [] })).toEqual({
       value: { v: 2, offered: true, percent: 15, alsoDelivery: false },
       problem: null,
     });
-    expect(pickupFromForm({ offered: true, percent: '51', alsoDelivery: false }).problem).toMatch(/0 to 50/);
-    expect(pickupFromForm({ offered: true, percent: '7.5', alsoDelivery: false }).problem).toMatch(/whole %/);
+    expect(pickupFromForm({ offered: true, percent: '51', alsoDelivery: false, categories: [] }).problem).toMatch(/0 to 50/);
+    expect(pickupFromForm({ offered: true, percent: '7.5', alsoDelivery: false, categories: [] }).problem).toMatch(/whole %/);
     expect(pickupExample({ offered: true, percent: 10 })).toMatch(
       /Rs 2,000 pick-up order gets 10% off: Rs 200 off, Rs 1,800/,
     );
@@ -112,6 +114,39 @@ describe('Settings → Money & discounts: website pick-up', () => {
     expect(pickupSummary({ ...value, alsoDelivery: false })).toBe('Pick-up offered, 10% off');
     // The card says the % never touches value deals or the delivery charge.
     expect(PICKUP_INTRO).toMatch(/never taken off value deals or a delivery charge/);
+  });
+
+  it('v0.7.50: a category at its own % — saved only when there is one, each category once, a whole % from 1 to 50', () => {
+    const base = { offered: true, percent: '10', alsoDelivery: true };
+    // None: the value is the one before, byte for byte (no key at all).
+    const none = pickupFromForm({ ...base, categories: [] }).value!;
+    expect(Object.keys(none)).not.toContain('categoryPercents');
+    // Pizza 20%: saved, and back to the same rows.
+    const withPizza = pickupFromForm({ ...base, categories: [{ categoryId: 'cat-pizza', percent: '20' }] });
+    expect(withPizza).toEqual({
+      value: { v: 2, offered: true, percent: 10, alsoDelivery: true, categoryPercents: [{ categoryId: 'cat-pizza', percent: 20 }] },
+      problem: null,
+    });
+    expect(pickupToForm(withPizza.value!).categories).toEqual([{ categoryId: 'cat-pizza', percent: '20' }]);
+    // Refused, in words: no category picked, a % outside 1–50, a category twice.
+    expect(pickupFromForm({ ...base, categories: [{ categoryId: '', percent: '20' }] }).problem).toMatch(/Pick a category/);
+    expect(pickupFromForm({ ...base, categories: [{ categoryId: 'cat-pizza', percent: '0' }] }).problem).toMatch(/1 to 50/);
+    expect(pickupFromForm({ ...base, categories: [{ categoryId: 'cat-pizza', percent: '60' }] }).problem).toMatch(/1 to 50/);
+    expect(
+      pickupFromForm({
+        ...base,
+        categories: [
+          { categoryId: 'cat-pizza', percent: '20' },
+          { categoryId: 'cat-pizza', percent: '15' },
+        ],
+      }).problem,
+    ).toMatch(/listed twice/);
+    // The words name the categories.
+    const names = (id: string) => (id === 'cat-pizza' ? 'Pizza' : null);
+    expect(pickupSummary(withPizza.value!, names)).toBe('Pick-up offered, 10% off; delivery orders 10% off the food; Pizza 20% instead');
+    expect(categoryPercentsExample(withPizza.value!.categoryPercents!, names)).toBe('Pizza gets 20% instead: a Rs 2,000 one is Rs 400 off.');
+    expect(categoryPercentsExample([], names)).toBe('');
+    expect(PICKUP_CATEGORIES_NOTE).toMatch(/never on value deals or a delivery charge/);
   });
 });
 

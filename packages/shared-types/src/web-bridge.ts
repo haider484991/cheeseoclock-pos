@@ -15,6 +15,7 @@
  * All money in cents, all rates in basis points — same discipline as the POS.
  */
 
+import type { WebDiscountPart, WebsiteCategoryPercent } from './website-category-discount.js';
 import type { Buy1Get1Rules } from './buy-1-get-1.js';
 import type { ClosedNotice, WebsiteAnnouncement } from './website-messages.js';
 import type { ShopHours, ShopProfile, ShopWebsite, WebsiteHome } from './website-shop.js';
@@ -498,6 +499,49 @@ export interface PublishedMenu {
 // it ("update the till"), and takes it by itself once updated.
 
 // ---------------------------------------------------------------------------
+// v0.7.50 — WEBSITE DISCOUNT BY CATEGORY (owner, 13 Oct 2026: "20% off
+// regular pizzas everywhere", beside 10% off website orders). The contract
+// between the till and the website. Maths and helpers:
+// website-category-discount.ts.
+// ---------------------------------------------------------------------------
+//
+// THE SETTING. 'discounts.websitePickup' gains `categoryPercents` (still
+// format 2, written only when there is one): categories whose items take
+// their own % (1–50) instead of `percent`, wherever the website's % applies —
+// a pick-up, and a delivery when `alsoDelivery`. Never a value deal, never
+// the delivery charge.
+//
+// THE BLOCK. The block's `pickup` carries `categoryPercents` only when there
+// is one; a block without it = no category has its own % (today).
+//
+// THE HEARTBEAT. A till of v0.7.50 lists 'category_discount' in `features`.
+//
+// THE WEBSITE (v0.7.50), on the SERVER from the stored block:
+//   - prices a category's own % only while the listening till announces
+//     'category_discount' AND the shop is accepting; the store status says
+//     them as `pickupCategoryPercents` / `deliveryCategoryPercents` (absent =
+//     none), the delivery ones only when the delivery % applies;
+//   - works the parts with websiteDiscountParts (the till's offers engine,
+//     rule for rule) and each line's tax on what is left of it;
+//   - stores the parts on the order (web_orders.discount_parts_json) ONLY
+//     when a category part took something off (discountPartsToSend), and
+//     hands them to the till as `discountParts`; every other order is
+//     exactly today's;
+//   - the cards and the cart say the category's own % ("20% off").
+//
+// THE TILL (v0.7.50):
+//   - an order carrying `discountParts` (readDiscountParts) is billed with
+//     one row per part: the owner's offers engine's rows (source 'offer'),
+//     each over its own lines (its category's; the main % the food they
+//     left), worked by recomputeSeveralOffers — exactly the website's maths;
+//   - any other order imports as today.
+//
+// DEPLOY ORDER. The website first (a push to main deploys it), then the
+// tills. Until a till of v0.7.50 announces 'category_discount' AND its owner
+// gives a category its own % (a Save publishes the block), the website is
+// exactly as today.
+
+// ---------------------------------------------------------------------------
 // THE SHOP BLOCK (sweep B2 + B4, after v0.7.30) — the shop's name, numbers,
 // address and social links, its opening hours, its website words and the
 // home page's lineup, from Settings → Shop & logo → "Website: shop details
@@ -797,6 +841,12 @@ export interface PublishedPickup {
    * (every block before v0.7.37, and a till with the box unticked).
    */
   alsoDelivery?: boolean;
+  /**
+   * v0.7.50 (WEBSITE DISCOUNT BY CATEGORY): categories with their own %
+   * instead of `percent`, wherever the website's % applies. Sent ONLY when
+   * there is one; absent = none (every block before v0.7.50).
+   */
+  categoryPercents?: WebsiteCategoryPercent[];
 }
 
 export interface PublishedSettings {
@@ -1136,8 +1186,12 @@ export function webOrderDeliveryPercent(o: {
  * 'delivery_discount' (v0.7.37): the till bills the website's % on a
  * delivery's food; the site only takes it off a delivery while the listening
  * till says so — an older POS would bill the delivery at full price.
+ * 'category_discount' (v0.7.50): the till bills an order's discount parts
+ * (WEBSITE DISCOUNT BY CATEGORY); the site prices a category's own % only
+ * while the listening till says so — an older POS would read the parts as one
+ * blended % and bill a different total.
  */
-export type TillFeature = 'pickup' | 'delivery_discount';
+export type TillFeature = 'pickup' | 'delivery_discount' | 'category_discount';
 
 /**
  * Why a till has stopped the website taking orders by itself. It is kept
@@ -1212,6 +1266,13 @@ export interface WebOrder {
   subtotalCents: number;
   /** The pickup discount the site showed (0 for deliveries). */
   discountCents?: number;
+  /**
+   * v0.7.50 (WEBSITE DISCOUNT BY CATEGORY): the parts of its discount — a %
+   * on some categories' lines, the main % on the rest — when a category's own
+   * % took something off; absent on every other order (one %, read back from
+   * discountCents as before).
+   */
+  discountParts?: WebDiscountPart[];
   taxCents: number;
   totalCents: number;
   paymentMethod: 'cod';

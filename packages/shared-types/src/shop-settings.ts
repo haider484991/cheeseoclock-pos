@@ -39,6 +39,7 @@ import { DEFAULT_BUY_1_GET_1_RULES, type Buy1Get1Rules } from './buy-1-get-1.js'
 import { WASTE_REASONS, WASTE_REASON_DEFAULT_LABEL, type WasteReasonId } from './inventory.js';
 import { DELIVERY_ZONES, type DeliveryZoneSetting } from './delivery-areas.js';
 import { PICKUP_DISCOUNT_PERCENT } from './web-bridge.js';
+import type { WebsiteCategoryPercent } from './website-category-discount.js';
 import { NO_ANNOUNCEMENT, NO_CLOSED_NOTICE, type ClosedNotice, type WebsiteAnnouncement } from './website-messages.js';
 import {
   DEFAULT_SHOP_HOURS,
@@ -715,6 +716,17 @@ export interface WebsitePickup {
   percent: number;
   /** The % also comes off a website DELIVERY's food (not its charge, not value deals). */
   alsoDelivery: boolean;
+  /**
+   * v0.7.50 (WEBSITE DISCOUNT BY CATEGORY, website-category-discount.ts; the
+   * owner, 13 Oct 2026: "20% off regular pizzas everywhere"): categories whose
+   * items take their own % on website orders instead of `percent`, wherever
+   * the website's % applies. Written only when there is one: absent = none,
+   * so a value without it is byte-for-byte the one before. Still format 2,
+   * as the offers' categories were: a till older than 0.7.50 reads a value
+   * WITH it as a newer till's (a field it does not know: shared-schemas
+   * storedFormatIsNewer) and shows the card read-only.
+   */
+  categoryPercents?: WebsiteCategoryPercent[];
 }
 
 /**

@@ -27,6 +27,7 @@ import {
   createOrder,
   addOrderItem,
   applyDiscount,
+  applyWebsiteDiscountParts,
   sendOrderToKitchen,
   findOrder,
   getOrderSnapshot,
@@ -67,6 +68,7 @@ import { localShopStamp, shopBlockFor } from './website-shop-block.js';
 import { onWebsiteSettingsChanged } from './website-settings-events.js';
 import { readDeliveryFeeItemIds, readOnlineOptions } from '../db/business-settings-read.js';
 import { websiteDiscountRule, websiteNeedsSettings, websiteNeedsShop } from '@cheeseoclock/pos-domain';
+import { readDiscountParts } from '@cheeseoclock/shared-types';
 import { orderAlerts } from './order-alerts-hub.js';
 import {
   CHUNKS_FORMAT,
@@ -1818,7 +1820,10 @@ class WebOrdersBridge {
       // delivery, nothing marked, a website older than the mark, which
       // discounted every line) takes the till's own categories, under a % over
       // every line (a delivery's % never over its charge).
-      const followSite = (pickup || deliveryPercent > 0) && web.items.some((l) => l.noDiscount === true);
+      // v0.7.50 (WEBSITE DISCOUNT BY CATEGORY): an order whose discount came in parts — a category's own %
+      // beside the main one — carries them (null for every other order, which imports as before).
+      const parts = readDiscountParts(web.discountParts);
+      const followSite = (pickup || deliveryPercent > 0 || parts !== null) && web.items.some((l) => l.noDiscount === true);
       const order = db.transaction(() => {
         // 1. Local order shell (delivery or takeaway, source web).
         const tag = pickup ? '[web pick-up]' : '[web]';
@@ -1905,7 +1910,12 @@ class WebOrdersBridge {
         // takes off exactly what the customer was shown. On a pick-up the
         // website priced by its flags the rule leaves those lines alone; a
         // pick-up of flagged lines only reads 0% and gets no discount row.
-        if (pickup && pickupPercent > 0) {
+        // The parts, when the order carries them (v0.7.50): one offer row each, over its own lines,
+        // worked by the offers engine exactly as the website priced them. The one-% paths below are
+        // every other order's.
+        if (parts !== null) {
+          applyWebsiteDiscountParts(db, shell.id, parts, actor, { pickup });
+        } else if (pickup && pickupPercent > 0) {
           applyDiscount(
             db,
             {
@@ -1924,7 +1934,7 @@ class WebOrdersBridge {
         // food only — the frozen rule leaves the delivery charge at full price
         // (the website priced it so) and, when the order carries the website's
         // marks, the value deals too. A delivery of value deals only reads 0%.
-        if (!pickup && deliveryPercent > 0) {
+        if (parts === null && !pickup && deliveryPercent > 0) {
           applyDiscount(
             db,
             {

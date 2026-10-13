@@ -37,9 +37,12 @@
  * charge", which is the owner's answer.
  */
 import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import { Bike, Lock, MousePointerClick, ShieldCheck, ShoppingBag } from 'lucide-react';
+import { Bike, Lock, MousePointerClick, Plus, ShieldCheck, ShoppingBag, Trash2 } from 'lucide-react';
+import { ipc } from '../../ipc/client';
+import { useMenuWithoutCharges } from '../menu-mgmt/useMenuCharges';
 import {
   APPROVAL_MAX_FLAT_CENTS,
   APPROVAL_MAX_PERCENT,
@@ -80,14 +83,16 @@ import {
   type PresetsForm,
 } from './shop-rules/discountRules';
 import {
+  PICKUP_CATEGORIES_NOTE,
   PICKUP_INTRO,
   PICKUP_PRINTED_MENU_NOTE,
+  categoryPercentsExample,
   pickupExample,
   pickupFromForm,
   pickupSummary,
   pickupToForm,
 } from './shop-rules/deliveryZonesForm';
-import { WEBSITE_PICKUP_MAX_PERCENT } from '@cheeseoclock/shared-types';
+import { WEBSITE_CATEGORY_PERCENTS_MAX, WEBSITE_PICKUP_MAX_PERCENT, categoryNeverDiscounted } from '@cheeseoclock/shared-types';
 
 const inputClass =
   'w-full rounded-lg border border-stone-300 px-3 py-2 text-sm dark:border-stone-700 dark:bg-stone-800 disabled:opacity-60';
@@ -350,13 +355,30 @@ function WebsitePickupFields({ s }: { s: ReturnType<typeof useShopSetting<'disco
     { offered: true, label: 'Yes', hint: 'Customers can choose “I’ll pick it up” on the website.' },
     { offered: false, label: 'No', hint: 'Delivery only on the website.' },
   ];
+  // v0.7.50: the categories that can have their own % — not the delivery charges', not one never discounted.
+  const catQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
+  const { chargeCategoryIds } = useMenuWithoutCharges();
+  const names = useMemo(() => new Map((catQ.data ?? []).map((c) => [c.id as string, c.name])), [catQ.data]);
+  const nameOf = (id: string) => names.get(id) ?? null;
+  const pickable = useMemo(
+    () =>
+      [...(catQ.data ?? [])]
+        .filter((c) => !chargeCategoryIds.has(c.id) && !categoryNeverDiscounted(c))
+        .sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name))
+        .map((c) => ({ id: c.id as string, name: c.name })),
+    [catQ.data, chargeCategoryIds],
+  );
+  const rows = draft.form.categories;
+  const setRow = (i: number, patch: Partial<(typeof rows)[number]>) =>
+    draft.set({ ...draft.form, categories: rows.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
+  const ownExample = categoryPercentsExample(shown.categoryPercents ?? [], nameOf);
   return (
     <SettingCard
       card={card}
       title="Website pick-up & discount"
       icon={<ShoppingBag className="h-5 w-5" />}
       intro={PICKUP_INTRO}
-      describe={pickupSummary}
+      describe={(v) => pickupSummary(v, nameOf)}
       dirty={dirty}
       problem={parsed.problem}
       busy={s.save.isPending || s.putBack.isPending}
@@ -367,6 +389,7 @@ function WebsitePickupFields({ s }: { s: ReturnType<typeof useShopSetting<'disco
           <p>
             <span className="font-semibold">For example: </span>
             {pickupExample(shown)}
+            {ownExample ? ` ${ownExample}` : ''}
           </p>
           <p className="text-xs">{PICKUP_PRINTED_MENU_NOTE}</p>
         </div>
@@ -422,6 +445,58 @@ function WebsitePickupFields({ s }: { s: ReturnType<typeof useShopSetting<'disco
             </span>
           </label>
         </div>
+      </div>
+      <div className="mt-4 rounded-lg border-2 border-stone-200 p-3 dark:border-stone-700" data-testid="pickup-categories">
+        <p className="text-sm font-semibold">A different % for some categories</p>
+        <p className="mt-0.5 text-xs text-stone-500">{PICKUP_CATEGORIES_NOTE}</p>
+        {rows.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {rows.map((row, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <select
+                  value={row.categoryId}
+                  onChange={(e) => setRow(i, { categoryId: e.target.value })}
+                  aria-label="Category with its own %"
+                  className={cn(inputClass, 'min-w-0 flex-1')}
+                >
+                  <option value="">Pick a category…</option>
+                  {pickable.map((c) => (
+                    <option key={c.id} value={c.id} disabled={c.id !== row.categoryId && rows.some((r) => r.categoryId === c.id)}>
+                      {c.name}
+                    </option>
+                  ))}
+                  {row.categoryId && !pickable.some((c) => c.id === row.categoryId) && (
+                    <option value={row.categoryId}>{nameOf(row.categoryId) ?? 'A category no longer on the menu'}</option>
+                  )}
+                </select>
+                <input
+                  inputMode="numeric"
+                  value={row.percent}
+                  onChange={(e) => setRow(i, { percent: e.target.value.replace(/[^\d]/g, '').slice(0, 3) })}
+                  aria-label="Its % off"
+                  className={cn(inputClass, 'w-20 text-right font-mono')}
+                />
+                <span className="text-sm text-stone-500">% off</span>
+                <button
+                  type="button"
+                  onClick={() => draft.set({ ...draft.form, categories: rows.filter((_, j) => j !== i) })}
+                  className="rounded p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
+                  aria-label="Remove this category"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <button
+          type="button"
+          disabled={rows.length >= WEBSITE_CATEGORY_PERCENTS_MAX}
+          onClick={() => draft.set({ ...draft.form, categories: [...rows, { categoryId: '', percent: '' }] })}
+          className="mt-3 inline-flex items-center gap-1.5 rounded-lg border-2 border-stone-200 px-3 py-1.5 text-sm font-semibold hover:border-stone-300 disabled:opacity-50 dark:border-stone-700"
+        >
+          <Plus className="h-4 w-4" /> Add a category with its own %
+        </button>
       </div>
     </SettingCard>
   );

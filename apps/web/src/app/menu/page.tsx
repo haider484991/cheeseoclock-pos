@@ -82,6 +82,8 @@ export default async function MenuPage() {
             pickupAvailable={pickupAvailable}
             pickupDiscountPercent={pickupDiscountPercent}
             deliveryDiscountPercent={deliveryDiscountPercent}
+            pickupCategoryPercents={store.pickupCategoryPercents}
+            deliveryCategoryPercents={store.deliveryCategoryPercents}
             deliveryFacts={deliveryFacts}
             closedNotice={closedNotice}
             shop={shop}

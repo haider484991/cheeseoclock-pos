@@ -306,3 +306,50 @@ describe('v0.7.37: the website offer ‘discounts.websitePickup’ in format 2 (
     expect(storedFormatIsNewer('discounts.websitePickup', { v: 2, offered: true, percent: 10, alsoDelivery: true, extra: 1 })).toBe(true);
   });
 });
+
+describe('v0.7.50: a category’s own % on ‘discounts.websitePickup’ (categoryPercents, still format 2)', () => {
+  const base = { v: 2, offered: true, percent: 10, alsoDelivery: true };
+  const pizza = [{ categoryId: 'cat-pizza', percent: 20 }];
+
+  it('this version writes it only when there is one: each category once, a whole % from 1 to 50, at most 10', () => {
+    const write = BUSINESS_SETTING_SCHEMAS['discounts.websitePickup'];
+    expect(write.safeParse({ ...base, categoryPercents: pizza }).success).toBe(true);
+    expect(write.safeParse(base).success).toBe(true);
+    const ten = Array.from({ length: 10 }, (_, i) => ({ categoryId: `cat-${i}`, percent: 20 }));
+    expect(write.safeParse({ ...base, categoryPercents: ten }).success).toBe(true);
+    for (const bad of [
+      [],
+      [{ categoryId: 'cat-pizza', percent: 0 }],
+      [{ categoryId: 'cat-pizza', percent: 51 }],
+      [{ categoryId: 'cat-pizza', percent: 12.5 }],
+      [{ categoryId: '', percent: 20 }],
+      [
+        { categoryId: 'cat-pizza', percent: 20 },
+        { categoryId: 'cat-pizza', percent: 30 },
+      ],
+      [...ten, { categoryId: 'cat-10', percent: 20 }],
+      [{ categoryId: 'cat-pizza', percent: 20, from: '13:00' }],
+      'Pizza 20%',
+    ]) {
+      expect(write.safeParse({ ...base, categoryPercents: bad }).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('reads back as saved; an unreadable list falls back alone (no category has its own %), never taking the % down with it', () => {
+    const read = BUSINESS_SETTING_READ_SCHEMAS['discounts.websitePickup'];
+    expect(read.parse({ ...base, categoryPercents: pizza })).toEqual({ ...base, categoryPercents: pizza });
+    for (const bad of ['Pizza 20%', [], [{ categoryId: 'cat-pizza', percent: 60 }]]) {
+      const v = read.parse({ ...base, categoryPercents: bad }) as Record<string, unknown>;
+      expect(v).toMatchObject(base);
+      expect(v['categoryPercents']).toBeUndefined();
+    }
+  });
+
+  it('is this version’s own (the card stays editable); a field inside a category this version does not know reads as newer', () => {
+    expect(storedFormatIsNewer('discounts.websitePickup', { ...base, categoryPercents: pizza })).toBe(false);
+    expect(storedFormatIsNewer('discounts.websitePickup', { ...base, categoryPercents: [{ ...pizza[0]!, from: '13:00' }] })).toBe(true);
+    // A v0.7.49 till runs the same check without `categoryPercents` among its fields: this version's value
+    // with one is newer to it (as `extra` is here), so its card is read-only there and it never saves over it.
+    expect(storedFormatIsNewer('discounts.websitePickup', { ...base, extra: [] })).toBe(true);
+  });
+});

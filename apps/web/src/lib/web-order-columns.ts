@@ -25,6 +25,11 @@ export function ensureWebOrderColumns(): Promise<void> {
       await sql()`
         ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ
       `;
+      // v0.7.50 (WEBSITE DISCOUNT BY CATEGORY): the parts of an order's discount, when a category's own %
+      // took something off (shared-types WebDiscountPart[] as JSON); NULL on every other order.
+      await sql()`
+        ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS discount_parts_json TEXT
+      `;
     })().catch((e) => {
       // Let the next call retry rather than caching the failure forever.
       ready = null;

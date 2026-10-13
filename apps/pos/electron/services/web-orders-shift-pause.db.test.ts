@@ -219,7 +219,7 @@ describe('storeAcceptingOrders / storeHeartbeatBody (pure)', () => {
       acceptingOrders: false,
       deviceId: DEV,
       // v0.7.37: this till also bills the website's delivery % (WEBSITE DELIVERY DISCOUNT).
-      features: ['pickup', 'delivery_discount'],
+      features: ['pickup', 'delivery_discount', 'category_discount'],
       pickupDiscountPercent: expect.any(Number),
       reason: 'shift_closed',
     });

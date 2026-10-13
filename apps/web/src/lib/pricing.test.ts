@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { webOrderPickupPercent, type WebOrderItem } from '@cheeseoclock/shared-types';
+import {
+  webOrderPickupPercent,
+  type WebDiscountPart,
+  type WebOrderItem,
+  type WebsiteCategoryPercent,
+} from '@cheeseoclock/shared-types';
 import {
   allocateDiscount as tillAllocate,
   computeDiscountCents,
 } from '../../../../packages/pos-domain/src/discount';
 import { allocateDiscount as fbrAllocate } from '../../../../packages/fbr-core/src/mapper';
+import { taxAfterDiscountRows } from '../../../../packages/pos-domain/src/discount-base';
+import { assignOfferLines } from '../../../../packages/pos-domain/src/offers';
 import { computeTax } from '../../../../packages/pos-domain/src/tax';
+import { websitePartRule } from '../../../../packages/pos-domain/src/website-offers';
 import { allocateDiscount, discountWeights, percentDiscountCents, priceOrder, type PricedLine } from './pricing';
 
 /** The till's recomputeOrderTotals (apps/pos order-repo), built from its own pieces. */
@@ -196,5 +204,125 @@ describe('value deals take no share of the pick-up % (v0.7.34, NO DISCOUNT ON VA
         expect(webOrderPickupPercent({ fulfilment: 'pickup', ...totals, items })).toBe(p);
       }
     }
+  });
+});
+
+/** The till's bill for an order's parts (v0.7.50): websitePartRule rows, worked by its offers engine. */
+function tillTotalsByParts(lines: PricedLine[], parts: readonly WebDiscountPart[]) {
+  const ids = lines.map((_, i) => `line-${i}`);
+  const rules = parts.map((p) => websitePartRule(p, { pickup: true, categoryName: p.categoryId }));
+  const food = lines.filter((l) => l.noDiscount !== true).reduce((s, l) => s + l.lineTotalCents, 0);
+  const shares = assignOfferLines(
+    rules,
+    lines.map((l, i) => ({
+      id: ids[i]!,
+      categoryId: l.categoryId ?? null,
+      lineTotalCents: l.lineTotalCents,
+      menuItemName: ids[i]!,
+      noDiscount: l.noDiscount === true,
+    })),
+    food,
+  );
+  const rows = rules.map((rule) => {
+    const share = shares.find((x) => x.rule === rule)!;
+    return { amountCents: share.amountCents, ruleJson: JSON.stringify({ ...rule, lines: share.lineIds }) };
+  });
+  const subtotal = lines.reduce((s, l) => s + l.lineTotalCents, 0);
+  const discount = rows.reduce((s, r) => s + r.amountCents, 0);
+  const tax = taxAfterDiscountRows(
+    lines.map((l, i) => ({ id: ids[i]!, lineTotalCents: l.lineTotalCents, taxRateBps: l.taxRateBps, noDiscount: l.noDiscount === true })),
+    rows,
+  ).taxCents;
+  return { subtotalCents: subtotal, discountCents: discount, taxCents: tax, totalCents: subtotal - discount + tax };
+}
+
+describe('a category with its own % (v0.7.50, WEBSITE DISCOUNT BY CATEGORY)', () => {
+  const PIZZA = 'cat-pizza';
+  const SIGNATURE = 'cat-signature';
+  const CATS = [PIZZA, SIGNATURE, 'cat-burgers', 'cat-drinks', 'cat-deals'];
+
+  it('none set, or none of its lines in the cart: the one-% totals exactly, with no parts', () => {
+    let seed = 750;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    for (let n = 0; n < 300; n++) {
+      const lines: PricedLine[] = Array.from({ length: 1 + Math.floor(rnd() * 6) }, () => ({
+        lineTotalCents: Math.floor(rnd() * 900_000) + 1,
+        taxRateBps: [0, 1300, 1500, 1600][Math.floor(rnd() * 4)]!,
+        categoryId: CATS[2 + Math.floor(rnd() * 3)]!,
+        ...(rnd() < 0.3 ? { noDiscount: true } : {}),
+      }));
+      const pct = Math.floor(rnd() * 51);
+      const one = priceOrder(lines, pct);
+      expect(one).not.toHaveProperty('discountParts');
+      expect(priceOrder(lines, pct, [])).toEqual(one);
+      // Pizza has its own % but no pizza is in the cart.
+      expect(priceOrder(lines, pct, [{ categoryId: PIZZA, percent: 20 }])).toEqual(one);
+    }
+  });
+
+  it('works the example: 2 pizzas at 20%, a burger and a drink at 10%, a value deal at full price', () => {
+    const lines: PricedLine[] = [
+      { lineTotalCents: 200_000, taxRateBps: 1500, categoryId: PIZZA },
+      { lineTotalCents: 150_000, taxRateBps: 1500, categoryId: PIZZA },
+      { lineTotalCents: 80_000, taxRateBps: 1500, categoryId: 'cat-burgers' },
+      { lineTotalCents: 360_000, taxRateBps: 1500, categoryId: 'cat-deals', noDiscount: true },
+      { lineTotalCents: 12_000, taxRateBps: 1500, categoryId: 'cat-drinks' },
+    ];
+    const t = priceOrder(lines, 10, [{ categoryId: PIZZA, percent: 20 }]);
+    // 20% of Rs 3,500 = 70,000; 10% of Rs 920 = 9,200.
+    expect(t.discountCents).toBe(79_200);
+    expect(t.discountParts).toEqual([
+      { percent: 20, categoryId: PIZZA },
+      { percent: 10, categoryId: null },
+    ]);
+    const { discountParts, ...totals } = t;
+    expect(totals).toEqual(tillTotalsByParts(lines, discountParts!));
+    expect(totals).toEqual({ subtotalCents: 802_000, discountCents: 79_200, taxCents: 108_420, totalCents: 831_220 });
+  });
+
+  it('only a category with its own % in the cart: one part, the main % takes nothing', () => {
+    const lines: PricedLine[] = [
+      { lineTotalCents: 200_000, taxRateBps: 1500, categoryId: PIZZA },
+      { lineTotalCents: 260_000, taxRateBps: 1500, categoryId: 'cat-deals', noDiscount: true },
+    ];
+    const t = priceOrder(lines, 10, [{ categoryId: PIZZA, percent: 20 }]);
+    expect(t.discountParts).toEqual([{ percent: 20, categoryId: PIZZA }]);
+    expect(t.discountCents).toBe(40_000);
+  });
+
+  it('equals the till on 500 seeded carts: categories, deals, tax rates, %s and a delivery charge', () => {
+    let seed = 7050;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const seen = { parts: 0, onePercent: 0 };
+    for (let n = 0; n < 500; n++) {
+      const lines: PricedLine[] = Array.from({ length: 1 + Math.floor(rnd() * 7) }, () => {
+        const categoryId = CATS[Math.floor(rnd() * CATS.length)]!;
+        return {
+          lineTotalCents: Math.floor(rnd() * 900_000) + 1,
+          taxRateBps: [0, 1300, 1500, 1600][Math.floor(rnd() * 4)]!,
+          categoryId,
+          ...(categoryId === 'cat-deals' || rnd() < 0.1 ? { noDiscount: true } : {}),
+        };
+      });
+      // A delivery's charge: no category, never discounted.
+      if (rnd() < 0.4) lines.push({ lineTotalCents: 20_000, taxRateBps: 1600, noDiscount: true });
+      const own: WebsiteCategoryPercent[] = [];
+      if (rnd() < 0.8) own.push({ categoryId: PIZZA, percent: 1 + Math.floor(rnd() * 50) });
+      if (rnd() < 0.4) own.push({ categoryId: SIGNATURE, percent: 1 + Math.floor(rnd() * 50) });
+      const pct = rnd() < 0.2 ? 0 : Math.floor(rnd() * 51);
+      const t = priceOrder(lines, pct, own);
+      const { discountParts, ...totals } = t;
+      if (discountParts) {
+        seen.parts++;
+        expect(totals).toEqual(tillTotalsByParts(lines, discountParts));
+        expect(discountParts.some((p) => p.categoryId !== null)).toBe(true);
+      } else {
+        seen.onePercent++;
+        expect(totals).toEqual(tillTotalsLeavingOutMarked(lines, pct));
+      }
+      expect(totals.totalCents).toBe(totals.subtotalCents - totals.discountCents + totals.taxCents);
+    }
+    expect(seen.parts).toBeGreaterThan(100);
+    expect(seen.onePercent).toBeGreaterThan(20);
   });
 });

@@ -33,6 +33,7 @@ import {
   DELIVERY_ZONE_SPELLING_MAX,
   PLAIN_SHOP_SETTING_KEYS,
   WEBSITE_PICKUP_MAX_PERCENT,
+  WEBSITE_CATEGORY_PERCENTS_MAX,
   normalizeAreaText,
   zoneAliasProblem,
   FOODPANDA_DEAL_MAX_PERCENT,
@@ -914,6 +915,19 @@ const deliveryZonesReadSchema = z.object({
   zones: zonesList(z.object(deliveryZoneShape)).superRefine(zonesAreDistinct),
 });
 
+/** One category with its own % off website orders (v0.7.50, WEBSITE DISCOUNT BY CATEGORY). */
+const websiteCategoryPercentSchema = z
+  .object({
+    categoryId: z.string().min(1, { message: 'Pick the category' }).max(64),
+    percent: z
+      .number()
+      .int({ message: "A category's website discount is a whole %" })
+      .min(1, { message: "A category's website discount is at least 1%" })
+      .max(WEBSITE_PICKUP_MAX_PERCENT, { message: `A category's website discount is at most ${WEBSITE_PICKUP_MAX_PERCENT}%` }),
+  })
+  .strict();
+/** The fields of one category's own %: a field one has that this version does not know is a newer till's. */
+const WEBSITE_CATEGORY_PERCENT_FIELDS: ReadonlySet<string> = new Set(['categoryId', 'percent']);
 const websitePickupShape = {
   offered: z.boolean({ errorMap: () => ({ message: 'Say whether pick-up is offered on the website: yes or no' }) }),
   percent: z
@@ -924,8 +938,17 @@ const websitePickupShape = {
   alsoDelivery: z.boolean({
     errorMap: () => ({ message: 'Say whether the website discount also comes off delivery orders: yes or no' }),
   }),
+  // v0.7.50: written only when there is one (absent = none, the value before byte for byte).
+  categoryPercents: z
+    .array(websiteCategoryPercentSchema)
+    .min(1, { message: 'Leave the categories out when none has its own %' })
+    .max(WEBSITE_CATEGORY_PERCENTS_MAX, { message: `At most ${WEBSITE_CATEGORY_PERCENTS_MAX} categories with their own %` })
+    .refine((list) => new Set(list.map((c) => c.categoryId)).size === list.length, {
+      message: 'A category is listed twice: give it one %',
+    })
+    .optional(),
 };
-/** 'discounts.websitePickup' as this version writes it (format 2: `alsoDelivery` too). */
+/** 'discounts.websitePickup' as this version writes it (format 2: `alsoDelivery` too; v0.7.50 `categoryPercents`). */
 export const websitePickupSchema = z.object({ v: writesFormat('discounts.websitePickup'), ...websitePickupShape }).strict();
 /** Read: a format-1 value (before v0.7.37) has no `alsoDelivery` — deliveries paid full price, so false. */
 const websitePickupReadSchema = z.object({
@@ -933,6 +956,8 @@ const websitePickupReadSchema = z.object({
   offered: websitePickupShape.offered,
   percent: websitePickupShape.percent,
   alsoDelivery: websitePickupShape.alsoDelivery.default(false).catch(false),
+  // Unreadable: no category has its own % (falls back alone, never taking the % down with it).
+  categoryPercents: websitePickupShape.categoryPercents.catch(undefined),
 });
 
 // 'online.options' format 2 (v0.7.30): the website's messages and delivery minimum joined
@@ -1351,6 +1376,15 @@ export function storedFormatIsNewer(key: BusinessSettingKey, raw: unknown): bool
   }
   // The shop's details with nested fields this version does not know: a newer till's too.
   if (key === 'shop.profile' || key === 'website.home') return shopNestedIsNewer(key, raw as Record<string, unknown>);
+  // A category's own website % (v0.7.50) with a field this version does not know: a newer till's too.
+  if (key === 'discounts.websitePickup') {
+    const list = (raw as { categoryPercents?: unknown }).categoryPercents;
+    if (Array.isArray(list)) {
+      return list.some(
+        (c) => typeof c === 'object' && c !== null && Object.keys(c).some((f) => !WEBSITE_CATEGORY_PERCENT_FIELDS.has(f)),
+      );
+    }
+  }
   // The website's messages with fields this version does not know: a newer till's too.
   if (key === 'online.options') {
     const nested = (field: string, known: ReadonlySet<string>) => {

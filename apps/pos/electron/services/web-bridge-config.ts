@@ -196,10 +196,11 @@ export function storeHeartbeatBody(
     acceptingOrders: storeAcceptingOrders(cfg, pause),
     deviceId,
     // `features` tells the site what this till can import: it offers online
-    // pick-up only while the listening till says 'pickup', and takes the
-    // owner's % off a delivery's food only while it says 'delivery_discount'
-    // (v0.7.37: this till bills it at import).
-    features: ['pickup', 'delivery_discount'],
+    // pick-up only while the listening till says 'pickup', takes the owner's
+    // % off a delivery's food only while it says 'delivery_discount' (v0.7.37:
+    // this till bills it at import), and prices a category's own % only while
+    // it says 'category_discount' (v0.7.50: this till bills an order's parts).
+    features: ['pickup', 'delivery_discount', 'category_discount'],
     // The site shows this percent, so the customer sees what the till bills.
     pickupDiscountPercent: PICKUP_DISCOUNT_PERCENT,
     // Only when the pause is what closes the shop; the owner's switch-off

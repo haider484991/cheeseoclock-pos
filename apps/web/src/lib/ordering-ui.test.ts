@@ -215,10 +215,15 @@ describe('the cart’s totals: a value deal takes no share of the pick-up % (v0.
 
   it('the page prices its cart with them and hands the deal words their flags (read from the source)', () => {
     const src = readFileSync(fileURLToPath(new URL('../components/OrderingApp.tsx', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
-    expect(src).toContain('const priced: PricedLine[] = cartPricedLines(cart);');
+    // v0.7.50: each line carries its category, so a category with its own % prices it so.
+    expect(src).toContain(
+      'const priced: PricedLine[] = cartPricedLines(cart).map((l, i) => ({ ...l, categoryId: categoryOfItem.get(cart[i]!.item.posItemId) ?? null }));',
+    );
     // v0.7.37: a delivery prices with the owner's % off its food (0 = none); its fee line takes no share.
     expect(src).toContain('const discountPct = pickup ? pickupPct : deliveryPct;');
-    expect(src).toContain('const totals = priceOrder(priced, discountPct);');
+    // v0.7.50: and the categories with their own %, for the same way of getting the food.
+    expect(src).toContain('const ownPercents = pickup ? pickupCats : deliveryCats;');
+    expect(src).toContain('const totals = priceOrder(priced, discountPct, ownPercents);');
     expect(src).toContain('priced.push({ lineTotalCents: deliveryFee, taxRateBps: feeItem?.taxRateBps ?? 0, noDiscount: true });');
     expect(src).toContain('const notOnDeals = useMemo(() => menuHasNoDiscountItems(menu), [menu]);');
     expect(src).toContain('const { dealInCart, onlyDeals } = cartDeals(cart);');

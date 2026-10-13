@@ -25,6 +25,11 @@ export interface CartProps {
   pickupPct: number;
   /** The % off a delivery's food (WEBSITE DELIVERY DISCOUNT, v0.7.37); absent or 0 = full price, as before. */
   deliveryPct?: number;
+  /**
+   * v0.7.50 (WEBSITE DISCOUNT BY CATEGORY): the categories whose own % took something off this cart, in
+   * words ("Pizza 20%"), for the discount row; absent = one %, the row as before.
+   */
+  ownPercentWords?: string;
   onFulfilment: (f: WebFulfilment) => void;
   /** Labels of pick-up-only lines in the cart (they block a delivery). */
   pickupOnlyInCart: string[];
@@ -279,6 +284,7 @@ export function Totals(props: CartProps) {
         <div className="flex justify-between font-semibold text-emerald-700">
           <dt>
             Pick-up {props.pickupPct}% off
+            {props.ownPercentWords ? ` · ${props.ownPercentWords}` : ''}
             {props.dealInCart && !props.onlyDeals ? ` (${NOT_ON_VALUE_DEALS})` : ''}
           </dt>
           {/* Value deals only: nothing comes off, and the row says why instead of a zero amount. */}
@@ -288,10 +294,11 @@ export function Totals(props: CartProps) {
         </div>
       ) : (
         <>
-          {deliveryPct > 0 && (
+          {(deliveryPct > 0 || (props.ownPercentWords && props.discount > 0)) && (
             <div className="flex justify-between font-semibold text-emerald-700">
               <dt>
-                Online {deliveryPct}% off food
+                {deliveryPct > 0 ? `Online ${deliveryPct}% off food` : 'Online'}
+                {props.ownPercentWords ? ` · ${props.ownPercentWords}` : ''}
                 {props.dealInCart && !props.onlyDeals ? ` (${NOT_ON_VALUE_DEALS})` : ''}
               </dt>
               <dd className="tabular-nums">

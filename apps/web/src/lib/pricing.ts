@@ -1,3 +1,11 @@
+import {
+  cleanCategoryPercents,
+  discountPartsToSend,
+  websiteDiscountParts,
+  type WebDiscountPart,
+  type WebsiteCategoryPercent,
+} from '@cheeseoclock/shared-types';
+
 /**
  * Order totals the way the till computes them, so the estimate a customer
  * sees is the bill the rider or the counter asks for.
@@ -9,6 +17,13 @@
  * pos-domain discount-base.ts leaves a line out of the base — then spread
  * over those lines by weight, and each line is taxed on what is left of it.
  * Nothing marked: the base is the subtotal, exactly as before.
+ *
+ * A category with its own % (v0.7.50, shared-types website-category-discount:
+ * Pizza 20% beside 10% off the rest) is a part of its own: its % rounded once
+ * on its lines and spread over them, the main % on the food it left — the
+ * till's offers engine, rule for rule. An order with none of its lines is
+ * priced exactly as before.
+ *
  * pricing.test.ts runs the POS's own functions next to these to keep the two
  * from drifting.
  */
@@ -18,6 +33,8 @@ export interface PricedLine {
   taxRateBps: number;
   /** Its menu item is marked no-discount (PublishedMenuItem.noDiscount): it takes no share of the %. */
   noDiscount?: boolean;
+  /** Its menu item's category (the published menu's posCategoryId): a category with its own % (v0.7.50) prices it so. */
+  categoryId?: string | null;
 }
 
 export interface OrderTotals {
@@ -25,6 +42,12 @@ export interface OrderTotals {
   discountCents: number;
   taxCents: number;
   totalCents: number;
+  /**
+   * v0.7.50: the parts the order carries to the till, when a category's own %
+   * took something off (shared-types discountPartsToSend). Absent otherwise —
+   * the totals are then exactly the one-% ones, as before.
+   */
+  discountParts?: WebDiscountPart[];
 }
 
 /** pos-domain computeDiscountCents, percent form. */
@@ -65,7 +88,18 @@ export function discountWeights(lines: ReadonlyArray<PricedLine>): number[] {
   return lines.map((l) => (l.noDiscount === true ? 0 : l.lineTotalCents));
 }
 
-export function priceOrder(lines: PricedLine[], discountPercent = 0): OrderTotals {
+export function priceOrder(
+  lines: PricedLine[],
+  discountPercent = 0,
+  categoryPercents: ReadonlyArray<WebsiteCategoryPercent> = [],
+): OrderTotals {
+  const own = cleanCategoryPercents(categoryPercents);
+  if (own.length > 0) {
+    const plans = websiteDiscountParts(lines, discountPercent, own);
+    const parts = discountPartsToSend(plans);
+    // A category part took something off: each part over its own lines, as the till's offers engine bills them.
+    if (parts !== null) return priceByParts(lines, plans, parts);
+  }
   const subtotal = lines.reduce((s, l) => s + l.lineTotalCents, 0);
   const weights = discountWeights(lines);
   const discount = percentDiscountCents(weights.reduce((s, w) => s + w, 0), discountPercent);
@@ -82,5 +116,38 @@ export function priceOrder(lines: PricedLine[], discountPercent = 0): OrderTotal
     discountCents: discount,
     taxCents: tax,
     totalCents: subtotal - discount + tax,
+  };
+}
+
+/** The totals of an order whose discount came in parts (v0.7.50): each part spread over its own lines, each line taxed on what is left. */
+function priceByParts(
+  lines: ReadonlyArray<PricedLine>,
+  plans: ReturnType<typeof websiteDiscountParts>,
+  parts: WebDiscountPart[],
+): OrderTotals {
+  const subtotal = lines.reduce((s, l) => s + l.lineTotalCents, 0);
+  const shares = lines.map(() => 0);
+  let discount = 0;
+  for (const p of plans) {
+    if (p.amountCents <= 0) continue;
+    discount += p.amountCents;
+    const weights = lines.map((l, i) => (p.lineIndexes.includes(i) ? l.lineTotalCents : 0));
+    allocateDiscount(weights, p.amountCents).forEach((x, i) => {
+      shares[i] = (shares[i] ?? 0) + x;
+    });
+  }
+  let tax = 0;
+  if (subtotal > 0) {
+    lines.forEach((line, i) => {
+      const net = Math.max(0, line.lineTotalCents - (shares[i] ?? 0));
+      tax += Math.round((net * line.taxRateBps) / 10_000);
+    });
+  }
+  return {
+    subtotalCents: subtotal,
+    discountCents: discount,
+    taxCents: tax,
+    totalCents: subtotal - discount + tax,
+    discountParts: parts,
   };
 }

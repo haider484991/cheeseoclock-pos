@@ -32,6 +32,9 @@ export async function GET(): Promise<Response> {
         pickupDiscountPercent: status.pickupDiscountPercent,
         // v0.7.37: the % off a delivery's food (0 = none) — an open page follows the owner's change.
         deliveryDiscountPercent: status.deliveryDiscountPercent,
+        // v0.7.50: the categories with their own % (absent = none, as from an older website).
+        ...(status.pickupCategoryPercents ? { pickupCategoryPercents: status.pickupCategoryPercents } : {}),
+        ...(status.deliveryCategoryPercents ? { deliveryCategoryPercents: status.deliveryCategoryPercents } : {}),
         // Absent (undefined drops out of the JSON) when there is no word: the page keeps its own.
         ...(closedNotice === undefined ? {} : { closedNotice }),
       },

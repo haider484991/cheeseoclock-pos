@@ -26,6 +26,7 @@ import {
   cardSizeLabel,
   menuHasNoDiscountItems,
   pickupOnlyNote,
+  sectionTitle,
   sizeOrderable,
   type MenuCard,
   type MenuVariant,
@@ -68,6 +69,7 @@ import {
   isBuy1Get1Category,
   type PublishedMenuItem,
   type WebFulfilment,
+  type WebsiteCategoryPercent,
 } from '@cheeseoclock/shared-types';
 import type { PublicMenu } from '@/lib/public-menu';
 import { CartPanel, type CartProps } from './ordering/cart-ui';
@@ -130,6 +132,8 @@ export function OrderingApp({
   pickupAvailable,
   pickupDiscountPercent,
   deliveryDiscountPercent = 0,
+  pickupCategoryPercents = NO_CATEGORY_PERCENTS,
+  deliveryCategoryPercents = NO_CATEGORY_PERCENTS,
   deliveryFacts,
   closedNotice = null,
   shop = DEFAULT_SHOP_FACTS,
@@ -145,6 +149,12 @@ export function OrderingApp({
    * deals, never the delivery charge. 0 = deliveries pay full price (today).
    */
   deliveryDiscountPercent?: number;
+  /**
+   * v0.7.50 (WEBSITE DISCOUNT BY CATEGORY; lib/store-status): categories with their own % on a pick-up and
+   * on a delivery's food (Pizza 20% beside 10% off the rest). Absent or none = one %, as before.
+   */
+  pickupCategoryPercents?: WebsiteCategoryPercent[];
+  deliveryCategoryPercents?: WebsiteCategoryPercent[];
   /** Where the owner delivers and the fees (the settings block with this menu, else the built-in areas). */
   deliveryFacts: SiteFacts;
   /**
@@ -179,6 +189,9 @@ export function OrderingApp({
   const [canPickup, setCanPickup] = useState(pickupAvailable);
   const [pickupPct, setPickupPct] = useState(pickupDiscountPercent);
   const [deliveryPct, setDeliveryPct] = useState(deliveryDiscountPercent);
+  // v0.7.50: the categories with their own %, kept as current as the %s above.
+  const [pickupCats, setPickupCats] = useState<WebsiteCategoryPercent[]>(pickupCategoryPercents);
+  const [deliveryCats, setDeliveryCats] = useState<WebsiteCategoryPercent[]>(deliveryCategoryPercents);
   // The owner's closed notice, kept as current as the rest: its last day ends while the page is open.
   const [notice, setNotice] = useState<string | null>(closedNotice);
   useEffect(() => {
@@ -193,6 +206,8 @@ export function OrderingApp({
             pickupAvailable?: boolean;
             pickupDiscountPercent?: number;
             deliveryDiscountPercent?: number;
+            pickupCategoryPercents?: WebsiteCategoryPercent[];
+            deliveryCategoryPercents?: WebsiteCategoryPercent[];
             closedNotice?: string | null;
           };
         };
@@ -202,6 +217,9 @@ export function OrderingApp({
           if (typeof json.data.pickupDiscountPercent === 'number') setPickupPct(json.data.pickupDiscountPercent);
           // An older website's reply has no word about it: deliveries pay full price, as it charges.
           setDeliveryPct(typeof json.data.deliveryDiscountPercent === 'number' ? json.data.deliveryDiscountPercent : 0);
+          // v0.7.50: absent = no category has its own % (an older website's reply too).
+          setPickupCats(Array.isArray(json.data.pickupCategoryPercents) ? json.data.pickupCategoryPercents : NO_CATEGORY_PERCENTS);
+          setDeliveryCats(Array.isArray(json.data.deliveryCategoryPercents) ? json.data.deliveryCategoryPercents : NO_CATEGORY_PERCENTS);
           // An older website's reply has no word about it: keep what the page was served.
           if (json.data.closedNotice !== undefined) setNotice(json.data.closedNotice);
         }
@@ -229,6 +247,15 @@ export function OrderingApp({
   }, []);
 
   const sections = useMemo(() => buildMenuView(menu), [menu]);
+  // Each item's category and each category's name as its section is titled (v0.7.50: a category with its own %).
+  const categoryOfItem = useMemo(
+    () => new Map(menu.categories.flatMap((c) => c.items.map((i) => [i.posItemId, c.posCategoryId] as const))),
+    [menu],
+  );
+  const categoryNames = useMemo(
+    () => new Map(menu.categories.map((c) => [c.posCategoryId, sectionTitle(c.name)] as const)),
+    [menu],
+  );
   // The words under the sections: the food's one tax rate from this menu (charge items left out) and
   // what the rider takes.
   const footLine = useMemo(
@@ -259,10 +286,16 @@ export function OrderingApp({
     const m = new Map<string, CardOffer>();
     const dealsOnMenu = sections.some((s) => isBuy1Get1Category(s.name));
     for (const s of sections) {
-      for (const c of s.cards) m.set(c.key, cardOffer(s.name, c, { pickupPct, deliveryPct, canPickup }, { dealsOnMenu, buy1Get1: dealRules }));
+      // A category with its own % (v0.7.50): its cards show that % instead.
+      const own = {
+        pickupPct: pickupCats.find((x) => x.categoryId === s.id)?.percent ?? pickupPct,
+        deliveryPct: deliveryCats.find((x) => x.categoryId === s.id)?.percent ?? deliveryPct,
+        canPickup,
+      };
+      for (const c of s.cards) m.set(c.key, cardOffer(s.name, c, own, { dealsOnMenu, buy1Get1: dealRules }));
     }
     return m;
-  }, [sections, pickupPct, deliveryPct, canPickup, dealRules]);
+  }, [sections, pickupPct, deliveryPct, pickupCats, deliveryCats, canPickup, dealRules]);
   const offerPrices = useMemo(() => regularPizzaPrices(sections), [sections]);
   // The Buy 1 Get 1 deals' own section, once the till has published one: the banner's button jumps there, and the
   // cards' strips say the free item comes in a deal.
@@ -345,12 +378,19 @@ export function OrderingApp({
   // like one; pickup takes its discount off every line but value deals, and a
   // delivery (v0.7.37) its own % off the food: never the fee, never value deals.
   const subtotal = cartSubtotalCents(cart);
-  const priced: PricedLine[] = cartPricedLines(cart);
+  // Each line's category (v0.7.50): a category with its own % prices it so, as the server and the till do.
+  const priced: PricedLine[] = cartPricedLines(cart).map((l, i) => ({ ...l, categoryId: categoryOfItem.get(cart[i]!.item.posItemId) ?? null }));
   const feeItem = zone ? zoneFeeItemFor(menu, zone) : undefined;
   const deliveryFee = zone && cart.length > 0 ? zone.feeCents : 0;
   if (deliveryFee > 0) priced.push({ lineTotalCents: deliveryFee, taxRateBps: feeItem?.taxRateBps ?? 0, noDiscount: true });
   const discountPct = pickup ? pickupPct : deliveryPct;
-  const totals = priceOrder(priced, discountPct);
+  const ownPercents = pickup ? pickupCats : deliveryCats;
+  const totals = priceOrder(priced, discountPct, ownPercents);
+  // "Pizza 20%": the categories whose own % took something off this cart (their part), for the discount row.
+  const ownPercentWords = (totals.discountParts ?? [])
+    .filter((p) => p.categoryId !== null)
+    .map((p) => `${categoryNames.get(p.categoryId!) ?? 'Some items'} ${p.percent}%`)
+    .join(' · ');
   const { discountCents: discount, taxCents: tax, totalCents: total } = totals;
   const cartCount = countLines(cart);
   const pickupOnlyInCart = cart.filter((l) => isPickupOnly(l.item)).map((l) => l.label);
@@ -477,6 +517,7 @@ export function OrderingApp({
     canPickup,
     pickupPct,
     deliveryPct,
+    ...(ownPercentWords ? { ownPercentWords } : {}),
     onFulfilment: setFulfilment,
     pickupOnlyInCart,
     feeRange,
@@ -505,6 +546,7 @@ export function OrderingApp({
         offerWhere={copyText(MENU_OFFER_WHERE, { ...deliveryFacts, shop })}
         offerDealsAnchor={buy1Get1Anchor}
         offerWindow={dealRules.on ? dealWindow : null}
+        ownPercentChips={ownPercentChips(pickupCats, deliveryCats, canPickup, categoryNames)}
       />
 
       {lastOrder && (
@@ -670,6 +712,36 @@ function sectionNote(sectionName: string, dealWindow: string): string | null {
   return null;
 }
 
+/** No category with its own % (v0.7.50): one shared value, so the memos see no change. */
+const NO_CATEGORY_PERCENTS: WebsiteCategoryPercent[] = [];
+
+/**
+ * The header's chips for the categories with their own % (v0.7.50): "20% off Pizza online" when pick-up and
+ * delivery agree, else "20% off Pizza with pick-up" / "on delivery". A category no longer on the menu: no chip.
+ */
+export function ownPercentChips(
+  pickupCats: readonly WebsiteCategoryPercent[],
+  deliveryCats: readonly WebsiteCategoryPercent[],
+  canPickup: boolean,
+  names: ReadonlyMap<string, string>,
+): string[] {
+  const pick = canPickup ? pickupCats : [];
+  const ids = [...new Set([...pick, ...deliveryCats].map((c) => c.categoryId))];
+  const chips: string[] = [];
+  for (const id of ids) {
+    const name = names.get(id);
+    if (!name) continue;
+    const p = pick.find((c) => c.categoryId === id)?.percent ?? 0;
+    const d = deliveryCats.find((c) => c.categoryId === id)?.percent ?? 0;
+    if (p > 0 && p === d) chips.push(`${p}% off ${name} online`);
+    else {
+      if (p > 0) chips.push(`${p}% off ${name} with pick-up`);
+      if (d > 0) chips.push(`${d}% off ${name} on delivery`);
+    }
+  }
+  return chips;
+}
+
 function MenuHeader({
   canPickup,
   pickupPct,
@@ -683,6 +755,7 @@ function MenuHeader({
   offerWhere,
   offerDealsAnchor = null,
   offerWindow,
+  ownPercentChips = [],
 }: {
   canPickup: boolean;
   pickupPct: number;
@@ -705,6 +778,8 @@ function MenuHeader({
   offerDealsAnchor?: string | null;
   /** The offer's hours in words (the owner's rules); null = the owner switched it off: no banner. */
   offerWindow: string | null;
+  /** v0.7.50: one chip per category with its own % ("20% off Pizza online"); none = the header as before. */
+  ownPercentChips?: string[];
 }) {
   return (
     <div className="bg-ink text-cream">
@@ -747,6 +822,11 @@ function MenuHeader({
               )}
             </>
           )}
+          {ownPercentChips.map((chip) => (
+            <li key={chip} className="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">
+              {chip}
+            </li>
+          ))}
           <li className={`rounded-full px-3.5 py-1.5 ${canPickup ? 'border border-cream/20' : 'bg-cheese text-ink'}`}>
             {deliveryChip}
           </li>

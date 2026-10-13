@@ -134,3 +134,78 @@ describe('the website % off a delivery’s food (v0.7.37, WEBSITE DELIVERY DISCO
     expect(evaluateStatus({ ...beat, settings_pickup: { ...on, alsoDelivery: 1 } }, NOW).deliveryDiscountPercent).toBe(0);
   });
 });
+
+describe('a category’s own % (v0.7.50, WEBSITE DISCOUNT BY CATEGORY)', () => {
+  const beat = {
+    accepting_orders: true,
+    updated_at: ago(5_000),
+    pickup: true,
+    pickup_discount_pct: 10,
+    delivery_discount: true,
+    category_discount: true,
+  };
+  const cats = [{ categoryId: 'cat-pizza', percent: 20 }];
+  const on = { offered: true, percent: 10, alsoDelivery: true, categoryPercents: cats };
+
+  it('only when the owner’s block names them AND the listening till bills the parts AND the shop is open', () => {
+    expect(evaluateStatus({ ...beat, settings_pickup: on }, NOW)).toMatchObject({
+      pickupDiscountPercent: 10,
+      deliveryDiscountPercent: 10,
+      pickupCategoryPercents: cats,
+      deliveryCategoryPercents: cats,
+    });
+    // A till that cannot bill the parts (before 0.7.50), a closed shop, a quiet till: none at all.
+    for (const row of [
+      { ...beat, category_discount: false },
+      { ...beat, category_discount: null },
+      { ...beat, category_discount: undefined },
+      { ...beat, accepting_orders: false },
+      { ...beat, updated_at: ago(HEARTBEAT_STALE_MS + 1_000) },
+    ]) {
+      const s = evaluateStatus({ ...row, settings_pickup: on }, NOW);
+      expect(s).not.toHaveProperty('pickupCategoryPercents');
+      expect(s).not.toHaveProperty('deliveryCategoryPercents');
+    }
+    // A delivery's only where the delivery % applies.
+    for (const row of [
+      { ...beat, settings_pickup: { ...on, alsoDelivery: false } },
+      { ...beat, delivery_discount: false, settings_pickup: on },
+    ]) {
+      const s = evaluateStatus(row, NOW);
+      expect(s.pickupCategoryPercents).toEqual(cats);
+      expect(s).not.toHaveProperty('deliveryCategoryPercents');
+    }
+  });
+
+  it('a block without them (or no block): the status is exactly as before, no new key', () => {
+    const before = evaluateStatus({ ...beat, settings_pickup: { offered: true, percent: 10, alsoDelivery: true } }, NOW);
+    expect(Object.keys(before).sort()).toEqual(
+      ['acceptingOrders', 'deliveryDiscountPercent', 'pickupAvailable', 'pickupDiscountPercent', 'posAcceptingOrders', 'stale', 'updatedAt'].sort(),
+    );
+    expect(Object.keys(evaluateStatus(beat, NOW))).toEqual(Object.keys(before));
+    expect(evaluateStatus({ ...beat, settings_pickup: { ...on, categoryPercents: [] } }, NOW)).toEqual(before);
+  });
+
+  it('the block reader keeps only good rows: each category once (the first), a whole % from 1 to 50, at most 10', () => {
+    expect(blockPickupOf(JSON.stringify(on))).toEqual(on);
+    expect(blockPickupOf({ offered: true, percent: 10, categoryPercents: [] })).toEqual({ offered: true, percent: 10 });
+    expect(blockPickupOf({ offered: true, percent: 10, categoryPercents: 'Pizza 20%' })).toEqual({ offered: true, percent: 10 });
+    expect(
+      blockPickupOf({
+        offered: true,
+        percent: 10,
+        categoryPercents: [
+          { categoryId: 'a', percent: 0 },
+          { categoryId: 'b', percent: 51 },
+          { categoryId: 'c', percent: 12.5 },
+          { categoryId: '', percent: 20 },
+          { categoryId: 'd', percent: 20 },
+          { categoryId: 'd', percent: 30 },
+          null,
+        ],
+      }),
+    ).toEqual({ offered: true, percent: 10, categoryPercents: [{ categoryId: 'd', percent: 20 }] });
+    const twelve = Array.from({ length: 12 }, (_, i) => ({ categoryId: `cat-${i}`, percent: 20 }));
+    expect(blockPickupOf({ offered: true, percent: 10, categoryPercents: twelve })?.categoryPercents).toHaveLength(10);
+  });
+});

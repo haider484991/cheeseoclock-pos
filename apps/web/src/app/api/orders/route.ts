@@ -308,6 +308,8 @@ export async function POST(req: Request): Promise<Response> {
     const itemIndex = new Map(
       menu.categories.flatMap((c) => c.items.map((i) => [i.posItemId, i] as const)),
     );
+    // Each item's category (v0.7.50): a category with its own % prices its lines so.
+    const categoryOf = new Map(menu.categories.flatMap((c) => c.items.map((i) => [i.posItemId, c.posCategoryId] as const)));
     const feeItemIds = feeItemIdsOf(menu);
 
     const priced: PricedLine[] = [];
@@ -360,6 +362,7 @@ export async function POST(req: Request): Promise<Response> {
         lineTotalCents: unit * line.quantity,
         taxRateBps: item.taxRateBps,
         ...(marked ? { noDiscount: true } : {}),
+        categoryId: categoryOf.get(item.posItemId) ?? null,
       });
       lines.push({
         posItemId: item.posItemId,
@@ -446,22 +449,31 @@ export async function POST(req: Request): Promise<Response> {
     });
 
     // A pick-up's %, or (v0.7.37) the owner's % off a delivery's food — 0 unless the stored block
-    // asks for it and the listening till bills it (store-status deliveryDiscountPercent).
-    const totals = priceOrder(priced, pickup ? store.pickupDiscountPercent : store.deliveryDiscountPercent);
+    // asks for it and the listening till bills it (store-status deliveryDiscountPercent). And (v0.7.50)
+    // the categories with their own %, under the same rules and only while the listening till bills the
+    // parts: an order with a line in one carries its parts to the till (discountParts); every other
+    // order is priced exactly as before.
+    const totals = priceOrder(
+      priced,
+      pickup ? store.pickupDiscountPercent : store.deliveryDiscountPercent,
+      (pickup ? store.pickupCategoryPercents : store.deliveryCategoryPercents) ?? [],
+    );
+    const { discountParts, ...shownTotals } = totals;
 
     const id = input.clientOrderId ?? uuidv7();
     const inserted = (await sql()`
       INSERT INTO web_orders
         (id, status, customer_name, customer_phone, address_line, area, notes,
          items_json, subtotal_cents, discount_cents, tax_cents, total_cents,
-         payment_method, fulfilment)
+         payment_method, fulfilment, discount_parts_json)
       VALUES
         (${id}, 'new', ${input.customerName.trim()}, ${phone},
          ${pickup ? PICKUP_ADDRESS : input.addressLine!.trim()},
          ${pickup ? PICKUP_AREA : zone!.name},
          ${orderNotes}, ${JSON.stringify(lines)},
          ${totals.subtotalCents}, ${totals.discountCents}, ${totals.taxCents},
-         ${totals.totalCents}, 'cod', ${input.fulfilment})
+         ${totals.totalCents}, 'cod', ${input.fulfilment},
+         ${discountParts ? JSON.stringify(discountParts) : null})
       ON CONFLICT (id) DO NOTHING
       RETURNING id
     `) as Array<{ id: string }>;
@@ -475,7 +487,7 @@ export async function POST(req: Request): Promise<Response> {
 
     return Response.json({
       ok: true,
-      data: { orderId: id, fulfilment: input.fulfilment, ...totals, replayed: false },
+      data: { orderId: id, fulfilment: input.fulfilment, ...shownTotals, replayed: false },
     });
   } catch (e) {
     console.error('POST /api/orders failed', e);

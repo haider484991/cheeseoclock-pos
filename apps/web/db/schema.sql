@@ -29,6 +29,8 @@ ALTER TABLE store_status ADD COLUMN IF NOT EXISTS pickup BOOLEAN NOT NULL DEFAUL
 ALTER TABLE store_status ADD COLUMN IF NOT EXISTS pickup_discount_pct INT;
 -- …and that it bills the website's delivery % at import (heartbeat 'delivery_discount', v0.7.37).
 ALTER TABLE store_status ADD COLUMN IF NOT EXISTS delivery_discount BOOLEAN NOT NULL DEFAULT false;
+-- …and that it bills an order's discount parts (heartbeat 'category_discount', v0.7.50).
+ALTER TABLE store_status ADD COLUMN IF NOT EXISTS category_discount BOOLEAN NOT NULL DEFAULT false;
 
 -- Orders placed on the website. The POS bridge polls status='new', imports
 -- each into the local SQLite (source='web'), acks with the POS order number,
@@ -69,6 +71,9 @@ ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS discount_cents INT NOT NULL DEFA
 -- polling at once must not both cook it. Also added on demand (web-order-columns).
 ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS claimed_by TEXT;
 ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+-- The parts of an order's discount when a category's own % took something off (v0.7.50,
+-- WEBSITE DISCOUNT BY CATEGORY): JSON, NULL on every other order. Also added on demand.
+ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS discount_parts_json TEXT;
 
 -- Append-only counter behind the order endpoint's per-IP flood limit. Only a
 -- salted hash is stored, never a raw IP. src/lib/rate-limit.ts also creates

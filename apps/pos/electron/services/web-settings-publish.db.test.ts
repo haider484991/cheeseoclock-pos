@@ -965,6 +965,29 @@ live('a website older than the tills (its deploy failed or was rolled back): the
     expect(publishStatus()).toMatchObject({ state: 'published' });
   });
 
+  it('v0.7.50: a Save with a category’s own % — the block carries it and passes the website’s schema; with none, the block is today’s', async () => {
+    const db = await till();
+    await bridge().publishMenu();
+    const pizza = [{ categoryId: 'cat-pizza', percent: 20 }];
+    settingsRepo.setBusinessSetting(
+      db as AppDatabase,
+      'discounts.websitePickup',
+      { v: 2, offered: true, percent: 10, alsoDelivery: false, categoryPercents: pizza },
+      OWNER,
+    );
+    await bridge().maybePublishSettings();
+    const block = settingsPuts().at(-1)!.settings;
+    expect(block.pickup).toEqual({ offered: true, percent: 10, categoryPercents: pizza });
+    expect(publishedSettingsSchema.safeParse(block).success).toBe(true);
+    // The owner's Publish carries it in the menu too.
+    await bridge().publishMenu();
+    expect(menus().at(-1)!.settings!.pickup).toEqual({ offered: true, percent: 10, categoryPercents: pizza });
+    // The rows removed: the pick-up is byte-for-byte today's.
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 2, offered: true, percent: 10, alsoDelivery: false }, OWNER);
+    await bridge().maybePublishSettings();
+    expect(JSON.stringify(settingsPuts().at(-1)!.settings.pickup)).toBe('{"offered":true,"percent":10}');
+  });
+
   it('a Publish with an item "Pick-up only": the publish says the website is older (the toast), and so does Settings', async () => {
     const db = await till();
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);

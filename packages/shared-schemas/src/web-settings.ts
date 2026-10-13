@@ -29,6 +29,7 @@ import {
   SHOP_TAGLINE_MAX,
   SOCIAL_LINKS_MAX,
   WEBSITE_PICKUP_MAX_PERCENT,
+  WEBSITE_CATEGORY_PERCENTS_MAX,
   WEBSITE_TEXT_FORBIDDEN_RE,
   WHATSAPP_GREETING_MAX,
   WHATSAPP_LINES_MAX,
@@ -102,6 +103,18 @@ export const publishedPickupSchema = z.object({
   percent: z.number().int().min(0).max(WEBSITE_PICKUP_MAX_PERCENT),
   /** v0.7.37 (WEBSITE DELIVERY DISCOUNT): sent only as true; absent = deliveries pay full price. */
   alsoDelivery: z.boolean().optional(),
+  /** v0.7.50 (WEBSITE DISCOUNT BY CATEGORY): sent only when there is one; absent = none. */
+  categoryPercents: z
+    .array(
+      z.object({
+        categoryId: z.string().min(1).max(64),
+        percent: z.number().int().min(1).max(WEBSITE_PICKUP_MAX_PERCENT),
+      }),
+    )
+    .min(1)
+    .max(WEBSITE_CATEGORY_PERCENTS_MAX)
+    .refine((list) => new Set(list.map((c) => c.categoryId)).size === list.length, { message: 'A category is listed twice' })
+    .optional(),
 });
 
 // ---------------------------------------------------------------------------

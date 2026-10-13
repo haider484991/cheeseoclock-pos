@@ -56,6 +56,7 @@ import {
   parseDiscountBaseRule,
   parseFoodpandaDealRule,
   parseOfferRule,
+  websitePartRule,
   declinedOfferRule,
   taxAfterDiscount,
   tillDiscountRule,
@@ -96,6 +97,7 @@ import {
   readShopSetting,
 } from '../business-settings-read.js';
 import {
+  type WebDiscountPart,
   COC_ID_NAMESPACE,
   FOODPANDA_ORDER_CODE_MAX,
   categoryNeverDiscounted,
@@ -2909,6 +2911,33 @@ export function applyDiscount(
     recomputeOrderTotals(db, input.orderId, actor);
   });
   tx();
+}
+
+/**
+ * A website order's discount parts (v0.7.50, WEBSITE DISCOUNT BY CATEGORY;
+ * the owner, 13 Oct 2026: "20% off regular pizzas everywhere"): one of the
+ * owner's offers' rows per part (pos-domain websitePartRule) — a category's
+ * own % over its category's lines, the main % over the food they left —
+ * worked by the offers engine (recomputeSeveralOffers), exactly as the
+ * website priced them. The shop's admin the bridge acts as is their
+ * approver, as for the website's one %. Inside the caller's transaction
+ * (the web import); an order that carries no parts never comes here.
+ */
+export function applyWebsiteDiscountParts(
+  db: AppDatabase,
+  orderId: string,
+  parts: ReadonlyArray<WebDiscountPart>,
+  actor: Actor & { userId: string },
+  opts: { pickup: boolean },
+): void {
+  for (const part of parts) {
+    const categoryName =
+      part.categoryId === null
+        ? null
+        : ((db.prepare(`SELECT name FROM categories WHERE id = ?`).get(part.categoryId) as { name: string } | undefined)?.name ?? null);
+    insertOfferRow(db, orderId, websitePartRule(part, { pickup: opts.pickup, categoryName }), actor.userId, actor, 'apply_offer');
+  }
+  recomputeOrderTotals(db, orderId, actor);
 }
 
 /** The names of these categories as the menu has them now, in the offer's order (one gone since: left out). */

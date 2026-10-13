@@ -29,6 +29,7 @@ import {
   type DeliveryZoneSetting,
   type OrderMode,
   type PublishedSettings,
+  type WebsiteCategoryPercent,
   type SettingsStamp,
   type WebsiteAnnouncement,
 } from '@cheeseoclock/shared-types';
@@ -563,8 +564,11 @@ export function websiteNeedsSettings(
  */
 export function buildSettingsBlock(input: {
   zones: readonly DeliveryZoneSetting[];
-  /** `alsoDelivery` (v0.7.37) goes in the block only when true: a block with it off is byte-for-byte a v0.7.36 till's. */
-  pickup: { offered: boolean; percent: number; alsoDelivery?: boolean };
+  /**
+   * `alsoDelivery` (v0.7.37) goes in the block only when true: a block with it off is byte-for-byte a v0.7.36 till's;
+   * `categoryPercents` (v0.7.50) only when there is one: a block without it is byte-for-byte a v0.7.49 till's.
+   */
+  pickup: { offered: boolean; percent: number; alsoDelivery?: boolean; categoryPercents?: ReadonlyArray<WebsiteCategoryPercent> };
   stamps: ReadonlyArray<SettingStamp | null>;
   menuItems: ReadonlyArray<{ id: string; name: string; basePriceCents: number }>;
   /** The till sending it. */
@@ -606,6 +610,9 @@ export function buildSettingsBlock(input: {
       offered: input.pickup.offered,
       percent: input.pickup.percent,
       ...(input.pickup.alsoDelivery === true ? { alsoDelivery: true } : {}),
+      ...(input.pickup.categoryPercents && input.pickup.categoryPercents.length > 0
+        ? { categoryPercents: input.pickup.categoryPercents.map((c) => ({ categoryId: c.categoryId, percent: c.percent })) }
+        : {}),
     },
     zones: input.zones.map((z, sort) => {
       const item = z.feeCents > 0 ? zoneFeeItem(z, input.menuItems) : undefined;

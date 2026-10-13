@@ -41,6 +41,8 @@ export async function PUT(req: Request): Promise<Response> {
       pickupDiscountPercent: parsed.data.pickupDiscountPercent ?? null,
       // v0.7.37: the till bills the website's delivery % (WEBSITE DELIVERY DISCOUNT).
       deliveryDiscount: parsed.data.features?.includes('delivery_discount') ?? false,
+      // v0.7.50: the till bills an order's discount parts (WEBSITE DISCOUNT BY CATEGORY).
+      categoryDiscount: parsed.data.features?.includes('category_discount') ?? false,
     });
     // The first heartbeat after a deploy: the pages the build rendered without the database are
     // made stale, so the next visit shows the menu's prices and the owner's details (deploy-refresh).

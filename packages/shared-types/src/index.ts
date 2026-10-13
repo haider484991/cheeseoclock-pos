@@ -29,6 +29,7 @@ export * from './shift-report.js';
 export * from './printer.js';
 export * from './paper-time.js';
 export * from './web-bridge.js';
+export * from './website-category-discount.js';
 export * from './website-messages.js';
 export * from './website-shop.js';
 export * from './phone.js';
