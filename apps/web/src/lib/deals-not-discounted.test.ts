@@ -35,6 +35,7 @@ import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery
 import type { CartLine } from './cart';
 import type { PublicMenu } from './public-menu';
 import { withFooterCredit } from './__fixtures__/footer-credit';
+import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
 import { goldenMenu } from './__fixtures__/golden-menu';
 import { DEALS_MARKED_ROUTES, MARKED_DEALS, goldenMenuDealsMarked, htmlWithDealsMarked } from './__fixtures__/no-discount';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
@@ -313,8 +314,10 @@ describe('the value deals marked: every page as v0.7.30 but the /menu chip', () 
     it(`(${state}) every page’s HTML is the golden, but '/menu (open)' by exactly the chip`, () => {
       expect(Object.keys(now.pages[state]!)).toEqual(Object.keys(golden.pages[state]!));
       for (const [route, key] of Object.entries(golden.pages[state]!)) {
-        // The golden as served today: plus the footer's ordering-system credit (2026-10-13).
-        const was = withFooterCredit(golden.html[key]!);
+        // The golden as served today: plus the footer's ordering-system credit (2026-10-13), and the home
+        // page's deals slider from this menu's deals (2026-10-14; the marks change nothing on it).
+        const credited = withFooterCredit(golden.html[key]!);
+        const was = route === '/' ? withHeroDeals(credited, heroDealsHtml(goldenMenuDealsMarked())) : credited;
         expect(now.pages[state]![route], `${state} ${route}`).toBe(htmlWithDealsMarked(route, was));
         expect(now.pages[state]![route] === was, `${state} ${route} unchanged`).toBe(!DEALS_MARKED_ROUTES.includes(route));
       }

@@ -9,6 +9,7 @@ import {
 import { publishedSettingsReadSchema, publishedShopReadSchema } from '@cheeseoclock/shared-schemas/web-settings';
 import { sql } from './db';
 import { DEFAULT_FACTS, factsFromBlock, type CopyFacts, type SiteFacts } from './delivery-facts';
+import { heroSlides, type HeroSlide } from './hero-deals';
 import { resolveHome, type HomeView } from './home-lineup';
 import { DEFAULT_SHOP_FACTS, shopFactsFromBlock, type ShopFacts } from './shop-facts';
 import { taxBpsOf } from './tax-words';
@@ -269,6 +270,16 @@ export const getCopyFacts: () => Promise<CopyFacts> = dedupe(async () => {
 export const getHomeView: () => Promise<HomeView> = dedupe(async () => {
   const { site, shop, menu } = await getPageData();
   return resolveHome(shop.home, menu, deliveryZoneFeeItemIds(site.zones));
+});
+
+/**
+ * The home hero's deals slider (lib/hero-deals): the published menu's deals
+ * by kind, with its prices — Buy 1 Get 1 only while the owner has it on (the
+ * stored block's rules, as /menu sells them); the menu unknown → none.
+ */
+export const getHeroSlides: () => Promise<HeroSlide[]> = dedupe(async () => {
+  const { site, menu } = await getPageData();
+  return heroSlides(menu, { buy1Get1: site.buy1Get1 });
 });
 
 /**

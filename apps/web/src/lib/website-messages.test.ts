@@ -35,7 +35,8 @@ import {
 import { publishedSettingsSchema } from '@cheeseoclock/shared-schemas/web-settings';
 import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery-charge';
 import golden from './__fixtures__/site-copy-v0.7.26.json';
-import homeV0729 from './__fixtures__/home-page-v0.7.29.json';
+import homeV0729Golden from './__fixtures__/home-page-v0.7.29.json';
+import { homeTreeWithHeroDeals } from './__fixtures__/hero-deals';
 import { goldenMenu } from './__fixtures__/golden-menu';
 import { homeTreeWithMenuUnknown } from './__fixtures__/menu-unknown';
 import { DELIVERY_AREAS, getArea, renderArea } from './areas';
@@ -236,6 +237,9 @@ const TODAY_CLOSED =
 // __fixtures__/home-page-v0.7.29.json was taken this way from v0.7.29's code.
 // ---------------------------------------------------------------------------
 
+/** v0.7.29's home page as served today: the deals slider's element first in its hero (2026-10-14), nothing else. */
+const homeV0729 = homeTreeWithHeroDeals(homeV0729Golden);
+
 function typeName(t: unknown): string {
   if (typeof t === 'string') return t;
   if (typeof t === 'function') return (t as { displayName?: string; name?: string }).displayName ?? (t as { name: string }).name ?? 'anonymous';
@@ -328,16 +332,16 @@ describe('nothing new stored: the website exactly as v0.7.29', () => {
   it('the home page is v0.7.29’s element for element — no database, no block, a v0.7.29 till’s block, a block at the defaults, an announcement switched off', async () => {
     // The menu unknown (no database, nothing published): v0.7.29's without its menu prices (sweep B2)
     // — 6 price badges, 3 deals' saving, worth and price — and the hero's chip without a price.
-    const unknown = homeTreeWithMenuUnknown(homeV0729);
+    const unknown = homeTreeWithMenuUnknown(homeV0729Golden);
     expect([unknown.removed, unknown.chips]).toEqual([15, 1]);
     const url = process.env['DATABASE_URL'];
     delete process.env['DATABASE_URL'];
     try {
-      expect(await homeTree()).toEqual(unknown.tree);
+      expect(await homeTree()).toEqual(homeTreeWithHeroDeals(unknown.tree));
     } finally {
       process.env['DATABASE_URL'] = url;
     }
-    expect(await homeTree()).toEqual(unknown.tree);
+    expect(await homeTree()).toEqual(homeTreeWithHeroDeals(unknown.tree));
     // Today's menu published: v0.7.29's exactly — with no block too.
     const m = homeMenu();
     await publish(m);

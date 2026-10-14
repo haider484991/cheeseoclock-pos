@@ -56,6 +56,16 @@ body {
   }
 }
 
+/* The home hero's deals slider: the active tab's line fills while its slide shows (HeroDealsClient). */
+@keyframes hero-deal-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;

@@ -36,6 +36,7 @@ import {
 } from '@cheeseoclock/shared-types';
 import { buildShopBlock } from '../../../../packages/pos-domain/src/shop-block';
 import { withFooterCredit } from './__fixtures__/footer-credit';
+import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
 import { goldenMenu } from './__fixtures__/golden-menu';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
 
@@ -149,8 +150,11 @@ function visible(html: string): string {
     .replace(/\s+/g, ' ');
 }
 
-// The golden home page as served today: plus the footer's ordering-system credit (2026-10-13).
+// The golden home page as served today: plus the footer's ordering-system credit (2026-10-13). The deals
+// slider first in the hero (2026-10-14) is the published menu's: each test puts in the one for its menu
+// (servedFor), after its own edits to the rest of the page.
 const GOLDEN_HOME = () => withFooterCredit(golden.html[golden.pages['b']!['/']!]!);
+const servedFor = (m: PublishedMenu, page: string) => withHeroDeals(page, heroDealsHtml(m));
 const GRID_BADGE = (rs: string) =>
   `<span class="absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-sm font-extrabold text-ink">${rs}</span>`;
 const SLIDE_BADGE = (rs: string) => `<span class="rounded-full bg-cheese px-4 py-1.5 font-cond text-lg font-extrabold text-ink">${rs}</span>`;
@@ -178,11 +182,12 @@ beforeEach(async () => {
 describe('the home page follows the published menu', () => {
   it('today’s menu: the golden home page, every featured item found (homeMissing [])', async () => {
     expect((await publish(goldenMenu())).homeMissing).toEqual([]);
-    expect(await homeHtml()).toBe(GOLDEN_HOME());
+    expect(await homeHtml()).toBe(servedFor(goldenMenu(), GOLDEN_HOME()));
   });
 
   it('a price changed on the till moves only its card and its carousel slide; a deal’s, only that deal’s price and saving', async () => {
-    await publish(menuWith({ 'Cheesy Star — Large': { basePriceCents: 234_500 }, 'Big Two': { basePriceCents: 350_000 } }));
+    const m = menuWith({ 'Cheesy Star — Large': { basePriceCents: 234_500 }, 'Big Two': { basePriceCents: 350_000 } });
+    await publish(m);
     let want = GOLDEN_HOME();
     // The Cheesy Star's card (the first after its photo's alt) and the front slide (the Cheesy Star's).
     const card = want.indexOf(GRID_BADGE('Rs 2,200'), want.indexOf('alt="Cheesy Star from Cheese O&#x27;Clock"'));
@@ -196,7 +201,9 @@ describe('the home page follows the published menu', () => {
         '<span class="block font-display text-4xl tracking-wide text-cheese">Rs 3,500</span>',
       );
     const html = await homeHtml();
-    expect(html).toBe(want);
+    // (The deals slider is this menu's: Big Two at Rs 3,500 there too.)
+    expect(html).toBe(servedFor(m, want));
+    expect(heroDealsHtml(m)).toContain('Rs 3,500');
     expect(html.split(GRID_BADGE('Rs 2,200')).length - 1).toBe(4);
     expect(html).toContain('Value deals from Rs 2,600 →');
   });
@@ -219,7 +226,8 @@ describe('the home page follows the published menu', () => {
   });
 
   it('a featured item or deal set "Pick-up only" on the till says so on its card, its slide and its deal card, in /menu’s words — never shown as delivered; the rest as before', async () => {
-    await publish(menuWith({ 'Cheesy Star — Large': { pickupOnly: true }, 'Meat Lovers — Large': { pickupOnly: true }, 'Big Two': { pickupOnly: true } }));
+    const m = menuWith({ 'Cheesy Star — Large': { pickupOnly: true }, 'Meat Lovers — Large': { pickupOnly: true }, 'Big Two': { pickupOnly: true } });
+    await publish(m);
     const html = await homeHtml();
     const chip = 'rounded-full border-2 border-dashed border-cream/30 px-3 py-1 font-cond text-xs font-bold uppercase tracking-wide text-cream/70';
     const GRID_CHIP = `<p class="mt-2 w-fit ${chip}">Pick-up only</p>`;
@@ -237,8 +245,10 @@ describe('the home page follows the published menu', () => {
     expect(text).not.toMatch(/(Family Feast|Perfect Pair) [^R]* Pick-up only/);
     // The front slide (the Cheesy Star) beside its price.
     expect(text).toContain('Rs 2,200 Pick-up only Order this →');
-    // Nothing else on the page moved: without the three notes it is today's page.
-    expect(html.replaceAll(GRID_CHIP, '').replaceAll(DEAL_CHIP, '').replaceAll(SLIDE_CHIP, '')).toBe(GOLDEN_HOME());
+    // Nothing else on the page moved: without the three notes it is today's page (its deals slider says Big Two
+    // is pick-up only too: lib/hero-deals).
+    expect(html.replaceAll(GRID_CHIP, '').replaceAll(DEAL_CHIP, '').replaceAll(SLIDE_CHIP, '')).toBe(servedFor(m, GOLDEN_HOME()));
+    expect(heroDealsHtml(m).split('>Pick-up only</span>').length - 1).toBe(1);
   });
 
   it('none of the lineup on the menu: no turntable, no signatures, no deals and no deals chip — the rest of the page as before', async () => {

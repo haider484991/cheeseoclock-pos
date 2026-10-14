@@ -25,7 +25,10 @@
  *    come from the menu, so none show — compared against the golden with
  *    exactly those prices taken out (__fixtures__/menu-unknown.ts);
  *  - 2026-10-13: the footer's bottom line credits the ordering system, one
- *    link after "Staff login" on every page (__fixtures__/footer-credit.ts).
+ *    link after "Staff login" on every page (__fixtures__/footer-credit.ts);
+ *  - 2026-10-14: the home hero starts with the deals slider, worked out from
+ *    the menu's deals, when there is a menu with deals — (b) and (c), not
+ *    (a) (__fixtures__/hero-deals.ts).
  * Apart from those, states (b) and (c) are the golden byte for byte.
  */
 import { createHash } from 'node:crypto';
@@ -37,6 +40,7 @@ import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery
 import { goldenMenu } from './__fixtures__/golden-menu';
 import { MENU_PRICED_ROUTES, htmlWithMenuUnknown } from './__fixtures__/menu-unknown';
 import { FOOTER_CREDIT, withFooterCredit } from './__fixtures__/footer-credit';
+import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
 
 const db = vi.hoisted(() => ({
@@ -333,6 +337,8 @@ async function capture(): Promise<Golden> {
 
 let now: Golden;
 let golden: Golden;
+/** The deals slider each state's home page starts its hero with ('' = none: (a) knows no menu). */
+const HERO: Record<string, string> = { a: '', b: heroDealsHtml(goldenMenu()), c: heroDealsHtml(goldenMenu()) };
 
 beforeAll(async () => {
   process.env['BRIDGE_SECRET'] = SECRET;
@@ -359,9 +365,10 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     it(`(${state}) every page’s HTML, byte for byte`, () => {
       for (const [route, key] of Object.entries(golden.pages[state]!)) {
         // (a) the menu unknown: the golden without its prices (sweep B2) on the home and landing pages.
-        // Every state: the footer credit added (2026-10-13).
+        // Every state: the footer credit added (2026-10-13); the home page: the deals slider first in
+        // its hero while the menu has deals (2026-10-14).
         const want = withFooterCredit(state === 'a' ? htmlWithMenuUnknown(route, golden.html[key]!) : golden.html[key]!);
-        expect(now.html[now.pages[state]![route]!], `${state} ${route}`).toBe(want);
+        expect(now.html[now.pages[state]![route]!], `${state} ${route}`).toBe(route === '/' ? withHeroDeals(want, HERO[state]!) : want);
       }
     });
 
@@ -387,6 +394,19 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     }
   });
 
+  it('the deals slider (2026-10-14): first in the home hero with the menu’s deals — once, on the home page only; none with the menu unknown', () => {
+    expect(HERO['b']).toContain('aria-roledescription="carousel"');
+    // Today's golden menu: its three pizza deals and its burgers, at the menu's prices.
+    expect(HERO['b']).toContain('Pizza deals');
+    expect(HERO['b']).toContain('Burgers');
+    for (const state of ['b', 'c']) {
+      for (const [route, key] of Object.entries(now.pages[state]!)) {
+        expect(now.html[key]!.split(HERO[state]!).length - 1, `${state} ${route}`).toBe(route === '/' ? 1 : 0);
+      }
+    }
+    for (const key of Object.values(now.pages['a']!)) expect(now.html[key]).not.toContain('aria-roledescription="carousel" aria-label="Deals"');
+  });
+
   it('the checkout sheet: delivery and pick-up, open and closed', () => {
     for (const [k, html] of Object.entries(golden.checkout)) expect(now.checkout[k], k).toBe(html);
     expect(Object.keys(now.checkout)).toEqual(Object.keys(golden.checkout));
@@ -398,8 +418,12 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
       const is = now.html[now.pages['a']![route]!]!;
       expect(is === was, route).toBe(!MENU_PRICED_ROUTES.includes(route));
     }
-    // With the menu published at today's prices, those same pages are the golden exactly (plus the footer credit).
-    for (const route of MENU_PRICED_ROUTES) expect(now.html[now.pages['b']![route]!], route).toBe(withFooterCredit(golden.html[golden.pages['b']![route]!]!));
+    // With the menu published at today's prices, those same pages are the golden exactly (plus the footer credit,
+    // and the home page's deals slider).
+    for (const route of MENU_PRICED_ROUTES) {
+      const want = withFooterCredit(golden.html[golden.pages['b']![route]!]!);
+      expect(now.html[now.pages['b']![route]!], route).toBe(route === '/' ? withHeroDeals(want, HERO['b']!) : want);
+    }
   });
 
   it('the golden copy is the one taken from v0.7.30 (a few of its facts, spelled out)', () => {

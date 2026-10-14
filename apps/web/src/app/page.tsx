@@ -5,6 +5,7 @@ import { Reveal } from '@/components/Reveal';
 import { CheeseTime } from '@/components/CheeseTime';
 import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { PizzaCarousel3D } from '@/components/PizzaCarousel3D';
+import { HeroDeals } from '@/components/HeroDeals';
 import { ShopMapCard } from '@/components/ShopMapCard';
 import { BUSINESS } from '@/lib/business';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
@@ -135,6 +136,9 @@ export default async function HomePage() {
             aria-hidden
             className="absolute inset-0 opacity-[0.07] [background-image:repeating-linear-gradient(90deg,#F5B301_0_1px,transparent_1px_90px)]"
           />
+          {/* The deals first (the user, 14 Oct 2026: a slider of every deal in the hero): burger deals, pizza
+              deals, Buy 1 Get 1 and the burgers, from the published menu (lib/hero-deals). None: nothing here. */}
+          <HeroDeals />
           {/* Phones: headline → pizzas → the rest, so the food is above the
               fold. Desktop: text left, pizzas right. */}
           <div className="relative mx-auto grid max-w-6xl gap-x-4 px-4 pb-14 pt-8 [grid-template-areas:'head'_'wheel'_'rest'] md:grid-cols-[0.95fr_1.05fr] md:items-center md:pb-20 md:pt-14 md:[grid-template-areas:'head_wheel'_'rest_wheel']">
