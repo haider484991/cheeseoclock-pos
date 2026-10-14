@@ -1,19 +1,21 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { formatCents } from '@/lib/format';
 import { PICKUP_ONLY_WORDS } from '@/lib/menu-view';
 import type { HeroSlide } from '@/lib/hero-deals';
 
 /**
- * The home hero's deals slider (the drawing and the turning; the slides are
- * lib/hero-deals, read by the server half HeroDeals). One wide card per kind
- * of deal — the user's photo beside the menu's names and prices — on a
- * scroll-snap track, so a phone swipes it natively; the labelled tabs under
- * it say what else there is and pick a slide.
+ * The home hero's deals and offers slider (the drawing and the turning; the
+ * slides are lib/hero-deals, read by the server half HeroDeals). One wide
+ * card per slide — a photo beside the menu's names and prices — on a
+ * scroll-snap track, so a phone swipes it natively. The tabs under it name
+ * every kind of deal and offer (one tab for the slides of one kind: each
+ * burger deal has a slide, "Burger deals" one tab with a line per slide) and
+ * pick one.
  *
- * The active tab's line fills while its slide shows (SLIDE_MS), and its
+ * The active slide's line fills while it shows (SLIDE_MS), and its
  * animation's end turns to the next slide: pausing the animation pauses the
  * turning. It waits while a mouse is over the slider, while anything in it
  * has focus, while it is off screen or the tab hidden, and after the pause
@@ -25,6 +27,19 @@ import type { HeroSlide } from '@/lib/hero-deals';
 const SLIDE_MS = 6500;
 /** A swipe has settled once the track has been still this long. */
 const SETTLE_MS = 90;
+
+/** The slides of one kind: one tab. */
+interface TabGroup {
+  group: string;
+  tab: string;
+  /** Its first slide, and how many it has. */
+  start: number;
+  count: number;
+  /** Its slides' element ids (aria-controls). */
+  ids: string;
+}
+
+const slideId = (s: HeroSlide) => `hero-deal-${s.key}`;
 
 function PauseGlyph({ paused }: { paused: boolean }) {
   return paused ? (
@@ -38,7 +53,18 @@ function PauseGlyph({ paused }: { paused: boolean }) {
   );
 }
 
+function PickupOnly({ ink }: { ink: boolean }) {
+  return (
+    <span
+      className={`inline-block rounded-full border border-dashed px-2 py-px align-middle font-cond text-xs font-bold uppercase tracking-wide ${ink ? 'border-cream/40 text-cream/70' : 'border-ink/40 text-ink/70'}`}
+    >
+      {PICKUP_ONLY_WORDS}
+    </span>
+  );
+}
+
 export function HeroDealsClient({ slides }: { slides: HeroSlide[] }) {
+  const root = useRef<HTMLDivElement>(null);
   const track = useRef<HTMLDivElement>(null);
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
   const settle = useRef<number | undefined>(undefined);
@@ -50,12 +76,25 @@ export function HeroDealsClient({ slides }: { slides: HeroSlide[] }) {
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const [seen, setSeen] = useState(true);
-  const root = useRef<HTMLDivElement>(null);
   const many = slides.length > 1;
-  // The slides turn by themselves (the active tab's line is the timer) unless the reader asked for less motion…
+  // The slides turn by themselves (the active slide's line is the timer) unless the reader asked for less motion…
   const timed = live && many && !still;
   // …and the timer runs only while nobody is reading or using the slider, and it is in view.
   const running = timed && !stopped && !hovered && !focused && seen;
+
+  const groups = useMemo(() => {
+    const out: TabGroup[] = [];
+    slides.forEach((s, i) => {
+      const last = out[out.length - 1];
+      if (last && last.group === s.group) {
+        last.count += 1;
+        last.ids += ` ${slideId(s)}`;
+      } else out.push({ group: s.group, tab: s.tab, start: i, count: 1, ids: slideId(s) });
+    });
+    return out;
+  }, [slides]);
+  const groupAt = (i: number) => groups.findIndex((g) => i >= g.start && i < g.start + g.count);
+  const activeGroup = groupAt(index);
 
   useEffect(() => {
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -110,21 +149,22 @@ export function HeroDealsClient({ slides }: { slides: HeroSlide[] }) {
     }, SETTLE_MS);
   };
 
+  // Arrow keys, Home and End move between the tabs (a kind's first slide).
   const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    const move =
+    const n = groups.length;
+    const to =
       e.key === 'ArrowRight'
-        ? 1
+        ? (activeGroup + 1) % n
         : e.key === 'ArrowLeft'
-          ? -1
+          ? (activeGroup - 1 + n) % n
           : e.key === 'Home'
-            ? -index
+            ? 0
             : e.key === 'End'
-              ? slides.length - 1 - index
-              : 0;
-    if (move === 0) return;
+              ? n - 1
+              : -1;
+    if (to < 0) return;
     e.preventDefault();
-    const to = (index + move + slides.length) % slides.length;
-    go(to);
+    go(groups[to]!.start);
     tabs.current[to]?.focus();
   };
 
@@ -135,7 +175,7 @@ export function HeroDealsClient({ slides }: { slides: HeroSlide[] }) {
       className="relative mx-auto max-w-6xl px-4 pt-5 md:pt-8"
       role="region"
       aria-roledescription="carousel"
-      aria-label="Deals"
+      aria-label="Deals and offers"
       onPointerEnter={(e) => e.pointerType === 'mouse' && setHovered(true)}
       onPointerLeave={(e) => e.pointerType === 'mouse' && setHovered(false)}
       onFocus={() => setFocused(true)}
@@ -165,8 +205,8 @@ export function HeroDealsClient({ slides }: { slides: HeroSlide[] }) {
           const ink = s.tone === 'ink';
           return (
             <div
-              key={s.kind}
-              id={`hero-deal-${s.kind}`}
+              key={s.key}
+              id={slideId(s)}
               role={many ? 'tabpanel' : 'group'}
               aria-roledescription="slide"
               aria-label={`${i + 1} of ${slides.length}: ${s.title}`}
@@ -194,7 +234,7 @@ export function HeroDealsClient({ slides }: { slides: HeroSlide[] }) {
                 </div>
                 {/* The words: the menu's names and prices, as the printed menu sets them. */}
                 <div
-                  className={`flex flex-col p-6 md:justify-center md:p-9 ${ink ? 'bg-night-card text-cream' : 'bg-cheese text-ink'}`}
+                  className={`flex flex-col justify-center p-6 md:p-9 ${ink ? 'bg-night-card text-cream' : 'bg-cheese text-ink'}`}
                 >
                   <p className="font-display text-[clamp(2.5rem,5vw,3.75rem)] uppercase leading-[0.92] tracking-wide">
                     {s.title}
@@ -206,40 +246,67 @@ export function HeroDealsClient({ slides }: { slides: HeroSlide[] }) {
                       {s.line}
                     </p>
                   )}
-                  <ul className="mt-5 space-y-2 font-cond md:mt-6">
-                    {s.rows.map((r) => (
-                      <li key={r.name} className="flex items-baseline gap-2">
-                        <span className="min-w-0">
-                          <span className="text-xl font-bold leading-tight md:text-[1.375rem]">
-                            {r.name}
+                  {/* One deal: its price, big. */}
+                  {s.price && (
+                    <p className="mt-5 flex flex-wrap items-center gap-3 md:mt-6">
+                      <span
+                        className={`font-display text-5xl leading-none tracking-wide md:text-6xl ${ink ? 'text-cheese' : 'text-ink'}`}
+                      >
+                        {formatCents(s.price.cents)}
+                      </span>
+                      {s.price.pickupOnly && <PickupOnly ink={ink} />}
+                    </p>
+                  )}
+                  {s.rows.length > 0 && (
+                    <ul className="mt-5 space-y-2 font-cond md:mt-6">
+                      {s.rows.map((r) => (
+                        <li key={r.name} className="flex items-baseline gap-2">
+                          <span className="min-w-0">
+                            <span className="text-xl font-bold leading-tight md:text-[1.375rem]">
+                              {r.name}
+                            </span>
+                            {r.pickupOnly && (
+                              <span className="ml-2">
+                                <PickupOnly ink={ink} />
+                              </span>
+                            )}
+                            {r.what && (
+                              <span
+                                className={`block text-sm font-semibold ${ink ? 'text-cream/55' : 'text-ink/65'}`}
+                              >
+                                {r.what}
+                              </span>
+                            )}
                           </span>
-                          {r.pickupOnly && (
+                          <span
+                            aria-hidden
+                            className={`mb-1 min-w-6 flex-1 border-b-2 border-dotted ${ink ? 'border-cream/25' : 'border-ink/30'}`}
+                          />
+                          <span className="whitespace-nowrap">
+                            {r.from && (
+                              <span
+                                className={`mr-1 text-sm font-semibold ${ink ? 'text-cream/60' : 'text-ink/65'}`}
+                              >
+                                from
+                              </span>
+                            )}
+                            {r.wasCents !== null && (
+                              <s
+                                className={`mr-1.5 text-base font-semibold ${ink ? 'text-cream/45' : 'text-ink/50'}`}
+                              >
+                                {formatCents(r.wasCents)}
+                              </s>
+                            )}
                             <span
-                              className={`ml-2 inline-block rounded-full border border-dashed px-2 py-px align-middle text-xs font-bold uppercase tracking-wide ${ink ? 'border-cream/40 text-cream/70' : 'border-ink/40 text-ink/70'}`}
+                              className={`text-xl font-extrabold md:text-[1.375rem] ${ink ? 'text-cheese' : 'text-ink'}`}
                             >
-                              {PICKUP_ONLY_WORDS}
+                              {formatCents(r.priceCents)}
                             </span>
-                          )}
-                          {r.what && (
-                            <span
-                              className={`block text-sm font-semibold ${ink ? 'text-cream/55' : 'text-ink/65'}`}
-                            >
-                              {r.what}
-                            </span>
-                          )}
-                        </span>
-                        <span
-                          aria-hidden
-                          className={`mb-1 min-w-6 flex-1 border-b-2 border-dotted ${ink ? 'border-cream/25' : 'border-ink/30'}`}
-                        />
-                        <span
-                          className={`whitespace-nowrap text-xl font-extrabold md:text-[1.375rem] ${ink ? 'text-cheese' : 'text-ink'}`}
-                        >
-                          {formatCents(r.priceCents)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   {s.more > 0 && (
                     <p
                       className={`mt-2 font-cond text-sm font-bold ${ink ? 'text-cream/55' : 'text-ink/65'}`}
@@ -247,7 +314,7 @@ export function HeroDealsClient({ slides }: { slides: HeroSlide[] }) {
                       and {s.more} more on the menu
                     </p>
                   )}
-                  <div className="mt-auto pt-6 md:mt-0 md:pt-8">
+                  <div className="pt-6 md:pt-8">
                     <Link
                       href={s.href}
                       className={`inline-block rounded-full px-7 py-3 font-display text-xl uppercase tracking-wide transition-colors active:scale-95 ${ink ? 'bg-cheese text-ink hover:bg-cheese-hot' : 'bg-ink text-cheese hover:bg-ink-soft'}`}
@@ -265,47 +332,62 @@ export function HeroDealsClient({ slides }: { slides: HeroSlide[] }) {
       {many && (
         <div
           role="tablist"
-          aria-label="Deals"
+          aria-label="Deals and offers"
           onKeyDown={onTabKey}
           className="mt-4 grid gap-2 md:gap-3"
-          style={{ gridTemplateColumns: `repeat(${slides.length}, minmax(0, 1fr))` }}
+          style={{ gridTemplateColumns: `repeat(${groups.length}, minmax(0, 1fr))` }}
         >
-          {slides.map((s, i) => {
-            const on = i === index;
+          {groups.map((g, gi) => {
+            const on = gi === activeGroup;
             return (
               <button
-                key={s.kind}
+                key={g.group}
                 ref={(el) => {
-                  tabs.current[i] = el;
+                  tabs.current[gi] = el;
                 }}
                 type="button"
                 role="tab"
-                id={`hero-deal-tab-${s.kind}`}
-                aria-controls={`hero-deal-${s.kind}`}
+                id={`hero-deal-tab-${g.group}`}
+                aria-controls={g.ids}
                 aria-selected={on}
                 tabIndex={on ? 0 : -1}
-                onClick={() => go(i)}
+                onClick={() => go(g.start)}
                 className="group py-1 text-left"
               >
-                <span className="block h-1 overflow-hidden rounded-full bg-cream/15">
-                  <span
-                    key={on ? `on-${index}` : 'off'}
-                    onAnimationEnd={on && timed ? () => go(index + 1) : undefined}
-                    className="block h-full origin-left rounded-full bg-cheese"
-                    style={
-                      on && timed
-                        ? {
-                            animation: `hero-deal-fill ${SLIDE_MS}ms linear forwards`,
-                            animationPlayState: running ? 'running' : 'paused',
+                {/* A line per slide of this kind: the ones shown full, the one showing filling. */}
+                <span className="flex gap-1">
+                  {Array.from({ length: g.count }, (_, j) => {
+                    const i = g.start + j;
+                    const now = i === index;
+                    return (
+                      <span
+                        key={i}
+                        className="block h-1 flex-1 overflow-hidden rounded-full bg-cream/15"
+                      >
+                        <span
+                          key={now ? `on-${index}` : 'off'}
+                          onAnimationEnd={now && timed ? () => go(index + 1) : undefined}
+                          className="block h-full origin-left rounded-full bg-cheese"
+                          style={
+                            now && timed
+                              ? {
+                                  animation: `hero-deal-fill ${SLIDE_MS}ms linear forwards`,
+                                  animationPlayState: running ? 'running' : 'paused',
+                                }
+                              : {
+                                  transform:
+                                    (now && live) || (on && i < index) ? 'scaleX(1)' : 'scaleX(0)',
+                                }
                           }
-                        : { transform: on && live ? 'scaleX(1)' : 'scaleX(0)' }
-                    }
-                  />
+                        />
+                      </span>
+                    );
+                  })}
                 </span>
                 <span
                   className={`mt-2 block font-cond text-xs font-bold uppercase leading-tight tracking-[0.06em] transition-colors md:text-sm md:tracking-[0.12em] ${on ? 'text-cream' : 'text-cream/50 group-hover:text-cream/80'}`}
                 >
-                  {s.tab}
+                  {g.tab}
                 </span>
               </button>
             );

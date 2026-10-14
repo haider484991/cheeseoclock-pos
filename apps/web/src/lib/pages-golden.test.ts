@@ -337,8 +337,15 @@ async function capture(): Promise<Golden> {
 
 let now: Golden;
 let golden: Golden;
-/** The deals slider each state's home page starts its hero with ('' = none: (a) knows no menu). */
-const HERO: Record<string, string> = { a: '', b: heroDealsHtml(goldenMenu()), c: heroDealsHtml(goldenMenu()) };
+/**
+ * The deals slider each state's home page starts its hero with ('' = none: (a) knows no menu); (c)'s block adds
+ * its website offer (10% off pick-up orders).
+ */
+const HERO: Record<string, string> = {
+  a: '',
+  b: heroDealsHtml(goldenMenu()),
+  c: heroDealsHtml(goldenMenu(), { pickup: defaultBlock(goldenMenu()).pickup }),
+};
 
 beforeAll(async () => {
   process.env['BRIDGE_SECRET'] = SECRET;
@@ -396,9 +403,10 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
 
   it('the deals slider (2026-10-14): first in the home hero with the menu’s deals — once, on the home page only; none with the menu unknown', () => {
     expect(HERO['b']).toContain('aria-roledescription="carousel"');
-    // Today's golden menu: its three pizza deals and its burgers, at the menu's prices.
+    // Today's golden menu: its three pizza deals at the menu's prices; with (c)'s block, its 10% too.
     expect(HERO['b']).toContain('Pizza deals');
-    expect(HERO['b']).toContain('Burgers');
+    expect(HERO['b']).not.toContain('% off');
+    expect(HERO['c']).toContain('10% off pick-up orders');
     for (const state of ['b', 'c']) {
       for (const [route, key] of Object.entries(now.pages[state]!)) {
         expect(now.html[key]!.split(HERO[state]!).length - 1, `${state} ${route}`).toBe(route === '/' ? 1 : 0);

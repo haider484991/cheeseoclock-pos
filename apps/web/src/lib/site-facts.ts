@@ -3,6 +3,7 @@ import {
   closedNoticeInForce,
   deliveryZoneFeeItemIds,
   type PublishedMenuCategory,
+  type PublishedPickup,
   type PublishedSettings,
   type PublishedShop,
 } from '@cheeseoclock/shared-types';
@@ -99,6 +100,11 @@ interface PageData {
   shop: ShopFacts;
   /** null = no menu published (or none read). */
   menu: MenuFacts | null;
+  /**
+   * The owner's website offer as the stored block has it (its %, delivery too, the categories with their own
+   * %), for the home hero's offers (lib/hero-deals); null = no block. Never handed to the browser.
+   */
+  offer: PublishedPickup | null;
 }
 
 /** One read, and whether it failed with nothing read before (then `data` is the built-in list and today's details). */
@@ -108,7 +114,7 @@ interface PageRead {
   unread: boolean;
 }
 
-const DEFAULT_PAGE_DATA: PageData = Object.freeze({ site: DEFAULT_FACTS, shop: DEFAULT_SHOP_FACTS, menu: null });
+const DEFAULT_PAGE_DATA: PageData = Object.freeze({ site: DEFAULT_FACTS, shop: DEFAULT_SHOP_FACTS, menu: null, offer: null });
 
 function jsonOf(raw: unknown): unknown {
   if (typeof raw !== 'string') return raw;
@@ -175,10 +181,12 @@ async function readPageData(): Promise<PageRead> {
         FROM site_menu WHERE id = 1
     `) as Array<{ settings: unknown; shop: unknown; categories: unknown; photos: unknown }>;
     const row = rows[0];
+    const block = parseStoredSettings(row?.settings ?? null);
     const data: PageData = {
-      site: factsFromBlock(parseStoredSettings(row?.settings ?? null)),
+      site: factsFromBlock(block),
       shop: shopFactsFromBlock(parseStoredShop(row?.shop ?? null)),
       menu: row ? menuFactsOf(row.categories, row.photos) : null,
+      offer: block?.pickup ?? null,
     };
     lastRead = data;
     return { data, unread: false };
@@ -273,13 +281,14 @@ export const getHomeView: () => Promise<HomeView> = dedupe(async () => {
 });
 
 /**
- * The home hero's deals slider (lib/hero-deals): the published menu's deals
- * by kind, with its prices — Buy 1 Get 1 only while the owner has it on (the
- * stored block's rules, as /menu sells them); the menu unknown → none.
+ * The home hero's deals and offers (lib/hero-deals): the published menu's
+ * deals, with its prices — Buy 1 Get 1 only while the owner has it on (the
+ * stored block's rules, as /menu sells them) — and the owner's website %
+ * (the stored block's: none without one); the menu unknown → none.
  */
 export const getHeroSlides: () => Promise<HeroSlide[]> = dedupe(async () => {
-  const { site, menu } = await getPageData();
-  return heroSlides(menu, { buy1Get1: site.buy1Get1 });
+  const { site, menu, offer } = await getPageData();
+  return heroSlides(menu, { buy1Get1: site.buy1Get1, pickup: offer });
 });
 
 /**

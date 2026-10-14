@@ -14,6 +14,7 @@ import {
   DEFAULT_BUY_1_GET_1_RULES,
   type Buy1Get1Rules,
   type PublishedMenu,
+  type PublishedPickup,
 } from '@cheeseoclock/shared-types';
 import { HeroDealsClient } from '@/components/HeroDealsClient';
 import { heroSlides } from '@/lib/hero-deals';
@@ -22,12 +23,21 @@ import { heroSlides } from '@/lib/hero-deals';
 export const HERO_OPEN =
   '<section class="relative overflow-hidden bg-ink"><div aria-hidden="true" class="absolute inset-0 bg-[radial-gradient(ellipse_at_72%_45%,rgba(245,179,1,0.16),transparent_58%)]"></div><div aria-hidden="true" class="absolute inset-0 opacity-[0.07] [background-image:repeating-linear-gradient(90deg,#F5B301_0_1px,transparent_1px_90px)]"></div>';
 
-/** The slider as the home page renders it for this menu ('' = none: the menu unknown, or no deal on it). */
+/**
+ * The slider as the home page renders it for this menu and the stored block's website offer ('' = none: the menu
+ * unknown, or nothing on it to show). `pickup`: the block's pick-up offer (none without a block).
+ */
 export function heroDealsHtml(
   menu: Pick<PublishedMenu, 'categories'> | null,
-  buy1Get1: Pick<Buy1Get1Rules, 'on' | 'opensMinute' | 'closesMinute'> = DEFAULT_BUY_1_GET_1_RULES,
+  opts: {
+    buy1Get1?: Pick<Buy1Get1Rules, 'on' | 'opensMinute' | 'closesMinute'>;
+    pickup?: PublishedPickup | null;
+  } = {},
 ): string {
-  const slides = heroSlides(menu, { buy1Get1 });
+  const slides = heroSlides(menu, {
+    buy1Get1: opts.buy1Get1 ?? DEFAULT_BUY_1_GET_1_RULES,
+    pickup: opts.pickup ?? null,
+  });
   return slides.length === 0
     ? ''
     : renderToStaticMarkup(React.createElement(HeroDealsClient, { slides }));

@@ -317,7 +317,8 @@ describe('the value deals marked: every page as v0.7.30 but the /menu chip', () 
         // The golden as served today: plus the footer's ordering-system credit (2026-10-13), and the home
         // page's deals slider from this menu's deals (2026-10-14; the marks change nothing on it).
         const credited = withFooterCredit(golden.html[key]!);
-        const was = route === '/' ? withHeroDeals(credited, heroDealsHtml(goldenMenuDealsMarked())) : credited;
+        const hero = heroDealsHtml(goldenMenuDealsMarked(), state === 'c' ? { pickup: defaultBlock(goldenMenuDealsMarked()).pickup } : {});
+        const was = route === '/' ? withHeroDeals(credited, hero) : credited;
         expect(now.pages[state]![route], `${state} ${route}`).toBe(htmlWithDealsMarked(route, was));
         expect(now.pages[state]![route] === was, `${state} ${route} unchanged`).toBe(!DEALS_MARKED_ROUTES.includes(route));
       }
