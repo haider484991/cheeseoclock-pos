@@ -32,9 +32,10 @@ const MENU_ID = `${SITE_URL}/menu#menu`;
  * The shop as one Restaurant node (the root layout, every page): its name,
  * phone, street address, price range, what the rider takes and its opening
  * hours are the owner's (lib/shop-facts.ts; today's with none stored — so
- * the node is byte for byte v0.7.30's); the place (city, pin, listing) is
- * code (lib/business.ts). `sameAs` only while there is a social link, which
- * the footer then shows too (JSON-LD mirrors visible content).
+ * the node is byte for byte v0.7.30's); the place (city, pin, listing) and
+ * the email are code (lib/business.ts). `sameAs` only while there is a
+ * social link, which the footer then shows too (JSON-LD mirrors visible
+ * content).
  */
 export function restaurantNode(shop: ShopFacts = DEFAULT_SHOP_FACTS): Record<string, unknown> {
   const { profile, hours, website } = shop;
@@ -51,6 +52,8 @@ export function restaurantNode(shop: ShopFacts = DEFAULT_SHOP_FACTS): Record<str
       `${SITE_URL}/images/menu/signature-cheese-dipped.webp`,
     ],
     telephone: profile.phone.e164,
+    // The footer's email (code: lib/business.ts).
+    email: BUSINESS.email,
     servesCuisine: [...BUSINESS.servesCuisine],
     priceRange: profile.priceRange,
     currenciesAccepted: 'PKR',

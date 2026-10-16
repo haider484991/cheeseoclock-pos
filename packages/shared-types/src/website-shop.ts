@@ -214,8 +214,9 @@ export const DEFAULT_SHOP_PROFILE: Readonly<ShopProfile> = Object.freeze({
   tagline: 'Hygienically Made. Deliciously Unforgettable.',
   // Matches the Google Business Profile listing (verified 27 Jul 2026).
   phone: phone('0300 9367865', '+923009367865'),
-  // Both shop numbers take WhatsApp orders; the first is the default deep link.
-  whatsappLines: Object.freeze([phone('0300 9367865', '+923009367865'), phone('0331 2188295', '+923312188295')]) as ShopPhone[],
+  // The WhatsApp ordering line, the default deep link. 0331 2188295 is CALL ONLY (owner, 30 Sep 2026: "don't add
+  // the second number as WhatsApp, it's call only"), so it is not a WhatsApp line: a message to it gets no reply.
+  whatsappLines: Object.freeze([phone('0300 9367865', '+923009367865')]) as ShopPhone[],
   // The owner's corrected address (25 Sep 2026).
   address: Object.freeze({
     street: 'Shop 3, Ground Floor, 41-C, Sehar Lane No. 3, Rahat Commercial Area, DHA Phase 6',

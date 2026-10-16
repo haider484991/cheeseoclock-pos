@@ -2139,7 +2139,7 @@
                     "type": "p",
                     "key": null,
                     "props": {
-                     "children": "Yes — message 0300 9367865 or 0331 2188295 with your order and address, and we'll confirm the total. Same kitchen, same prices.",
+                     "children": "Yes — message 0300 9367865 with your order and address, and we'll confirm the total. Same kitchen, same prices.",
                      "className": "px-5 pb-5 leading-relaxed text-cream/65"
                     }
                    }
@@ -2210,27 +2210,6 @@
                  ],
                  "className": "flex items-center gap-2 rounded-full border-2 border-ink/30 px-6 py-4 font-cond text-lg font-bold uppercase tracking-wide text-ink transition-colors hover:border-ink active:scale-95",
                  "href": "https://wa.me/923009367865?text=Hi%20Cheese%20O'Clock!%20I'd%20like%20to%20place%20an%20order%3A%20",
-                 "rel": "noopener noreferrer",
-                 "target": "_blank"
-                }
-               },
-               {
-                "type": "a",
-                "key": "https://wa.me/923312188295",
-                "props": {
-                 "children": [
-                  {
-                   "type": "WhatsAppGlyph",
-                   "key": null,
-                   "props": {
-                    "className": "h-5 w-5"
-                   }
-                  },
-                  " ",
-                  "0331 2188295"
-                 ],
-                 "className": "flex items-center gap-2 rounded-full border-2 border-ink/30 px-6 py-4 font-cond text-lg font-bold uppercase tracking-wide text-ink transition-colors hover:border-ink active:scale-95",
-                 "href": "https://wa.me/923312188295?text=Hi%20Cheese%20O'Clock!%20I'd%20like%20to%20place%20an%20order%3A%20",
                  "rel": "noopener noreferrer",
                  "target": "_blank"
                 }

@@ -13,6 +13,8 @@
  *
  * IMPORTANT (local SEO): name, address, phone and hours must read the same as
  * the Google Business Profile listing (the till's cards say so).
+ *
+ * The one shop word here is the email: no till card has a field for it yet.
  */
 export const BUSINESS = {
   locality: 'Karachi',
@@ -37,4 +39,7 @@ export const BUSINESS = {
   gbpCid: '6178042971394990674' as string | null,
 
   servesCuisine: ['Pizza', 'Burgers', 'Fast Food'],
+
+  // The shop's email (17 Oct 2026; it forwards to the shop's inbox): the footer links it, JSON-LD names it.
+  email: 'contact@cheeseoclock.net',
 } as const;

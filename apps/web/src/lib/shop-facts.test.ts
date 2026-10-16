@@ -51,10 +51,7 @@ describe('with nothing stored: today’s details, word for word (v0.7.30’s web
         name: "Cheese O'Clock",
         tagline: 'Hygienically Made. Deliciously Unforgettable.',
         phone: { display: '0300 9367865', e164: '+923009367865' },
-        whatsappLines: [
-          { display: '0300 9367865', e164: '+923009367865' },
-          { display: '0331 2188295', e164: '+923312188295' },
-        ],
+        whatsappLines: [{ display: '0300 9367865', e164: '+923009367865' }],
         address: {
           street: 'Shop 3, Ground Floor, 41-C, Sehar Lane No. 3, Rahat Commercial Area, DHA Phase 6',
           areaLine: 'Rahat Commercial Area, DHA Phase 6, Karachi',
@@ -85,15 +82,16 @@ describe('with nothing stored: today’s details, word for word (v0.7.30’s web
 
   it('today’s links and words', () => {
     expect(orderWhatsappUrl(DEFAULT_SHOP_FACTS)).toBe('https://wa.me/923009367865?text=Hi%20Cheese%20O\'Clock!%20I\'d%20like%20to%20place%20an%20order%3A%20');
-    expect(whatsappLinesOf(DEFAULT_SHOP_FACTS).map((l) => l.url)).toEqual(['https://wa.me/923009367865', 'https://wa.me/923312188295']);
-    expect(whatsappNumbersText(DEFAULT_SHOP_FACTS)).toBe('0300 9367865 or 0331 2188295');
+    // One WhatsApp line: 0331 2188295 is call only (owner, 30 Sep 2026).
+    expect(whatsappLinesOf(DEFAULT_SHOP_FACTS).map((l) => l.url)).toEqual(['https://wa.me/923009367865']);
+    expect(whatsappNumbersText(DEFAULT_SHOP_FACTS)).toBe('0300 9367865');
     expect(whatsappHello(DEFAULT_SHOP_FACTS)).toBe("Hi Cheese O'Clock!");
     expect(nameIsDefault(DEFAULT_SHOP_FACTS)).toBe(true);
     // Plain SiteFacts (no shop, no tax) read as today's: every call written before B4 still works.
     const today =
       '{hours} | {opens} | {closes} | {days} | {hoursLine} | {name} | {nameProse} | {phone} | {waNumbers} | {street} | {areaLine} | {doorPayments} | {DoorPayments} | {pickupPayments} | {tax} | {Tax}';
     expect(fillFees(today, DEFAULT_FACTS)).toBe(
-      "1 pm – 1 am | 1 pm | 1 am | daily | Open daily · 1 pm – 1 am | Cheese O'Clock | Cheese O’Clock | 0300 9367865 | 0300 9367865 or 0331 2188295 | Shop 3, Ground Floor, 41-C, Sehar Lane No. 3, Rahat Commercial Area, DHA Phase 6 | Rahat Commercial Area, DHA Phase 6, Karachi | cash | Cash | cash | 15% tax | 15% tax",
+      "1 pm – 1 am | 1 pm | 1 am | daily | Open daily · 1 pm – 1 am | Cheese O'Clock | Cheese O’Clock | 0300 9367865 | 0300 9367865 | Shop 3, Ground Floor, 41-C, Sehar Lane No. 3, Rahat Commercial Area, DHA Phase 6 | Rahat Commercial Area, DHA Phase 6, Karachi | cash | Cash | cash | 15% tax | 15% tax",
     );
     for (const claim of [
       { everyDay: true },

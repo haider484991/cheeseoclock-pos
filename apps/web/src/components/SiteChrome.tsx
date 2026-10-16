@@ -122,6 +122,11 @@ export async function SiteFooter() {
                 Call {profile.phone.display}
               </a>
             </li>
+            <li>
+              <a href={`mailto:${BUSINESS.email}`} className="hover:text-cheese">
+                Email {BUSINESS.email}
+              </a>
+            </li>
           </ul>
           {/* The owner's live profiles (Settings), only when there are some: JSON-LD sameAs names the same ones. */}
           {profile.socialLinks.length > 0 && (

@@ -50,16 +50,14 @@ import { normalizePhone } from './phone.js';
  * prices.
  */
 describe('the released defaults are the website today', () => {
-  it('shop.profile: today’s name, tagline, call line, both WhatsApp lines, street address, the Instagram and Facebook profiles, the price range', () => {
+  it('shop.profile: today’s name, tagline, call line, WhatsApp line, street address, the Instagram and Facebook profiles, the price range', () => {
     expect(DEFAULT_SHOP_PROFILE).toEqual({
       v: 1,
       name: "Cheese O'Clock",
       tagline: 'Hygienically Made. Deliciously Unforgettable.',
       phone: { display: '0300 9367865', e164: '+923009367865' },
-      whatsappLines: [
-        { display: '0300 9367865', e164: '+923009367865' },
-        { display: '0331 2188295', e164: '+923312188295' },
-      ],
+      // One WhatsApp line since 17 Oct 2026: 0331 2188295 is call only (owner, 30 Sep 2026).
+      whatsappLines: [{ display: '0300 9367865', e164: '+923009367865' }],
       address: {
         street: 'Shop 3, Ground Floor, 41-C, Sehar Lane No. 3, Rahat Commercial Area, DHA Phase 6',
         areaLine: 'Rahat Commercial Area, DHA Phase 6, Karachi',

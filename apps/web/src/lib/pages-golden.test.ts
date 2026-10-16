@@ -445,6 +445,11 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     // Instagram is @cheeseoclock.karachi since 17 Oct 2026 (@cheeseoclock_ was disabled): the golden took the new link.
     expect(homeHtml).toContain('"sameAs":["https://www.instagram.com/cheeseoclock.karachi/","https://www.facebook.com/cheeseoclock.karachi"]');
     expect(homeHtml).toContain('Instagram →');
+    // The shop's email (17 Oct 2026): the footer links it after the call line, JSON-LD names it.
+    expect(homeHtml).toContain('Call 0300 9367865</a></li><li><a href="mailto:contact@cheeseoclock.net" class="hover:text-cheese">Email contact@cheeseoclock.net</a></li>');
+    expect(homeHtml).toContain('"telephone":"+923009367865","email":"contact@cheeseoclock.net"');
+    // 0331 2188295 is call only (owner, 30 Sep 2026): no page offers it on WhatsApp (17 Oct 2026, the golden took it out).
+    for (const html of Object.values(golden.html)) expect(html).not.toContain('923312188295');
     // The owner's and managers' phone dashboard (owner, 8 Oct 2026): one plain link at the end of the footer, not followed by crawlers.
     expect(homeHtml).toContain(' · <a href="/dashboard" rel="nofollow" class="hover:text-cheese">Staff login</a></div></footer>');
     expect((golden.metadata['a']!['layout'] as Metadata)['description']).toBe(

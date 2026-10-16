@@ -47,7 +47,7 @@
         },
         {
           "q": "How late can I order in Phase 6?",
-          "a": "We take orders every day from 1 pm until 1 am — on the website, or on WhatsApp at 0300 9367865 or 0331 2188295."
+          "a": "We take orders every day from 1 pm until 1 am — on the website, or on WhatsApp at 0300 9367865."
         },
         {
           "q": "How do I pay?",
@@ -248,7 +248,7 @@
       ],
       "intro": [
         "Phase 4 sits between our kitchen and the older phases, and we deliver across all of it — the Sunset Boulevard side, the 9th Commercial strip and the residential lanes in between. Phase 3 next door is covered too. Delivery to either is Rs 200.",
-        "Order on the website in under a minute, or WhatsApp your order and street to 0300 9367865 or 0331 2188295 — both land in the same kitchen, and both are cash on delivery."
+        "Order on the website in under a minute, or WhatsApp your order and street to 0300 9367865 — both land in the same kitchen, and both are cash on delivery."
       ],
       "landmarks": [
         "9th Commercial Street",
@@ -281,7 +281,7 @@
         },
         {
           "q": "Is WhatsApp ordering available for Phase 4?",
-          "a": "Yes. Message your order and address to 0300 9367865 or 0331 2188295 and we will confirm the total right away."
+          "a": "Yes. Message your order and address to 0300 9367865 and we will confirm the total right away."
         }
       ],
       "adjacent": [
@@ -555,6 +555,7 @@
         "https://www.cheeseoclock.net/images/menu/signature-cheese-dipped.webp"
       ],
       "telephone": "+923009367865",
+      "email": "contact@cheeseoclock.net",
       "servesCuisine": [
         "Pizza",
         "Burgers",

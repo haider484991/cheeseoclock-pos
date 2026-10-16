@@ -110,7 +110,7 @@ export function orderLine(shop: ShopFacts): ShopLine {
   return whatsappLinesOf(shop)[0] ?? whatsappLinesOf(DEFAULT_SHOP_FACTS)[0]!;
 }
 
-/** "0300 9367865 or 0331 2188295": the WhatsApp numbers in a sentence. */
+/** "0300 9367865" (with more lines, "0300 9367865 or …"): the WhatsApp numbers in a sentence. */
 export function whatsappNumbersText(shop: ShopFacts): string {
   return shop.profile.whatsappLines.map((l) => l.display).join(' or ');
 }
