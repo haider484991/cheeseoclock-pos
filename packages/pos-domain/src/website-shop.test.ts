@@ -65,7 +65,8 @@ describe('the released defaults are the website today', () => {
         areaLine: 'Rahat Commercial Area, DHA Phase 6, Karachi',
         postalCode: '75500',
       },
-      socialLinks: ['https://www.instagram.com/cheeseoclock_/', 'https://www.facebook.com/cheeseoclock.karachi'],
+      // Instagram @cheeseoclock.karachi since 17 Oct 2026: @cheeseoclock_ was disabled, its link dead.
+      socialLinks: ['https://www.instagram.com/cheeseoclock.karachi/', 'https://www.facebook.com/cheeseoclock.karachi'],
       priceRange: 'PKR 400–2,500',
     });
     // Each profile passes the till's own check (an https link to a real host, not the shop's website).

@@ -442,7 +442,8 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     expect(homeHtml).toContain('"openingHoursSpecification":[{"@type":"OpeningHoursSpecification","dayOfWeek":["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"],"opens":"13:00","closes":"01:00"}]');
     expect(homeHtml).toContain('"paymentAccepted":"Cash on Delivery"');
     // The shop's Instagram and Facebook (owner, 5 Oct 2026: "add social media"): JSON-LD and the footer name them.
-    expect(homeHtml).toContain('"sameAs":["https://www.instagram.com/cheeseoclock_/","https://www.facebook.com/cheeseoclock.karachi"]');
+    // Instagram is @cheeseoclock.karachi since 17 Oct 2026 (@cheeseoclock_ was disabled): the golden took the new link.
+    expect(homeHtml).toContain('"sameAs":["https://www.instagram.com/cheeseoclock.karachi/","https://www.facebook.com/cheeseoclock.karachi"]');
     expect(homeHtml).toContain('Instagram →');
     // The owner's and managers' phone dashboard (owner, 8 Oct 2026): one plain link at the end of the footer, not followed by crawlers.
     expect(homeHtml).toContain(' · <a href="/dashboard" rel="nofollow" class="hover:text-cheese">Staff login</a></div></footer>');

@@ -36,7 +36,7 @@ export const OFFER_HEADLINE = 'Buy 1 Get 1 FREE';
 export const OFFER_FINE_PRINT = 'Delivery charges & tax may apply';
 export const OFFER_TAG_LINE = 'Tag us on social media and show us the post to get the free item.';
 
-/** A profile link as the hint names it: "Instagram @cheeseoclock_", "Facebook /cheeseoclock.karachi", else the label alone. */
+/** A profile link as the hint names it: "Instagram @cheeseoclock.karachi", "Facebook /cheeseoclock.karachi", else the label alone. */
 function profileWords(url: string): string {
   const label = socialLabel(url);
   let first = '';

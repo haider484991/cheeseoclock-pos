@@ -224,7 +224,9 @@ export const DEFAULT_SHOP_PROFILE: Readonly<ShopProfile> = Object.freeze({
   }) as ShopAddress,
   // The shop's own profiles (owner, 5 Oct 2026: "add social media"; the poster and the posts print them):
   // the footer links them and JSON-LD names them (sameAs). Not the look-alike cheeseoclock.pk accounts.
-  socialLinks: Object.freeze(['https://www.instagram.com/cheeseoclock_/', 'https://www.facebook.com/cheeseoclock.karachi']) as string[],
+  // Instagram is @cheeseoclock.karachi since 17 Oct 2026: @cheeseoclock_ was disabled on 16 Oct and can't be
+  // appealed. No till had published a shop block, so every page linked this default: the dead link went.
+  socialLinks: Object.freeze(['https://www.instagram.com/cheeseoclock.karachi/', 'https://www.facebook.com/cheeseoclock.karachi']) as string[],
   priceRange: 'PKR 400–2,500',
 }) as Readonly<ShopProfile>;
 

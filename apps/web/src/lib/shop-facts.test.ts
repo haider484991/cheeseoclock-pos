@@ -60,7 +60,7 @@ describe('with nothing stored: today’s details, word for word (v0.7.30’s web
           areaLine: 'Rahat Commercial Area, DHA Phase 6, Karachi',
           postalCode: '75500',
         },
-        socialLinks: ['https://www.instagram.com/cheeseoclock_/', 'https://www.facebook.com/cheeseoclock.karachi'],
+        socialLinks: ['https://www.instagram.com/cheeseoclock.karachi/', 'https://www.facebook.com/cheeseoclock.karachi'],
         priceRange: 'PKR 400–2,500',
       },
       hours: { opens: '13:00', closes: '01:00', days: ALL_DAYS },
