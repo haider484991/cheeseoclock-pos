@@ -61,6 +61,10 @@ tmp/
 
 # Local-only secrets (never committed)
 .local/
+# Wrong-PIN counter key (apps/pos/electron/services/attempt-key.ts). A till keeps
+# its own in its userData folder; tests that mock userData as '' write one
+# wherever they run.
+login-attempts.key
 
 # Vercel CLI project link
 .vercel/
