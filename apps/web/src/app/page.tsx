@@ -14,9 +14,11 @@ import { formatCents } from '@/lib/format';
 import {
   HOME_DELIVERY_NOTE,
   HOME_FAQ_AREAS,
+  HOME_FAQ_CROWN_CRUST,
   HOME_FAQ_HOURS,
   HOME_FAQ_PAY,
   HOME_FAQ_WHATSAPP,
+  HOME_FAQ_ZINGER,
   HOME_FINAL_HEADING,
   HOME_HERO_FEE,
   HOME_HERO_HOURS,
@@ -95,7 +97,17 @@ const FAQS = [
   },
   {
     q: 'What sizes do the pizzas come in?',
-    a: 'Regular pizzas come in Medium 9" and Large 12". The five signature pizzas are Large 12".',
+    a: 'Regular pizzas such as Chicken Tikka, Fajita and Classic Pepperoni come in Medium 9" and Large 12". The five signature pizzas are Large 12".',
+  },
+  // Two dishes people search for (Oct 2026: "crown crust pizza", "zinger burger"): each question shows only
+  // while its dish is on the menu (page-copy { onMenu }).
+  {
+    q: 'Do you have Crown Crust pizza?',
+    a: HOME_FAQ_CROWN_CRUST,
+  },
+  {
+    q: 'Do you have a zinger burger?',
+    a: HOME_FAQ_ZINGER,
   },
   {
     q: 'Can I order on WhatsApp instead?',
@@ -119,7 +131,11 @@ export default async function HomePage() {
   const dealsFrom = dealsFromCents(view);
   // The deals section's two fixed lines are today's three deals' facts (a drink in each, regular pizzas).
   const todaysDeals = dealsAreTodays(view);
-  const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
+  // A question whose answer can't print (its dish is off the menu) is left out.
+  const faqs = FAQS.flatMap((f) => {
+    const a = renderCopy(f.a, facts);
+    return a === null ? [] : [{ q: f.q, a }];
+  });
   const { announcement } = facts;
   const marquee = marqueeItems(facts);
   return (

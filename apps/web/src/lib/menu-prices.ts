@@ -148,3 +148,15 @@ export function priceWords(
   // Spaced dash, "Rs" on both sides, as the page has always printed it.
   return low === high ? formatCents(low) : `${formatCents(low)} – ${formatCents(high)}`;
 }
+
+/**
+ * Is every one of these items on the menu for delivery — found as itemPrices finds them (the name, priced above
+ * 0, never a delivery charge, not pick-up only)? With the menu unknown (no database, nothing published): yes, as
+ * the home page's cards still show then — the pages say today's menu. Page copy that names a dish in its own
+ * words prints only while this holds (delivery-facts { onMenu }): renamed, deleted or priced at 0 on the till,
+ * the sentence goes with the dish.
+ */
+export function itemsOnMenu(names: readonly string[], menu: PriceMenu | null | undefined, feeItemIds?: ReadonlySet<string> | null): boolean {
+  if (!menu) return true;
+  return itemPrices(names, menu, feeItemIds).length === names.length;
+}

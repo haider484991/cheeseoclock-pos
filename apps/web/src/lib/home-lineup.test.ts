@@ -13,7 +13,9 @@
  *    the hero's chip is the cheapest deal shown;
  *  - the owner's picks: by the till's id, else the name; his words (never a
  *    drink brand); the till's photo by link, else a plain panel;
- *  - the landing pages' {price:…} tokens and their words without a price.
+ *  - the landing pages' {price:…} tokens and their words without a price;
+ *  - the home FAQ's dish questions ({ onMenu }): only while their dishes are
+ *    on the menu.
  * Every id, description and photo here is made up; the prices are the
  * golden menu's (today's, as the website printed them).
  */
@@ -79,7 +81,7 @@ const photoRoute = await import('@/app/api/menu-photo/[id]/route');
 const { PizzaCarousel3DClient } = await import('@/components/PizzaCarousel3DClient');
 const { getMenuFacts } = await import('@/lib/site-facts');
 const { DEFAULT_FACTS, claimHolds, copyText, fillFees } = await import('@/lib/delivery-facts');
-const { PRICE_LINES, priceWords } = await import('@/lib/menu-prices');
+const { PRICE_LINES, itemsOnMenu, priceWords } = await import('@/lib/menu-prices');
 const { dealSaveCents, dealsFromCents, resolveHome } = await import('@/lib/home-lineup');
 
 const golden = JSON.parse(readFileSync(new URL('./__fixtures__/pages-v0.7.30.json', import.meta.url), 'utf8')) as {
@@ -533,6 +535,40 @@ describe('the landing pages’ prices ({price:…}, lib/menu-prices)', () => {
     expect(b).toContain('Add cheese to any of them.');
     expect(n).toContain('Masala fries Masala · Mayo Masala');
     for (const t of [p, b, n]) expect(t).not.toMatch(/Rs 0(?![\d,])/);
+  });
+});
+
+describe('the home FAQ’s dish questions ({ onMenu }, lib/menu-prices itemsOnMenu)', () => {
+  it('a dish is on the menu while the till sells it for delivery above 0 under that name; the menu unknown: today’s', () => {
+    expect(itemsOnMenu(['Crown Crust — Large', 'Classic Crispy Chicken', 'Nashville Authentic (Hot)'], goldenMenu())).toBe(true);
+    expect(itemsOnMenu(['Crown Crust — Large'], null)).toBe(true);
+    expect(itemsOnMenu(['Crown Crust — Large'], menuWith({ 'Crown Crust — Large': { basePriceCents: 0 } }))).toBe(false);
+    expect(itemsOnMenu(['Crown Crust — Large'], menuWith({ 'Crown Crust — Large': { pickupOnly: true } }))).toBe(false);
+    expect(itemsOnMenu(['Classic Crispy Chicken', 'Nashville Authentic (Hot)'], menuWith({ 'Nashville Authentic (Hot)': null }))).toBe(false);
+    const renamed = menuWith({ 'Classic Crispy Chicken': { name: 'Classic Crunch' } });
+    expect(claimHolds({ onMenu: ['Classic Crispy Chicken'] }, { ...DEFAULT_FACTS, menu: renamed })).toBe(false);
+    expect(claimHolds({ onMenu: ['Classic Crispy Chicken'] }, DEFAULT_FACTS)).toBe(true);
+  });
+
+  it('the Crown Crust and zinger questions show while their dishes are on the menu, and go with them', async () => {
+    await publish(goldenMenu());
+    let text = visible(await homeHtml());
+    expect(text).toContain('Do you have Crown Crust pizza?');
+    expect(text).toContain('Yes — the Crown Crust is one of our five signature pizzas, Large 12" only');
+    expect(text).toContain('Do you have a zinger burger?');
+    expect(text).toContain('Yes — our Classic Crispy Chicken is a zinger-style crispy chicken burger');
+    expect(text).toContain('Like it hot? Go for the Nashville Authentic (Hot), cooled by coleslaw and pickle.');
+    // The Nashville pick-up only (a delivery page's dish is a delivered one): the zinger answer without its line.
+    await publish(menuWith({ 'Nashville Authentic (Hot)': { pickupOnly: true } }));
+    text = visible(await homeHtml());
+    expect(text).toContain('Yes — our Classic Crispy Chicken is a zinger-style crispy chicken burger');
+    expect(text).not.toContain('Like it hot?');
+    // The Classic Crispy Chicken renamed and the Crown Crust deleted: neither question; the rest of the FAQ stays.
+    await publish(menuWith({ 'Classic Crispy Chicken': { name: 'Classic Crunch' }, 'Crown Crust — Large': null }));
+    text = visible(await homeHtml());
+    expect(text).not.toMatch(/zinger|Crown Crust/);
+    expect(text).toContain('What sizes do the pizzas come in?');
+    expect(text).toContain('Can I order on WhatsApp instead?');
   });
 });
 

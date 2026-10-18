@@ -2013,7 +2013,7 @@
                     "type": "p",
                     "key": null,
                     "props": {
-                     "children": "Every day from 1 pm to 1 am.",
+                     "children": "Every day from 1 pm to 1 am. Late-night cravings are covered: the value deals run right up to closing, so they double as midnight deals.",
                      "className": "px-5 pb-5 leading-relaxed text-cream/65"
                     }
                    }
@@ -2097,7 +2097,7 @@
                     "type": "p",
                     "key": null,
                     "props": {
-                     "children": "Regular pizzas come in Medium 9\" and Large 12\". The five signature pizzas are Large 12\".",
+                     "children": "Regular pizzas such as Chicken Tikka, Fajita and Classic Pepperoni come in Medium 9\" and Large 12\". The five signature pizzas are Large 12\".",
                      "className": "px-5 pb-5 leading-relaxed text-cream/65"
                     }
                    }
@@ -2106,6 +2106,90 @@
                  }
                 },
                 "delay": 150
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "Do you have Crown Crust pizza?",
+               "props": {
+                "children": {
+                 "type": "details",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "summary",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      "Do you have Crown Crust pizza?",
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "+",
+                        "className": "text-2xl text-cheese transition-transform group-open:rotate-45"
+                       }
+                      }
+                     ],
+                     "className": "flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 font-cond text-xl font-bold uppercase tracking-wide text-cream [&::-webkit-details-marker]:hidden"
+                    }
+                   },
+                   {
+                    "type": "p",
+                    "key": null,
+                    "props": {
+                     "children": "Yes — the Crown Crust is one of our five signature pizzas, Large 12\" only: tikka chicken and seekh kabab, jalapeño, bell pepper, onion and olives on rich tomato sauce, finished with creamy Sriracha (with dip of your choice).",
+                     "className": "px-5 pb-5 leading-relaxed text-cream/65"
+                    }
+                   }
+                  ],
+                  "className": "group rounded-2xl border border-cream/10 bg-night-card open:border-cheese/40"
+                 }
+                },
+                "delay": 200
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "Do you have a zinger burger?",
+               "props": {
+                "children": {
+                 "type": "details",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "summary",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      "Do you have a zinger burger?",
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "+",
+                        "className": "text-2xl text-cheese transition-transform group-open:rotate-45"
+                       }
+                      }
+                     ],
+                     "className": "flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 font-cond text-xl font-bold uppercase tracking-wide text-cream [&::-webkit-details-marker]:hidden"
+                    }
+                   },
+                   {
+                    "type": "p",
+                    "key": null,
+                    "props": {
+                     "children": "Yes — our Classic Crispy Chicken is a zinger-style crispy chicken burger: a thigh-marinated crispy fillet with mayonnaise and lettuce in a buttered brioche bun. Like it hot? Go for the Nashville Authentic (Hot), cooled by coleslaw and pickle.",
+                     "className": "px-5 pb-5 leading-relaxed text-cream/65"
+                    }
+                   }
+                  ],
+                  "className": "group rounded-2xl border border-cream/10 bg-night-card open:border-cheese/40"
+                 }
+                },
+                "delay": 250
                }
               },
               {
@@ -2147,7 +2231,7 @@
                   "className": "group rounded-2xl border border-cream/10 bg-night-card open:border-cheese/40"
                  }
                 },
-                "delay": 200
+                "delay": 300
                }
               }
              ],

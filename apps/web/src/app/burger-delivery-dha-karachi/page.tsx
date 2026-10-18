@@ -85,10 +85,10 @@ const WHY: WhyCard[] = [
 
 /** The cheese extra's one price from the menu; unknown or at more than one price: no number. */
 const FAQ_WHAT_GOES_IN: Copy = {
-  text: 'A thigh-marinated crispy chicken fillet in a brioche bun. Start with the Classic Crispy Chicken, step up to the Crispy Signature or the Signature Cheese Dipped, or go Nashville Authentic if you want heat. Add cheese to any of them for {price:burgerCheese}.',
+  text: 'A thigh-marinated crispy chicken fillet in a brioche bun. Start with the Classic Crispy Chicken (our zinger-style burger), step up to the Crispy Signature or the Signature Cheese Dipped, or go Nashville Authentic if you want heat. Add cheese to any of them for {price:burgerCheese}.',
   when: { priced: 'burgerCheese' },
   otherwise:
-    'A thigh-marinated crispy chicken fillet in a brioche bun. Start with the Classic Crispy Chicken, step up to the Crispy Signature or the Signature Cheese Dipped, or go Nashville Authentic if you want heat. Add cheese to any of them.',
+    'A thigh-marinated crispy chicken fillet in a brioche bun. Start with the Classic Crispy Chicken (our zinger-style burger), step up to the Crispy Signature or the Signature Cheese Dipped, or go Nashville Authentic if you want heat. Add cheese to any of them.',
 };
 
 const FAQS = [

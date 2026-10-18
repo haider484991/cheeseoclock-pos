@@ -178,13 +178,44 @@ export const HOME_STEP_PAY: Copy = { text: 'Pay cash at your door', when: { cash
 /** "How it works": the hours stat (big, small). */
 export const HOME_STAT_HOURS: Copy = '{hours}';
 export const HOME_STAT_DAYS: Copy = { text: 'open every day', when: { everyDay: true }, otherwise: 'open {days}' };
-/** Home FAQ, "What are your hours?". */
-export const HOME_FAQ_HOURS: Copy = { text: 'Every day from {opens} to {closes}.', when: { everyDay: true }, otherwise: '{days} from {opens} to {closes}.' };
+/**
+ * Home FAQ, "What are your hours?". While the shop closes after midnight, the value deals are midnight deals too
+ * (people search for those, Oct 2026): the value deals have no hours of their own, so they run until closing.
+ */
+export const HOME_FAQ_HOURS: Copy = {
+  text: 'Every day from {opens} to {closes}. Late-night cravings are covered: the value deals run right up to closing, so they double as midnight deals.',
+  when: [{ everyDay: true }, { closesAfterMidnight: true }],
+  otherwise: {
+    text: '{days} from {opens} to {closes}. Late-night cravings are covered: the value deals run right up to closing, so they double as midnight deals.',
+    when: { closesAfterMidnight: true },
+    otherwise: { text: 'Every day from {opens} to {closes}.', when: { everyDay: true }, otherwise: '{days} from {opens} to {closes}.' },
+  },
+};
 /** Home FAQ, "How do I pay?". */
 export const HOME_FAQ_PAY: Copy = taxed(
   '{DoorPayments} on delivery. {Tax} is added on the bill, and the printed receipt from the kitchen is the final amount.',
   '{DoorPayments} on delivery. The printed receipt from the kitchen is the final amount.',
 );
+/**
+ * Home FAQ, "Do you have Crown Crust pizza?" (people search for it, Oct 2026): the till's own description of it,
+ * only while it is on the menu — the home page never names a dish the till has taken off.
+ */
+export const HOME_FAQ_CROWN_CRUST: Copy = {
+  text: 'Yes — the Crown Crust is one of our five signature pizzas, Large 12" only: tikka chicken and seekh kabab, jalapeño, bell pepper, onion and olives on rich tomato sauce, finished with creamy Sriracha (with dip of your choice).',
+  when: { onMenu: ['Crown Crust — Large'] },
+};
+/**
+ * Home FAQ, "Do you have a zinger burger?" (people search for "zinger burger", Oct 2026): the Classic Crispy
+ * Chicken is the zinger-style one, in the till's words; the Nashville's line only while it is on the menu too.
+ */
+export const HOME_FAQ_ZINGER: Copy = {
+  text: 'Yes — our Classic Crispy Chicken is a zinger-style crispy chicken burger: a thigh-marinated crispy fillet with mayonnaise and lettuce in a buttered brioche bun. Like it hot? Go for the Nashville Authentic (Hot), cooled by coleslaw and pickle.',
+  when: { onMenu: ['Classic Crispy Chicken', 'Nashville Authentic (Hot)'] },
+  otherwise: {
+    text: 'Yes — our Classic Crispy Chicken is a zinger-style crispy chicken burger: a thigh-marinated crispy fillet with mayonnaise and lettuce in a buttered brioche bun.',
+    when: { onMenu: ['Classic Crispy Chicken'] },
+  },
+};
 /** Home FAQ, "Can I order on WhatsApp instead?". */
 export const HOME_FAQ_WHATSAPP: Copy =
   "Yes — message {waNumbers} with your order and address, and we'll confirm the total. Same kitchen, same prices.";

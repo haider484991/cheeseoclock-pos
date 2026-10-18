@@ -23,7 +23,7 @@ import {
   type PublishedZone,
 } from '@cheeseoclock/shared-types';
 import { formatCents } from './format';
-import { isPriceKey, priceWords, type PriceKey, type PriceMenu } from './menu-prices';
+import { isPriceKey, itemsOnMenu, priceWords, type PriceKey, type PriceMenu } from './menu-prices';
 import { DEFAULT_SHOP_FACTS, nameIsDefault, whatsappNumbersText, type ShopFacts } from './shop-facts';
 import { DEFAULT_TAX_BPS, taxPercentWords } from './tax-words';
 
@@ -496,6 +496,10 @@ function numberList(ns: readonly number[]): string {
  * The published menu (sweep B2, lib/menu-prices.ts):
  * `priced`: this price line has words on the menu — its {price:<key>} token
  * prints (the menu known, its items on it, one price for an "each").
+ * `onMenu`: every one of these items is on the menu for delivery, or the menu
+ * is unknown (today's, as the home page's cards assume) — a sentence that
+ * names a dish by hand goes when the till renames, deletes or zero-prices it
+ * (lib/menu-prices itemsOnMenu).
  */
 export type CopyClaim =
   | { sameFee: readonly string[] }
@@ -513,7 +517,8 @@ export type CopyClaim =
   | { oneTaxRate: true }
   | { taxAdded: true }
   | { samePayments: true }
-  | { priced: PriceKey };
+  | { priced: PriceKey }
+  | { onMenu: readonly string[] };
 
 /** A claim page copy relies on (the name from step 3, when every claim was about fees). */
 export type FeeClaim = CopyClaim;
@@ -555,6 +560,7 @@ export function claimHolds(claim: CopyClaim | readonly CopyClaim[], facts: CopyF
     return door.length === pickup.length && door.every((p, i) => p === pickup[i]);
   }
   if ('priced' in claim) return menuPriceWords(claim.priced, facts) !== null;
+  if ('onMenu' in claim) return itemsOnMenu(claim.onMenu, facts.menu, deliveryZoneFeeItemIds(facts.zones));
   return feeClaimHolds(claim, facts);
 }
 

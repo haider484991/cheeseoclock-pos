@@ -450,6 +450,14 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     expect(homeHtml).toContain('"telephone":"+923009367865","email":"contact@cheeseoclock.net"');
     // 0331 2188295 is call only (owner, 30 Sep 2026): no page offers it on WhatsApp (17 Oct 2026, the golden took it out).
     for (const html of Object.values(golden.html)) expect(html).not.toContain('923312188295');
+    // Words people search for (18 Oct 2026), in the home FAQ and the burger page's: the golden took them in.
+    expect(homeHtml).toContain('Do you have Crown Crust pizza?');
+    expect(homeHtml).toContain('Do you have a zinger burger?');
+    expect(homeHtml).toContain('Regular pizzas such as Chicken Tikka, Fajita and Classic Pepperoni come in Medium 9&quot; and Large 12&quot;.');
+    expect(homeHtml).toContain('Every day from 1 pm to 1 am. Late-night cravings are covered: the value deals run right up to closing, so they double as midnight deals.');
+    expect(golden.html[golden.pages['a']!['/burger-delivery-dha-karachi']!]).toContain(
+      'Start with the Classic Crispy Chicken (our zinger-style burger), step up to the Crispy Signature',
+    );
     // The owner's and managers' phone dashboard (owner, 8 Oct 2026): one plain link at the end of the footer, not followed by crawlers.
     expect(homeHtml).toContain(' · <a href="/dashboard" rel="nofollow" class="hover:text-cheese">Staff login</a></div></footer>');
     expect((golden.metadata['a']!['layout'] as Metadata)['description']).toBe(
