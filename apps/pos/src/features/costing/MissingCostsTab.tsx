@@ -10,6 +10,7 @@ import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { COSTING_KEY, useMissingCosts } from './costingQueries';
 import { formatBps } from './costingFormat';
 import { openBatchInInventory, openIngredientInInventory, openRecipeInInventory } from './deepLinks';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 /**
  * Missing costs: everything that keeps a dish from being costed, each with
@@ -87,7 +88,7 @@ export function MissingCostsTab() {
             <Row
               key={r.menuItemId}
               title={r.name}
-              detail={`${r.categoryName}${r.soldLast28 > 0 ? ` · ${new Intl.NumberFormat('en-PK').format(r.soldLast28)} sold in the last 28 days` : ''}`}
+              detail={`${r.categoryName}${r.soldLast28 > 0 ? ` · ${formatNumber(r.soldLast28)} sold in the last 28 days` : ''}`}
             >
               <Button variant="primary" size="sm" onClick={() => openRecipeInInventory(navigate, { id: r.menuItemId, name: r.name })}>
                 <BookOpen className="h-3.5 w-3.5" /> Open recipe

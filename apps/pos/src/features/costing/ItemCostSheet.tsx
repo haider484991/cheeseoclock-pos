@@ -2,7 +2,7 @@ import { Fragment, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
-import { formatCents } from '@cheeseoclock/pos-domain';
+import { formatCents, formatNumber } from '@cheeseoclock/pos-domain';
 import type { ChoiceCostView, CostLineView, ItemCostSheet, ItemFoodpandaLine, PaidExtraView, RequiredGroupView } from '@cheeseoclock/shared-types';
 import { BookOpen, Calculator, ChevronDown, ChevronRight, FlaskConical, Printer, X } from 'lucide-react';
 import { useItemCostSheet } from './costingQueries';
@@ -123,7 +123,7 @@ export function ItemCostSheetDrawer({
 
               <p className="text-xs text-stone-500">
                 At today&apos;s prices, from the recipe as it is now; the menu price is before tax. Sold on this till in the
-                last 28 days: {new Intl.NumberFormat('en-PK').format(sheet.row.soldLast28)}.
+                last 28 days: {formatNumber(sheet.row.soldLast28)}.
               </p>
             </div>
           )}

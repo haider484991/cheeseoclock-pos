@@ -10,6 +10,7 @@ import {
   formatCents,
   priceChangeBps,
   type CashVarianceVerdict,
+  formatNumber,
 } from '@cheeseoclock/pos-domain';
 import { CAME_BY_LABEL } from '@cheeseoclock/shared-types';
 import type {
@@ -413,7 +414,7 @@ export function shiftDetailLines(
 
 /** A quantity in an ingredient's unit, with thousands separators: "12,500 g". */
 export function fmtQty(qty: number, unit: string): string {
-  return `${new Intl.NumberFormat('en-PK').format(qty)} ${unit}`;
+  return `${formatNumber(qty)} ${unit}`;
 }
 
 /**

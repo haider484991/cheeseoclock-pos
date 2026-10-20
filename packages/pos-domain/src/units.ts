@@ -5,7 +5,7 @@
  * a pack of N base units for a price, giving a cost per base unit.
  */
 
-import { formatCents } from './money.js';
+import { formatCents, formatNumber } from './money.js';
 
 const UNIT_ALIASES: Record<string, string> = {
   g: 'g', gm: 'g', gms: 'g', gr: 'g', gram: 'g', grams: 'g', gramme: 'g', grammes: 'g',
@@ -288,5 +288,5 @@ export function packInUnit(pack: Pack, from: string, to: string): Pack | null {
 /** "6,000 g for Rs 2,250" */
 export function formatPack(i: { unit: string; packSize: number | null; packPriceCents: number | null }): string | null {
   if (!i.packSize || i.packPriceCents === null) return null;
-  return `${new Intl.NumberFormat('en-PK').format(i.packSize)} ${i.unit} for ${formatCents(i.packPriceCents)}`;
+  return `${formatNumber(i.packSize)} ${i.unit} for ${formatCents(i.packPriceCents)}`;
 }

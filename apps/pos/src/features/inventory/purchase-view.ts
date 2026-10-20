@@ -18,6 +18,7 @@ import {
   unitCostMc,
   usualPackSize,
   type PriceCheck,
+  formatNumber,
 } from '@cheeseoclock/pos-domain';
 import type { Ingredient, PurchaseKind, PurchaseOrder, PurchaseOrderItem } from '@cheeseoclock/shared-types';
 import { formatBps, formatUnitPrice, parseRupees, readAmount, thousandUnit } from '../costing/costingFormat';
@@ -31,7 +32,7 @@ export function billUnitText(qty: number, billCents: number, unit: string): stri
 export function orderedPriceText(item: Pick<PurchaseOrderItem, 'orderedPackSize' | 'orderedPackPriceCents' | 'unitCostCents'>, unit: string): string {
   const pack = orderedPack(item);
   if (pack.size > 1 && pack.size !== thousandSize(unit)) {
-    return `${formatCents(pack.priceCents)} for ${new Intl.NumberFormat('en-PK').format(pack.size)} ${unit}`;
+    return `${formatCents(pack.priceCents)} for ${formatNumber(pack.size)} ${unit}`;
   }
   return formatUnitPrice(unitCostMc(pack), unit);
 }
@@ -151,7 +152,7 @@ export function readBoughtQty(text: string, unit: string): BoughtQty {
     return { qty: null, shows: null, problem: `${r.amount} ${unit} or ${r.amount} ${big}? Type the unit.` };
   }
   // Exactly what will be booked: "5 kg", "2.5 kg", else in grams ("1,234 g": never rounded to "1.23 kg").
-  const exact = big && r.amount >= 1_000 && r.amount % 10 === 0 ? formatQty(r.amount, unit) : `${new Intl.NumberFormat('en-PK').format(r.amount)} ${unit}`;
+  const exact = big && r.amount >= 1_000 && r.amount % 10 === 0 ? formatQty(r.amount, unit) : `${formatNumber(r.amount)} ${unit}`;
   return { qty: r.amount, shows: `= ${exact}`, problem: null };
 }
 

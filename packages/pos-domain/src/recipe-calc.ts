@@ -42,6 +42,7 @@ import { BASE_PART, expandRecipe, type RecipeLine } from './recipe-expand.js';
 import { scaleBatch, type ScaledBatch } from './batch-scale.js';
 import { requiredPicks, trustedPickUnits, type PickMix } from './plate-cost.js';
 import { mulDivRound, normalizeUnit, thousandSize } from './units.js';
+import { formatNumber } from './money.js';
 
 /** The most of one menu item the calculator works out at once. */
 export const MAX_CALC_COUNT = RECIPE_CALC_MAX_COUNT;
@@ -464,7 +465,7 @@ export function goesFor(need: number, max: number): number {
 
 // ---------------------------------------------------------- kitchen units --
 
-const grouped = (n: number) => new Intl.NumberFormat('en-PK').format(n);
+const grouped = (n: number) => formatNumber(n);
 
 /**
  * An amount the way the kitchen weighs it, exact to the unit: 1250 g →

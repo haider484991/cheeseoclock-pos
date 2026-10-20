@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, Card, cn } from '@cheeseoclock/ui';
-import { formatCents, unitCostMc } from '@cheeseoclock/pos-domain';
+import { formatCents, unitCostMc, formatNumber } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { BatchRecipe, Ingredient, MenuItem } from '@cheeseoclock/shared-types';
@@ -680,8 +680,8 @@ function BatchCard({
         <div className="min-w-0">
           <div className="font-semibold">{ingredient.name}</div>
           <div className="text-xs text-stone-500">
-            One batch makes {r?.batchYield ? new Intl.NumberFormat('en-PK').format(r.batchYield) : '?'} {ingredient.unit} · in stock:{' '}
-            {new Intl.NumberFormat('en-PK').format(ingredient.currentQty)} {ingredient.unit}
+            One batch makes {r?.batchYield ? formatNumber(r.batchYield) : '?'} {ingredient.unit} · in stock:{' '}
+            {formatNumber(ingredient.currentQty)} {ingredient.unit}
           </div>
           {canCost && r && !!r.batchYield && r.lines.length > 0 && <BatchPrice recipe={r} unit={ingredient.unit} />}
         </div>
@@ -937,8 +937,8 @@ function MakeBatchDialog({ ingredient, onClose }: { ingredient: Ingredient; onCl
     mutationFn: () => ipc.inventory.makeBatch({ ingredientId: ingredient.id, batches: n }),
     onSuccess: (res) => {
       toast({
-        title: `Made ${new Intl.NumberFormat('en-PK').format(res.made)} ${ingredient.unit} of ${ingredient.name}`,
-        description: `In stock now: ${new Intl.NumberFormat('en-PK').format(res.resultingQty)} ${ingredient.unit}`,
+        title: `Made ${formatNumber(res.made)} ${ingredient.unit} of ${ingredient.name}`,
+        description: `In stock now: ${formatNumber(res.resultingQty)} ${ingredient.unit}`,
         variant: 'success',
       });
       void qc.invalidateQueries({ queryKey: ['inventory'] });
@@ -969,7 +969,7 @@ function MakeBatchDialog({ ingredient, onClose }: { ingredient: Ingredient; onCl
               className="w-20 rounded-lg border border-stone-300 px-3 py-2 text-right font-mono dark:border-stone-700 dark:bg-stone-800"
             />
             <span className="text-stone-500">
-              = {r?.batchYield ? new Intl.NumberFormat('en-PK').format(r.batchYield * n) : '?'} {ingredient.unit}
+              = {r?.batchYield ? formatNumber(r.batchYield * n) : '?'} {ingredient.unit}
             </span>
           </label>
           {r && n > 0 && (
@@ -978,7 +978,7 @@ function MakeBatchDialog({ ingredient, onClose }: { ingredient: Ingredient; onCl
                 <li key={l.inputIngredientId} className="flex justify-between">
                   <span>{l.name}</span>
                   <span className="font-mono">
-                    −{new Intl.NumberFormat('en-PK').format(l.qty * n)} {l.unit}
+                    −{formatNumber(l.qty * n)} {l.unit}
                   </span>
                 </li>
               ))}

@@ -16,6 +16,7 @@ import {
   typedPricePack,
   unitCostMc,
   type Pack,
+  formatNumber,
 } from '@cheeseoclock/pos-domain';
 import type { IngredientPriceTag, PriceHistoryEntry, PriceKind, PriceSource } from '@cheeseoclock/shared-types';
 import { formatUnitPrice, parseRupees } from '../costing/costingFormat';
@@ -52,7 +53,7 @@ export function priceText(p: { unitCostMc: number; unit: string; priceKind: Pric
 export function packText(p: { packSize: number; packPriceCents: number; unit: string; priceKind: PriceKind }): string | null {
   if (p.priceKind === 'unset' || p.priceKind === 'free' || p.packSize <= 1) return null;
   if (thousandSize(p.unit) === p.packSize) return null; // "Rs 375 / kg" says it already
-  return `${new Intl.NumberFormat('en-PK').format(p.packSize)} ${p.unit} for ${formatCents(p.packPriceCents)}`;
+  return `${formatNumber(p.packSize)} ${p.unit} for ${formatCents(p.packPriceCents)}`;
 }
 
 export interface PriceChange {

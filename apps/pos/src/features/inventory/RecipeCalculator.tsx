@@ -11,6 +11,7 @@ import {
   packsToBuy,
   prepListDocument,
   prepListText,
+  formatNumber,
 } from '@cheeseoclock/pos-domain';
 import type {
   CostedRecipeCalc,
@@ -73,7 +74,7 @@ import {
   type RecentPick,
 } from './recipeCalcView';
 
-const n = (x: number) => new Intl.NumberFormat('en-PK').format(x);
+const n = (x: number) => formatNumber(x);
 
 /** The query key of an answer: quantities, or quantities with costs, for exactly this request. */
 export function recipeCalcQueryKey(costed: boolean, request: string | null) {

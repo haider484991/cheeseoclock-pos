@@ -17,6 +17,7 @@ import {
   mulDivRound,
   toPriceKind,
   valueCents,
+  formatNumber,
 } from '@cheeseoclock/pos-domain';
 
 /**
@@ -259,7 +260,7 @@ export function clearBatchRecipeLines(db: AppDatabase, ingredientId: string, act
   return rows.length;
 }
 
-const qtyText = (n: number) => new Intl.NumberFormat('en-PK').format(n);
+const qtyText = (n: number) => formatNumber(n);
 
 /**
  * Record a batch made: each input comes out of stock and what was made goes

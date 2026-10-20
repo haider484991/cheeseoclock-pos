@@ -22,6 +22,7 @@ import {
   suggestedKeyIngredient,
   visibleWasteReasons,
   type CountEntry,
+  formatNumber,
 } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
@@ -652,7 +653,7 @@ function StockLevel({ ingredient: i, multiple }: { ingredient: Ingredient; multi
           s === 'out' && 'text-red-700 dark:text-red-400',
           s === 'low' && 'text-amber-700 dark:text-amber-300',
         )}
-        title={`${new Intl.NumberFormat('en-PK').format(i.currentQty)} ${i.unit}`}
+        title={`${formatNumber(i.currentQty)} ${i.unit}`}
       >
         {formatQty(i.currentQty, i.unit)}
       </span>

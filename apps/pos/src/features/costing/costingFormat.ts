@@ -2,7 +2,7 @@
  * How the Costing page says things (costing spec D15: plain words, a few
  * numbers). Pure, so the wording is tested.
  */
-import { formatCents, mcToCents, suggestedTargetBps } from '@cheeseoclock/pos-domain';
+import { formatCents, mcToCents, suggestedTargetBps, formatNumber } from '@cheeseoclock/pos-domain';
 import type { BatchCalc, CategoryTargetView, CostLineKind, FoodCostFlag, LeaveOutView, MenuCostRow } from '@cheeseoclock/shared-types';
 
 /** 1470 → "14.7%"; 3000 → "30%". */
@@ -42,7 +42,7 @@ export function formatHundredths(hundredths: number, unit: string): string {
 }
 
 export function formatQtyUnit(qty: number, unit: string): string {
-  return `${new Intl.NumberFormat('en-PK').format(qty)} ${unit}`;
+  return `${formatNumber(qty)} ${unit}`;
 }
 
 export const FLAG_LABEL: Record<FoodCostFlag, string> = {

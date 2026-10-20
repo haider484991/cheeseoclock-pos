@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
-import { batchesText, formatCents, maxBatchAmount, scaleBatch } from '@cheeseoclock/pos-domain';
+import { batchesText, formatCents, maxBatchAmount, scaleBatch, formatNumber } from '@cheeseoclock/pos-domain';
 import type { BatchCalc, BatchRecipe, Ingredient } from '@cheeseoclock/shared-types';
 import { AlertTriangle, ChefHat, X } from 'lucide-react';
 import { ipc, IpcError } from '../../ipc/client';
@@ -12,7 +12,7 @@ import { BatchBreakdown } from '../costing/BatchBreakdown';
 import { COSTING_KEY, useCanSeeCosts } from '../costing/costingQueries';
 import { amountProblem, batchMakeReady, formatMc, formatQtyUnit, readAmount, thousandUnit } from '../costing/costingFormat';
 
-const qty = (n: number) => new Intl.NumberFormat('en-PK').format(n);
+const qty = (n: number) => formatNumber(n);
 
 /**
  * The batch calculator (owner, 2026-09-27: "if a user wants to see a 200 g

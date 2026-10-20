@@ -5,7 +5,7 @@
  * the Dashboard card, the Overview's trend strip and the printed weekly sheet
  * all say the same thing, and it is tested.
  */
-import { formatCents } from '@cheeseoclock/pos-domain';
+import { formatCents, formatNumber } from '@cheeseoclock/pos-domain';
 import type { DayNoteTag, DoThisItem, ReportHeatmap, ReportMonthPoint, ReportTrendPeriod, ReportTrends, TrendChange } from '@cheeseoclock/shared-types';
 import { DAY_NOTE_TAG_LABEL } from '@cheeseoclock/shared-types';
 import { formatBps } from '../costing/costingFormat';
@@ -37,7 +37,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 
 /** "2,400 g". */
 function qty(n: number, unit: string): string {
-  return `${new Intl.NumberFormat('en-PK').format(n)} ${unit}`;
+  return `${formatNumber(n)} ${unit}`;
 }
 
 export interface DoThisWords {

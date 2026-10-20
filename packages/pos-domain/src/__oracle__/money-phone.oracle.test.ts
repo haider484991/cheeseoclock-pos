@@ -10,7 +10,7 @@
  * means Pakistan's behaviour changed — fix the live code, never the baseline.
  */
 import { describe, it, expect } from 'vitest';
-import { formatCents } from '../money.js';
+import { formatCents, formatNumber } from '../money.js';
 import { normalizePhone } from '@cheeseoclock/shared-types';
 import { baselineFormatCents, baselineNormalizePhone, seededRandom } from './baseline-v0.7.51.js';
 
@@ -50,6 +50,46 @@ describe('formatCents stays what the pilot prints', () => {
     expect(formatCents(400000)).toBe('Rs 4,000');
     expect(formatCents(64110)).toBe('Rs 641.10');
     expect(formatCents(64110, { showSymbol: false })).toBe('641.10');
+  });
+});
+
+describe('formatNumber replaces the loose Intl calls without changing them', () => {
+  /**
+   * About 70 Intl calls around the till passed 'en-PK' straight in, bypassing
+   * formatCents. The sweep routes them through formatNumber. That is only
+   * safe if formatNumber gives the identical text for the default locale —
+   * which is what this proves, option by option.
+   */
+  const shapes: Array<{ name: string; opts?: Parameters<typeof formatNumber>[1]; intl: Intl.NumberFormatOptions }> = [
+    { name: 'plain', intl: {} },
+    { name: 'max 1', opts: { maxFractionDigits: 1 }, intl: { maximumFractionDigits: 1 } },
+    { name: 'max 2', opts: { maxFractionDigits: 2 }, intl: { maximumFractionDigits: 2 } },
+    {
+      name: 'min 1 max 2',
+      opts: { minFractionDigits: 1, maxFractionDigits: 2 },
+      intl: { minimumFractionDigits: 1, maximumFractionDigits: 2 },
+    },
+    {
+      name: 'max 2, no grouping',
+      opts: { maxFractionDigits: 2, useGrouping: false },
+      intl: { maximumFractionDigits: 2, useGrouping: false },
+    },
+  ];
+
+  it('matches a direct en-PK Intl call on every shape the till uses', () => {
+    const rnd = seededRandom(0x1a_7b_01);
+    const values = [0, 1, 7, 10, 99, 100, 1000, 12345, 1_234_567, 0.5, 1.25, 99.995, -42, -0.75];
+    for (let i = 0; i < 20_000; i++) values.push(rnd() * 2_000_000 - 100_000);
+    for (const shape of shapes) {
+      const direct = new Intl.NumberFormat('en-PK', shape.intl);
+      for (const v of values) {
+        const mine = formatNumber(v, shape.opts);
+        const theirs = direct.format(v);
+        if (mine !== theirs) {
+          throw new Error(`formatNumber(${v}) [${shape.name}] = ${mine}, the till printed ${theirs}`);
+        }
+      }
+    }
   });
 });
 
