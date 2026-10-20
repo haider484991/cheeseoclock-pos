@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { useEffect, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
@@ -211,7 +212,7 @@ function MovementRow({
   const details = movementDetails(m);
   return (
     <tr className="border-t border-stone-100 dark:border-stone-800">
-      <td className="whitespace-nowrap py-2 pr-3 text-stone-500" title={new Date(m.occurredAt).toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}>
+      <td className="whitespace-nowrap py-2 pr-3 text-stone-500" title={new Date(m.occurredAt).toLocaleString(getShopLocale().numberLocale, { timeZone: getShopLocale().timeZone })}>
         {formatWhen(m.occurredAt)}
       </td>
       <td className="py-2 pr-3">

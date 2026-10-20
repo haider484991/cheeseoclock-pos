@@ -1,3 +1,4 @@
+import { formatCents } from '@cheeseoclock/shared-types';
 /**
  * The menu import's price details (costing spec Phase 6): behind the ONE
  * summary line, each ingredient grouped by what happens to its price — the
@@ -65,6 +66,6 @@ export function importApplyQuestion(s: ImportQuestionCounts): string {
 
 /** "sheet Rs 1,500 / kg", "sheet: Rs 0 (no price)". */
 export function sheetPriceText(r: Pick<MenuImportIngredientPlan, 'costPerUnitCents' | 'packSize' | 'packPriceCents' | 'sheetUnitCostMc' | 'unit'>): string {
-  if (!hasPrice(r)) return 'sheet: Rs 0 (no price)';
+  if (!hasPrice(r)) return `sheet: ${formatCents(0)} (no price)`;
   return `sheet ${formatUnitPrice(r.sheetUnitCostMc, r.unit)}`;
 }

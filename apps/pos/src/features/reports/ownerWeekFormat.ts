@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * The owner's week in plain words (costing spec Phase 7): how a figure moved
  * ("▲ 12%", "New", "No data then"), and each "Do this" line as a sentence
@@ -88,7 +89,7 @@ export function doThisWords(item: DoThisItem): DoThisWords {
         title: `Fill in ${plural(item.things, 'missing cost')}`,
         detail:
           item.dishes > 0
-            ? `${plural(item.dishes, 'dish', 'dishes')} can't be costed yet. The rupees are roughly ${item.dishes === 1 ? 'its' : 'their'} food cost a week, which the till can't see yet: not money lost.`
+            ? `${plural(item.dishes, 'dish', 'dishes')} can't be costed yet. The ${getShopLocale().words.major} are roughly ${item.dishes === 1 ? 'its' : 'their'} food cost a week, which the till can't see yet: not money lost.`
             : 'Some prices or recipes are not filled in yet.',
         action: 'Open missing costs',
         amount: item.weekCents !== null && item.weekCents > 0 ? { text: `about ${perWeekText(item.weekCents)}`, tone: 'unseen' } : null,

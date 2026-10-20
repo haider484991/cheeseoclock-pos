@@ -299,7 +299,7 @@ export function menuDeployNeedsOwner(f: MenuDeployPlanFacts): string | null {
     ...(f.newTax ? [`a new tax category, ${f.newTax.name} (${pct(f.newTax.rateBps)})`] : []),
   ];
   const parts: string[] = [];
-  if (jumps.length > 0) parts.push(`move ${plural(jumps.length, 'price', 'prices')} to less than half, more than double or Rs 0 (${listWords(jumps)})`);
+  if (jumps.length > 0) parts.push(`move ${plural(jumps.length, 'price', 'prices')} to less than half, more than double or ${formatCents(0)} (${listWords(jumps)})`);
   if (tax.length > 0) parts.push(`change the tax (${listWords(tax)})`);
   return parts.length ? `it would ${parts.join(' and ')}` : null;
 }

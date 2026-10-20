@@ -1,3 +1,4 @@
+import { shopZoneDateFormat } from '@cheeseoclock/shared-types';
 import { DASH_SETUP_CODE_HOURS, type DashLoginView, type DashPushStatus } from '@cheeseoclock/shared-types';
 
 /**
@@ -7,7 +8,11 @@ import { DASH_SETUP_CODE_HOURS, type DashLoginView, type DashPushStatus } from '
 
 export type DashTone = 'good' | 'warn' | 'plain';
 
-const TIME = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true });
+// The shop's own clock, built when asked (Karachi on a Pakistani till).
+const TIME = {
+  format: (d: Date | number): string =>
+    shopZoneDateFormat({ weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true }, 'en-GB').format(d),
+};
 
 /** "Thu 8 Oct, 9:41 pm" in Karachi. */
 export function dashTime(iso: string | null | undefined): string {

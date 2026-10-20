@@ -123,7 +123,7 @@ export function openingFloatExample(s: OpeningFloatSetting): string {
   const start =
     s.mode === 'fixed'
       ? `The Open shift box on this till starts on ${formatCents(s.fixedCents)} every shift, whatever the last shift closed with.`
-      : "The Open shift box on this till starts on what its last shift closed with: the cash left in the drawer overnight. A first shift starts at Rs 0.";
+      : "The Open shift box on this till starts on what its last shift closed with: the cash left in the drawer overnight. A first shift starts at " + formatCents(0) + ".";
   return `${start} Whoever opens still counts the drawer and types the float, and closing stays a blind count.`;
 }
 

@@ -1,3 +1,4 @@
+import { shopDateFormat } from '@cheeseoclock/shared-types';
 /**
  * Small, dependency-free charts for the Reports page. Plain divs rather than
  * a stretched SVG: bars stay crisp at any width, labels stay readable, and
@@ -260,7 +261,7 @@ export function PriceLineChart({ points, ariaLabel, now = Date.now() }: { points
     d += i === 0 ? `M ${px} ${py}` : ` H ${px} V ${py}`;
   });
   d += ` H ${x(t1)}`;
-  const day = (t: number) => new Date(t).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: '2-digit' });
+  const day = (t: number) => shopDateFormat({ day: 'numeric', month: 'short', year: '2-digit' }).format(new Date(t));
   const first = points[0]!;
   const last = points[points.length - 1]!;
   return (

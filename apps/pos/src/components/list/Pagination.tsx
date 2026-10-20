@@ -1,8 +1,10 @@
+import { formatNumber } from '@cheeseoclock/pos-domain';
 import { cn } from '@cheeseoclock/ui';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { PAGE_SIZES } from './useListQuery';
 
-const fmt = new Intl.NumberFormat('en-PK');
+// The shop's own number format (formatNumber), worked out when used: a const is fixed at import.
+const fmt = { format: (n: number): string => formatNumber(n) };
 
 export interface PaginationProps {
   /** 1-based. */

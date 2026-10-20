@@ -1,3 +1,4 @@
+import { getShopLocale, shopWallClock } from '@cheeseoclock/shared-types';
 /**
  * The recipe calculator's screen logic (Inventory → Recipe calculator), pure
  * so it is tested: what the manager is making (the lines, kept for the
@@ -327,6 +328,12 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
  * Pakistan time (UTC+5), whatever the PC's zone.
  */
 export function whenText(d: Date): string {
+  const l = getShopLocale();
+  if (l.country !== 'PK') {
+    const w = shopWallClock(d.getTime());
+    const date = l.dateOrder === 'mdy' ? `${MONTHS[w.m - 1]} ${w.d} ${w.y}` : `${w.d} ${MONTHS[w.m - 1]} ${w.y}`;
+    return `${date}, ${paperClock(d)}`;
+  }
   const pk = new Date(d.getTime() + 5 * 3_600_000);
   return `${pk.getUTCDate()} ${MONTHS[pk.getUTCMonth()]} ${pk.getUTCFullYear()}, ${paperClock(d)}`;
 }

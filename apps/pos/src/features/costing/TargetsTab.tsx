@@ -1,3 +1,4 @@
+import { shopDateFormat } from '@cheeseoclock/shared-types';
 import { useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
@@ -69,7 +70,7 @@ function AlertSettingsForm({ view, canEdit }: { view: CostAlertSettingsView; can
   const jumpBad = jumpBps === null || jumpBps < 100;
   const impactCents = parseRupees(impact);
   const impactBad = impactCents === null || impactCents > 100_000_000;
-  const problem = jumpBad ? 'A price jump is 1% to 100%.' : impactBad ? 'The weekly amount is Rs 0 to Rs 1,000,000.' : null;
+  const problem = jumpBad ? 'A price jump is 1% to 100%.' : impactBad ? `The weekly amount is ${formatCents(0)} to ${formatCents(100_000_000)}.` : null;
   const savedKeys = view.ingredients.filter((i) => i.key).map((i) => i.ingredientId);
   const dirty =
     jump !== pctText(view.jumpBps) ||
@@ -246,7 +247,7 @@ function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boo
       : amberBad
         ? '"Close" is 0 to 50 points over the target.'
         : stepBad
-          ? 'The price step is Rs 1 to Rs 1,000.'
+          ? `The price step is ${formatCents(100)} to ${formatCents(100_000)}.`
           : null;
 
   const mut = useMutation({
@@ -293,7 +294,7 @@ function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boo
             </p>
           ) : (
             <p className="mt-2 inline-flex items-center gap-1.5 text-sm text-emerald-700 dark:text-emerald-400">
-              <CheckCircle2 className="h-4 w-4" /> Confirmed{view.savedAt ? ` on ${new Date(view.savedAt).toLocaleDateString('en-PK')}` : ''}.
+              <CheckCircle2 className="h-4 w-4" /> Confirmed{view.savedAt ? ` on ${shopDateFormat({}).format(new Date(view.savedAt))}` : ''}.
             </p>
           )}
         </div>

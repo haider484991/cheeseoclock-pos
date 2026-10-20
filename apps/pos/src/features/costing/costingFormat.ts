@@ -262,7 +262,7 @@ export function noPriceText(names: readonly string[]): string {
 export function cantCostReason(r: Pick<MenuCostRow, 'hasRecipe' | 'missingIngredients' | 'priceCents'>): string {
   if (!r.hasRecipe) return 'No recipe yet';
   if (r.missingIngredients.length > 0) return noPriceText(r.missingIngredients);
-  if (r.priceCents <= 0) return 'Its menu price is Rs 0';
+  if (r.priceCents <= 0) return `Its menu price is ${formatCents(0)}`;
   return 'A price is missing';
 }
 
@@ -306,7 +306,7 @@ export function madeOfNote(line: { costCents: number; priceKind: CostLineKind },
  * (withDefaultFollowed), so a Save keeps what the words say.
  */
 export function defaultTargetText(defaultBps: number): string {
-  return `A category the till has no suggestion for (one without Pizza, Burger, Fries, Side, Deal, Combo, Dip, Sauce, Drink or Beverage in its name) starts at ${formatBps(defaultBps)} — shown as “suggested”, without colours, until you save the targets. That is any such category added later, and any above that is still “suggested”: its box follows this one. For example, a new “Wraps” category: a Rs 1,000 wrap is on target up to ${formatCents(Math.round((100_000 * defaultBps) / 10_000))} of ingredients.`;
+  return `A category the till has no suggestion for (one without Pizza, Burger, Fries, Side, Deal, Combo, Dip, Sauce, Drink or Beverage in its name) starts at ${formatBps(defaultBps)} — shown as “suggested”, without colours, until you save the targets. That is any such category added later, and any above that is still “suggested”: its box follows this one. For example, a new “Wraps” category: a ${formatCents(100_000)} wrap is on target up to ${formatCents(Math.round((100_000 * defaultBps) / 10_000))} of ingredients.`;
 }
 
 /**

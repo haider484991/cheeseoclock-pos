@@ -1,3 +1,4 @@
+import { getShopLocale, formatCents } from '@cheeseoclock/shared-types';
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -28,7 +29,7 @@ export function MissingCostsTab() {
   const freeMut = useMutation({
     mutationFn: (row: MissingPriceRow) => ipc.inventory.updateIngredient({ id: row.ingredientId, priceKind: 'free' }),
     onSuccess: (i) => {
-      toast({ title: `${i.name} now costs nothing`, description: 'It counts as Rs 0 in every dish that uses it.', variant: 'success' });
+      toast({ title: `${i.name} now costs nothing`, description: `It counts as ${formatCents(0)} in every dish that uses it.`, variant: 'success' });
       void qc.invalidateQueries({ queryKey: COSTING_KEY });
       void qc.invalidateQueries({ queryKey: ['inventory'] });
     },
@@ -70,7 +71,7 @@ export function MissingCostsTab() {
                 size="sm"
                 disabled={freeMut.isPending}
                 onClick={() =>
-                  void askConfirm(`Mark "${r.name}" as free?\n\nIt will count as Rs 0 in every dish that uses it.`).then((ok) => {
+                  void askConfirm(`Mark "${r.name}" as free?\n\nIt will count as ${formatCents(0)} in every dish that uses it.`).then((ok) => {
                     if (ok) freeMut.mutate(r);
                   })
                 }
@@ -112,8 +113,8 @@ export function MissingCostsTab() {
 
       {m.roundedPerGram.length > 0 && (
         <Block
-          title="Prices per gram rounded to whole paisa"
-          note="Saved as a price per gram (or ml), which rounds to whole paisa. Re-enter it as the pack you buy, e.g. 1,000 g for Rs 375."
+          title={`Prices per gram rounded to whole ${getShopLocale().words.minor}`}
+          note={`Saved as a price per gram (or ml), which rounds to whole ${getShopLocale().words.minor}. Re-enter it as the pack you buy, e.g. 1,000 g for ${formatCents(37_500)}.`}
           count={m.roundedPerGram.length}
         >
           {m.roundedPerGram.map((r) => (

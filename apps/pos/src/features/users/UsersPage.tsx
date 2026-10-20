@@ -1,3 +1,4 @@
+import { shopDateFormat } from '@cheeseoclock/shared-types';
 import { useCallback, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -66,7 +67,7 @@ type StatusFilter = 'all' | 'active' | 'inactive';
 
 const ROLE_ORDER: Record<Role, number> = { admin: 0, manager: 1, cashier: 2 };
 
-const whenFmt = new Intl.DateTimeFormat('en-PK', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+const whenFmt = { format: (d: Date): string => shopDateFormat({ day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }).format(d) };
 
 function when(iso: string | null): string {
   if (!iso) return 'Never';

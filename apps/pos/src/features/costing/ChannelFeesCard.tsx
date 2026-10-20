@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * Costing → Targets & fees: what a sale costs besides its food (costing spec
  * Phase 9) — what card and wallet payments cost, and what a delivery costs
@@ -81,7 +82,7 @@ export function readChannelFees(f: {
     paymentFeeBps[g] = v;
   }
   const fixedCents = parseRupees(f.riderFixed);
-  if (fixedCents === null || fixedCents > 10_000_000) return { ok: false, problem: 'The rider cost per trip is Rs 0 to Rs 100,000.' };
+  if (fixedCents === null || fixedCents > 10_000_000) return { ok: false, problem: `The rider cost per trip is ${formatCents(0)} to ${formatCents(10_000_000)}.` };
   return { ok: true, value: { fees: { paymentFeeBps }, riderCost: { mode: f.riderMode, fixedCents } } };
 }
 
@@ -216,7 +217,7 @@ function ChannelFeesForm({ view, canEdit }: { view: ChannelFeesView; canEdit: bo
           {riderMode === 'fixed' && (
             <label className="flex items-center gap-2 pl-6">
               Rs
-              <input className={inputCls} value={riderFixed} disabled={!canEdit} inputMode="decimal" onChange={(e) => setRiderFixed(e.target.value)} aria-label="Rider cost per trip, rupees" />
+              <input className={inputCls} value={riderFixed} disabled={!canEdit} inputMode="decimal" onChange={(e) => setRiderFixed(e.target.value)} aria-label={`Rider cost per trip, ${getShopLocale().words.major}`} />
               a trip
             </label>
           )}

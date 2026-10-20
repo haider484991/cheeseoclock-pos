@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * Plain-words labels and the small calculations the Reports page shows.
  * Pure (no React, no DOM) so they are unit-tested.
@@ -53,7 +54,10 @@ export function cameByLabel(c: ReportCameBy): string {
 /** Team & leakage's flags on a cashier, in words. */
 export const OFFER_FLAG_WORDS: Record<OfferFlag, string> = {
   phone_share: 'Phone / WhatsApp',
-  offer_rupees: 'Offer rupees',
+  // Its words follow the shop; the key is a stored flag id and stays.
+  get offer_rupees() {
+    return `Offer ${getShopLocale().words.major}`;
+  },
 };
 
 /**

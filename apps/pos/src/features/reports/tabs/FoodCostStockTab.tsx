@@ -95,7 +95,7 @@ export function PurchasesSection({ purchases: p }: { purchases: ReportPurchases 
                 empty="Nothing bought."
               />
             </Panel>
-            <Panel title="By ingredient" note="Price: what one kg (or piece) cost on its latest paid purchase, and the change on the one before. Rs 0 bills and stock booked in by hand are not prices.">
+            <Panel title="By ingredient" note={`Price: what one kg (or piece) cost on its latest paid purchase, and the change on the one before. ${formatCents(0)} bills and stock booked in by hand are not prices.`}>
               <DataTable
                 columns={[{ label: 'Ingredient' }, { label: 'Bought', right: true }, { label: 'Spent', right: true }, { label: 'Price', right: true }]}
                 rows={ingredients.shown.map((l) => {

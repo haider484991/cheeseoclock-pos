@@ -1,3 +1,5 @@
+import { formatCents } from './money.js';
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * Buying stock at the real bill (costing spec Phase 5, D1, 4.1). Pure, so
  * the Receive screen, "Record a purchase" and the main process all work a
@@ -74,7 +76,7 @@ export function billPack(qty: number, billCents: number): Pack {
 
 function assertBill(qty: number, billCents: number): void {
   if (!Number.isSafeInteger(qty) || qty < 1) throw new Error('Say how much came, at least 1 whole unit');
-  if (!Number.isSafeInteger(billCents) || billCents < 0) throw new Error('The bill must be Rs 0 or more, in whole paisa');
+  if (!Number.isSafeInteger(billCents) || billCents < 0) throw new Error(`The bill must be ${formatCents(0)} or more, in whole ${getShopLocale().words.minor}`);
 }
 
 /** Why a bill's price is or is not used, for the screen's words. */

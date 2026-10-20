@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { useMemo, useRef, useState, type ChangeEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -53,7 +54,7 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
   const problem = (() => {
     if (name.trim() === '') return 'Say who the vouchers are for';
     if (gives.trim() === '') return 'Say what one voucher gets';
-    if (coversCents === null) return 'Say the most one voucher takes off, in rupees';
+    if (coversCents === null) return `Say the most one voucher takes off, in ${getShopLocale().words.major}`;
     if (hasEnd && !/^\d{4}-\d{2}-\d{2}$/.test(goodUntil)) return 'Pick the last day, or untick it';
     if (batch) return null;
     if (from === 'list') {

@@ -158,8 +158,9 @@ export const WEBSITE_SHOP_WORDS = {
   greeting: 'The message every “Order on WhatsApp” button starts with. The pages’ own messages (pizza, burgers, late night, an area) keep their words, with the name from Shop details.',
   allergy:
     'Shown on the menu page and at checkout. Keep the “shares equipment, can’t guarantee” sentence: it is what protects the shop. It is the printed menu’s wording too.',
-  home:
-    'Which items the home page features. Prices come from the menu. An item not on the website’s menu (hidden, off the website, renamed or deleted) is left off the home page — never shown at Rs 0. Drink brand names are never shown.',
+  get home() {
+    return 'Which items the home page features. Prices come from the menu. An item not on the website’s menu (hidden, off the website, renamed or deleted) is left off the home page — never shown at ' + formatCents(0) + '. Drink brand names are never shown.';
+  },
   homePreview:
     'Prices here are this till’s. Saving never sends the menu: the website shows it as last published — after changing prices or adding an item, press Publish.',
 } as const;

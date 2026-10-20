@@ -1,3 +1,4 @@
+import { shopDateFormat, getShopLocale } from '@cheeseoclock/shared-types';
 import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -31,7 +32,7 @@ interface Line {
 }
 
 const whenText = (iso: string) =>
-  new Date(iso).toLocaleString('en-PK', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+  shopDateFormat({ day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
 
 /**
  * "Record a purchase" (costing spec Phase 5): what was bought and what was
@@ -105,9 +106,9 @@ export function RecordPurchaseDialog({
           : read.some((r) => r.qty === null)
             ? 'Say how much was bought on every line (e.g. 5 kg or 12).'
             : read.some((r) => r.bill === null)
-              ? 'Type what was paid on every line, in rupees.'
+              ? `Type what was paid on every line, in ${getShopLocale().words.major}.`
               : fromDrawer && totalCents <= 0
-                ? 'Nothing to take from the drawer: the bill comes to Rs 0.'
+                ? `Nothing to take from the drawer: the bill comes to ${formatCents(0)}.`
                 : null;
 
   function update(key: number, patch: Partial<Line>) {
@@ -330,7 +331,7 @@ function PurchaseLineRow({
           value={line.bill}
           onChange={(e) => onChange({ bill: e.target.value, answer: null })}
           placeholder="Rs"
-          aria-label="Paid in rupees"
+          aria-label={`Paid in ${getShopLocale().words.major}`}
           className="w-full rounded-lg border border-stone-300 px-2 py-2 text-right font-mono dark:border-stone-700 dark:bg-stone-800"
         />
         <button type="button" onClick={onRemove} className="rounded p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-950" aria-label="Remove line">

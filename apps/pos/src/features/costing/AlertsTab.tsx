@@ -1,3 +1,4 @@
+import { shopDateFormat } from '@cheeseoclock/shared-types';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -87,7 +88,7 @@ export function AlertsTab() {
 }
 
 const when = (iso: string) =>
-  new Date(iso).toLocaleString('en-PK', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+  shopDateFormat({ day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
 
 function AlertIcon({ alert }: { alert: CostAlert }) {
   const d = alert.detail;

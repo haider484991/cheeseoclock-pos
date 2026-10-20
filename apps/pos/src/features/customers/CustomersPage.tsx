@@ -1,3 +1,4 @@
+import { shopDateFormat } from '@cheeseoclock/shared-types';
 import { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -37,7 +38,7 @@ const SORTS: ReadonlyArray<ChipOption<CustomerListSort>> = [
   { id: 'name', label: 'A–Z' },
 ];
 
-const dateFmt = new Intl.DateTimeFormat('en-PK', { day: 'numeric', month: 'short', year: 'numeric' });
+const dateFmt = { format: (d: Date): string => shopDateFormat({ day: 'numeric', month: 'short', year: 'numeric' }).format(d) };
 
 function shortDate(iso: string | null): string {
   if (!iso) return '—';

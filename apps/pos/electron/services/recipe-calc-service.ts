@@ -1,3 +1,4 @@
+import { getShopLocale, shopWallClock } from '@cheeseoclock/shared-types';
 /**
  * The recipe calculator (owner, 2026-09-27: "make it more easy if a manager
  * wants to see how much ingredients a recipe needs for making anything like
@@ -408,6 +409,12 @@ export function getTypicalPicks(db: AppDatabase, menuItemId: string, now = new D
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 /** "27 Sep 2026, 14:05", Pakistan time (UTC+5) like every paper, whatever the PC's zone. */
 function whenText(d: Date): string {
+  const l = getShopLocale();
+  if (l.country !== 'PK') {
+    const w = shopWallClock(d.getTime());
+    const date = l.dateOrder === 'mdy' ? `${MONTHS[w.m - 1]} ${w.d} ${w.y}` : `${w.d} ${MONTHS[w.m - 1]} ${w.y}`;
+    return `${date}, ${paperClock(d)}`;
+  }
   const pk = new Date(d.getTime() + 5 * 3_600_000);
   return `${pk.getUTCDate()} ${MONTHS[pk.getUTCMonth()]} ${pk.getUTCFullYear()}, ${paperClock(d)}`;
 }

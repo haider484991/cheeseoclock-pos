@@ -1,3 +1,4 @@
+import { shopDateFormat } from '@cheeseoclock/shared-types';
 /**
  * "Use the sheet's price" in Inventory → Ingredients (costing spec Phase 6):
  * the question it asks before replacing the till's price. Since Phase 6 the
@@ -27,7 +28,7 @@ const FROM_WORDS: Record<PriceSource, string> = {
   convert: 'kept through a unit change',
 };
 
-const dayText = (iso: string) => new Date(iso).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' });
+const dayText = (iso: string) => shopDateFormat({ day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(iso));
 
 /** The till's price comes from a bill (a delivery or a purchase): what the shop really paid. */
 export function tillPriceIsFromBill(i: Pick<Ingredient, 'unit' | 'latestPrice'>): boolean {

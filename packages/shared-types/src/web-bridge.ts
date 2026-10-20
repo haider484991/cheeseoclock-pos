@@ -1,3 +1,4 @@
+import { getShopLocale } from './shop-locale.js';
 /**
  * Web bridge contract — the JSON shapes that travel between the online
  * ordering website (apps/web, Next.js on Vercel + Neon Postgres) and the
@@ -1063,7 +1064,8 @@ export function settingsBlockProblem(
   for (const c of menu.categories) for (const i of c.items) items.set(i.posItemId, i);
   for (const z of block.zones) {
     if (!z.active) continue;
-    const rupees = `Rs ${Math.round(z.feeCents / 100).toLocaleString('en-US')}`;
+    const sym = `${getShopLocale().symbol}${getShopLocale().symbolSeparator}`;
+  const rupees = `${sym}${Math.round(z.feeCents / 100).toLocaleString('en-US')}`;
     if (z.feeCents === 0) {
       if (z.feeItemId !== null) return `${z.name}: delivery is free there, so it takes no delivery charge item`;
       continue;
@@ -1072,7 +1074,7 @@ export function settingsBlockProblem(
     const item = items.get(z.feeItemId);
     if (!item) return `${z.name}: its "Delivery Charge (${rupees})" item is not on the menu (hidden or removed?)`;
     if (item.basePriceCents !== z.feeCents) {
-      return `${z.name}: its delivery charge item costs Rs ${Math.round(item.basePriceCents / 100).toLocaleString('en-US')}, not ${rupees}`;
+      return `${z.name}: its delivery charge item costs ${sym}${Math.round(item.basePriceCents / 100).toLocaleString('en-US')}, not ${rupees}`;
     }
     if (!/^delivery charge/i.test(item.name.trim())) return `${z.name}: its delivery charge item is called "${item.name}"`;
   }

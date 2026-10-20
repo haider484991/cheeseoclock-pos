@@ -1,3 +1,4 @@
+import { shopDateFormat, getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * How Inventory says prices (costing spec Phase 4, D15: plain words): the
  * price per kg / litre / piece, where it came from (a chip), up or down on
@@ -103,9 +104,9 @@ export function whenText(e: Pick<PriceHistoryEntry, 'source' | 'effectiveAt' | '
   return { main: dateTimeText(e.effectiveAt), sub: null };
 }
 
-const dayText = (iso: string) => new Date(iso).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' });
+const dayText = (iso: string) => shopDateFormat({ day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(iso));
 const dateTimeText = (iso: string) =>
-  new Date(iso).toLocaleString('en-PK', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  shopDateFormat({ day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
 
 /**
  * The history (newest first, as the drawer gets it) as points oldest first,
@@ -193,10 +194,10 @@ export type PriceEntryReading =
 export function readPriceEntry(e: PriceEntry, unit: string): PriceEntryReading {
   if (e.free) return { ok: true, free: true };
   const text = e.rupees.trim();
-  if (text === '') return { ok: false, empty: true, problem: `Type the price in rupees, ${perLabel(e.per, unit)}.` };
+  if (text === '') return { ok: false, empty: true, problem: `Type the price in ${getShopLocale().words.major}, ${perLabel(e.per, unit)}.` };
   const cents = parseRupees(text);
   if (cents === null) return { ok: false, empty: false, problem: 'Type a price like 375 or 375.50.' };
-  if (cents === 0) return { ok: false, empty: false, problem: 'Rs 0 is no price: tick "Free" if it costs nothing.' };
+  if (cents === 0) return { ok: false, empty: false, problem: `${formatCents(0)} is no price: tick "Free" if it costs nothing.` };
   let packSize: number | null = null;
   if (e.per === 'pack') {
     const t = e.packSize.trim().replace(/,/g, '');

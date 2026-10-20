@@ -1,3 +1,4 @@
+import { formatNumber } from './money.js';
 /**
  * How much of an ingredient there is, said the way the kitchen says it:
  * "12.5 kg", not "12500 g"; "Low" or "Out", not a number to compare in your
@@ -62,8 +63,9 @@ export function stockValueCents(i: {
   return qty * i.costPerUnitCents;
 }
 
-const whole = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 0 });
-const upToTwo = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2 });
+// The shop's own number format (formatNumber), worked out when used: a const is fixed at import.
+const whole = { format: (n: number): string => formatNumber(n, { maxFractionDigits: 0 }) };
+const upToTwo = { format: (n: number): string => formatNumber(n, { maxFractionDigits: 2 }) };
 
 /**
  * A quantity in its unit, in the biggest unit that reads well:

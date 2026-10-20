@@ -254,8 +254,9 @@ export const WEBSITE_MESSAGES_RULES = {
   noticeUntil:
     'The last day it shows (Karachi time). With no end date the notice shows every night the website is closed — the website closes by itself when the last shift closes.',
   announcement: `A line on the website’s home page and menu page while it is on, up to ${ANNOUNCEMENT_MAX} letters (for example a new item or a holiday). It never goes into the page titles, descriptions or the data written for search engines — but it is words on the home page, so Google may show them in its results, and for a while after you switch it off.`,
-  minimum:
-    'The smallest website DELIVERY order, in whole rupees: the food, before tax and the delivery charge. Pick-up is never refused, and orders rung up at the till (phone, WhatsApp, walk-in) are not checked.',
+  get minimum() {
+    return `The smallest website DELIVERY order, in whole ${getShopLocale().words.major}: the food, before tax and the delivery charge. Pick-up is never refused, and orders rung up at the till (phone, WhatsApp, walk-in) are not checked.`;
+  },
   reaches:
     'A Save reaches the website by itself in a few seconds — only these words and the delivery areas, never menu changes you have not published.',
 } as const;

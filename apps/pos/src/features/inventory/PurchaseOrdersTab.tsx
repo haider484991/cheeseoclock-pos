@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -620,7 +621,7 @@ function CreatePoDialog({ onClose }: { onClose: () => void }) {
                       value={line.rupees}
                       onChange={(e) => updateLine(i, { rupees: e.target.value })}
                       placeholder="Rs"
-                      aria-label="Price in rupees"
+                      aria-label={`Price in ${getShopLocale().words.major}`}
                       className="w-full rounded-lg border border-stone-300 px-2 py-2 text-right font-mono dark:border-stone-700 dark:bg-stone-800"
                     />
                     <select
@@ -952,7 +953,7 @@ function OpenPoDialog({ poId, onClose }: { poId: string; onClose: () => void }) 
                                 setAnswers(rest);
                               }}
                               placeholder={l.qty !== null ? String(orderedValueCents(l.qty, item) / 100) : 'Rs'}
-                              aria-label={`What the bill says for ${ing?.name ?? 'it'}, in rupees`}
+                              aria-label={`What the bill says for ${ing?.name ?? 'it'}, in ${getShopLocale().words.major}`}
                               className="w-28 rounded border border-stone-300 px-2 py-1 text-right font-mono text-sm dark:border-stone-700 dark:bg-stone-800"
                             />
                           )}

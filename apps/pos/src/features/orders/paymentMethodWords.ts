@@ -1,3 +1,4 @@
+import { shopZoneDateFormat } from '@cheeseoclock/shared-types';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { OrderMode, PaymentMethod, PaymentMethodChanged, Role } from '@cheeseoclock/shared-types';
 import { PAYMENT_LABELS } from './historyFilters';
@@ -41,7 +42,8 @@ export function drawerWord(varianceCents: number): string {
   return varianceCents < 0 ? `short ${formatCents(-varianceCents)}` : `over ${formatCents(varianceCents)}`;
 }
 
-const DAY = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', weekday: 'short', day: 'numeric', month: 'short' });
+// The shop's own day, built when asked (Karachi on a Pakistani till).
+const DAY = { format: (d: Date): string => shopZoneDateFormat({ weekday: 'short', day: 'numeric', month: 'short' }, 'en-GB').format(d) };
 
 /** "Thu 8 Oct", in Karachi. */
 function dayOf(iso: string): string {

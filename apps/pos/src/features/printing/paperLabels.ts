@@ -1,3 +1,4 @@
+import { getShopLocale, shopZoneDateFormat } from '@cheeseoclock/shared-types';
 import type { OrderPaperLine, OrderPapers, PrintedDocument } from '@cheeseoclock/shared-types';
 
 /**
@@ -60,13 +61,19 @@ const REASON_WORDS: Record<string, string> = {
   edited: 'after the order was changed',
 };
 
-const TIME_24 = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Asia/Karachi',
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false,
-});
-const DAY = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', weekday: 'short', day: 'numeric', month: 'short' });
+// On the shop's own clock, built when asked (consts were fixed at import, in
+// Pakistan time). Pakistan keeps its 24-hour en-GB clock; a US till matches
+// its own paper, 12-hour.
+const TIME_24 = {
+  format: (ms: number): string =>
+    shopZoneDateFormat(
+      getShopLocale().hourCycle === 'h12'
+        ? { hour: 'numeric', minute: '2-digit', hour12: true }
+        : { hour: '2-digit', minute: '2-digit', hour12: false },
+      'en-GB',
+    ).format(ms),
+};
+const DAY = { format: (ms: number): string => shopZoneDateFormat({ weekday: 'short', day: 'numeric', month: 'short' }, 'en-GB').format(ms) };
 
 /** "19:35", or "Sat 26 Sep 19:35" when the paper is from another day than `sameDayAs`. */
 export function paperTime(iso: string, sameDayAs?: string): string {

@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * Ingredient units. Stock and recipes count whole base units (g, ml, pcs…),
  * so a kilogram or litre unit cannot hold "300 g of dough" — those are
@@ -86,7 +87,7 @@ export function formatUnitCost(i: {
   const fromPack = !!i.packSize && i.packSize > 0 && i.packPriceCents !== null;
   const rupees = fromPack ? i.packPriceCents! / i.packSize! / 100 : i.costPerUnitCents / 100;
   const text = formatNumber(rupees, { minFractionDigits: rupees < 1 ? 2 : 0, maxFractionDigits: rupees < 1 ? 3 : 2 });
-  return `Rs ${text} / ${i.unit}`;
+  return `${getShopLocale().symbol}${getShopLocale().symbolSeparator}${text} / ${i.unit}`;
 }
 
 // -----------------------------------------------------------------------------
@@ -237,7 +238,7 @@ export interface TypedPrice {
  */
 export function typedPricePack(t: TypedPrice, unit: string): Pack {
   assertWhole(t.priceCents, 'The price');
-  if (t.priceCents < 0) throw new Error('A price cannot be below Rs 0');
+  if (t.priceCents < 0) throw new Error(`A price cannot be below ${formatCents(0)}`);
   switch (t.per) {
     case 'thousand': {
       const size = thousandSize(unit);

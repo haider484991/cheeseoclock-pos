@@ -71,6 +71,34 @@ export function shopWallClock(ms: number, locale: ShopLocale = getShopLocale()):
   return wallAt(ms, locale.timeZone);
 }
 
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+function dateFormatFor(tag: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${tag}|${JSON.stringify(options)}`;
+  let f = dateFormats.get(key);
+  if (!f) {
+    f = new Intl.DateTimeFormat(tag, options);
+    dateFormats.set(key, f);
+  }
+  return f;
+}
+
+/**
+ * A date format in the shop's own words, on the computer's own clock — as the
+ * screens that wrote 'en-PK' directly did. `pkTag` is the tag such a screen
+ * used, so a Pakistani till keeps its formatter exactly; elsewhere it is the
+ * shop's own (en-US: "Oct 20, 2026"). Built when asked, cached.
+ */
+export function shopDateFormat(options: Intl.DateTimeFormatOptions, pkTag = 'en-PK'): Intl.DateTimeFormat {
+  const l = getShopLocale();
+  return dateFormatFor(l.country === 'PK' ? pkTag : l.numberLocale, options);
+}
+
+/** The same on the SHOP's clock, whatever the computer's zone (Pakistan time on a Pakistani till). */
+export function shopZoneDateFormat(options: Intl.DateTimeFormatOptions, pkTag = 'en-PK'): Intl.DateTimeFormat {
+  const l = getShopLocale();
+  return dateFormatFor(l.country === 'PK' ? pkTag : l.numberLocale, { ...options, timeZone: l.timeZone });
+}
+
 /** "2026-10-20" for a UTC midnight. */
 const ymdOf = (utcMidnightMs: number): string => new Date(utcMidnightMs).toISOString().slice(0, 10);
 

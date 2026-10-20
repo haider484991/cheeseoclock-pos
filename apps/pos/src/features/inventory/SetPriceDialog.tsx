@@ -1,3 +1,4 @@
+import { formatCents } from '@cheeseoclock/shared-types';
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -109,7 +110,7 @@ export function PriceFields({
       <p className={cn('text-xs', !reading.ok && !(reading.empty && optional) ? 'text-red-700 dark:text-red-400' : 'text-stone-500')} aria-live="polite">
         {reading.ok
           ? reading.free
-            ? 'Counted as Rs 0 in every dish that uses it.'
+            ? `Counted as ${formatCents(0)} in every dish that uses it.`
             : `= ${formatUnitPrice(reading.unitCostMc, unit)}${reading.priceKind === 'estimate' ? ' (a guess: it stays on Costing → Missing costs until the real price is in)' : ''}`
           : reading.empty && optional
             ? 'No price yet: dishes that use it show "can\'t cost yet" on the Costing page until it has one.'

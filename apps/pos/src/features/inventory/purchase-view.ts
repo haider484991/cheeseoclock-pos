@@ -110,7 +110,7 @@ export function lineWords(check: PriceCheck, qty: number, billCents: number, uni
     case 'made_here':
       return { price, note: 'Made here: its price comes from its batch recipe, not a bill.', ask: false, warn: false };
     case 'zero_bill':
-      return { price, note: 'Rs 0: the stock comes in, the price stays as it is.', ask: false, warn: false };
+      return { price, note: `${formatCents(0)}: the stock comes in, the price stays as it is.`, ask: false, warn: false };
     default:
       return { price, note: '', ask: false, warn: false };
   }

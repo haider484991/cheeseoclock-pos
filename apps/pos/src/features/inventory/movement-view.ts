@@ -1,3 +1,4 @@
+import { shopZoneDateFormat } from '@cheeseoclock/shared-types';
 /**
  * How the stock history reads: plain names for what happened, friendly
  * times, and the date ranges behind the filter chips. Pure (tested in
@@ -127,10 +128,12 @@ export function rangeSinceIso(range: DateRange, now: Date = new Date()): string 
 
 // Pakistan time whatever the computer's time zone, like Order History
 // (historyFilters orderTimeLabel) and the paper (paperLabels).
-const time = new Intl.DateTimeFormat('en-PK', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Karachi' });
-const dayMonth = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'Asia/Karachi' });
-const dayMonthYear = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Karachi' });
-const year = new Intl.DateTimeFormat('en-GB', { year: 'numeric', timeZone: 'Asia/Karachi' });
+// (Built when asked, on the shop's own clock: these were consts fixed at import,
+// before the till knows its shop, and pinned to Asia/Karachi.)
+const time = () => shopZoneDateFormat({ hour: 'numeric', minute: '2-digit', hour12: true });
+const dayMonth = () => shopZoneDateFormat({ day: 'numeric', month: 'short' }, 'en-GB');
+const dayMonthYear = () => shopZoneDateFormat({ day: 'numeric', month: 'short', year: 'numeric' }, 'en-GB');
+const year = () => shopZoneDateFormat({ year: 'numeric' }, 'en-GB');
 
 /**
  * "Today 3:04 pm", "Yesterday 9:15 am", "21 Sep 8:00 pm", "3 Mar 2025 1:00 pm".
@@ -147,11 +150,11 @@ const year = new Intl.DateTimeFormat('en-GB', { year: 'numeric', timeZone: 'Asia
 export function formatWhen(iso: string, now: Date = new Date()): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  const t = time.format(d).toLowerCase();
+  const t = time().format(d).toLowerCase();
   const day = tradingDayOfMs(d.getTime());
   const today = tradingDayOfMs(now.getTime());
   if (day === today) return `Today ${t}`;
   if (day === today - 1) return `Yesterday ${t}`;
-  const thisYear = year.format(d) === year.format(now);
-  return `${(thisYear ? dayMonth : dayMonthYear).format(d)} ${t}`;
+  const thisYear = year().format(d) === year().format(now);
+  return `${(thisYear ? dayMonth : dayMonthYear)().format(d)} ${t}`;
 }

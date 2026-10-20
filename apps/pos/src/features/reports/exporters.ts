@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * Getting a report off the screen, a tab at a time (costing spec Phase 3):
  * a CSV the owner can open in Excel and a printout, each with that tab's
@@ -144,7 +145,7 @@ function menuHasProfit(r: ReportTabData['menu']): boolean {
 
 function channelProfitRows(channels: readonly ReportChannelProfit[]): CsvCell[][] {
   return [
-    ['Order type', 'Orders', 'Sales before tax Rs', 'Of it delivery charges Rs', 'Food cost Rs', 'Sales with unknown cost Rs', 'foodpanda kept Rs', 'Price uplift Rs', 'Card and wallet fees Rs', 'Rider Rs', 'Earns Rs (known costs)', 'Per order Rs (known costs)'],
+    ['Order type', 'Orders', `Sales before tax ${getShopLocale().symbol}`, `Of it delivery charges ${getShopLocale().symbol}`, `Food cost ${getShopLocale().symbol}`, `Sales with unknown cost ${getShopLocale().symbol}`, `foodpanda kept ${getShopLocale().symbol}`, `Price uplift ${getShopLocale().symbol}`, `Card and wallet fees ${getShopLocale().symbol}`, `Rider ${getShopLocale().symbol}`, `Earns ${getShopLocale().symbol} (known costs)`, `Per order ${getShopLocale().symbol} (known costs)`],
     ...channels.map((c) => [
       CHANNEL_LABEL[c.channel],
       c.orderCount,
@@ -274,7 +275,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
   menu: (sheet, r) => {
     const costs = r.costs;
     const withProfit = menuHasProfit(r);
-    const costHead = costs ? ['Food cost (known sales)', 'Costs known for', ...(withProfit ? ['Profit Rs (before channel costs)', 'Profit per sale Rs'] : [])] : [];
+    const costHead = costs ? ['Food cost (known sales)', 'Costs known for', ...(withProfit ? [`Profit ${getShopLocale().symbol} (before channel costs)`, `Profit per sale ${getShopLocale().symbol}`] : [])] : [];
     sheet.heading('Items sold (menu price, before order discounts)');
     sheet.push(['Item', 'Category', 'Quantity', 'Sales Rs', ...costHead]);
     for (const i of r.items) sheet.push([i.name, i.categoryName, i.quantity, rs(i.salesCents), ...(costs ? costCells(costs.items[i.key], withProfit) : [])]);
