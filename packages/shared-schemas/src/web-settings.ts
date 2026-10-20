@@ -35,6 +35,7 @@ import {
   WHATSAPP_LINES_MAX,
   buy1Get1HoursProblem,
   canonicalPayments,
+  featuresNothing,
   homeDuplicateProblem,
   normalizePhone,
   sameSocialLink,
@@ -389,16 +390,20 @@ const homeEntrySchema = z.object({
   text: shopLine(1, HOME_TEXT_MAX, 'the home words').optional(),
 });
 
-/** 'website.home' without its format: 1–8 pizzas, at most one burger, 0–4 deals. */
+/**
+ * 'website.home' without its format: 1–8 pizzas, at most one burger, 0–4
+ * deals — or nothing featured at all (NOTHING_FEATURED: a new shop's lineup
+ * before it has a menu; the website then shows no featured items).
+ */
 export const websiteHomeFields = {
-  pizzas: z
-    .array(homeEntrySchema)
-    .min(HOME_PIZZAS_MIN, { message: 'The home page shows at least one pizza' })
-    .max(HOME_PIZZAS_MAX, { message: `The home page shows at most ${HOME_PIZZAS_MAX} pizzas` }),
+  pizzas: z.array(homeEntrySchema).max(HOME_PIZZAS_MAX, { message: `The home page shows at most ${HOME_PIZZAS_MAX} pizzas` }),
   burger: homeEntrySchema.nullable(),
   deals: z.array(homeEntrySchema).max(HOME_DEALS_MAX, { message: `The home page shows at most ${HOME_DEALS_MAX} deals` }),
 };
 export const websiteHomeRule = (h: Pick<WebsiteHome, 'pizzas' | 'burger' | 'deals'>, ctx: z.RefinementCtx) => {
+  if (h.pizzas.length < HOME_PIZZAS_MIN && !featuresNothing(h)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'The home page shows at least one pizza' });
+  }
   const twice = homeDuplicateProblem(h);
   if (twice) ctx.addIssue({ code: z.ZodIssueCode.custom, message: twice });
   const headed = h.deals.find((d) => d.headline !== undefined);

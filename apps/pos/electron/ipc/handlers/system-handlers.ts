@@ -1,11 +1,12 @@
 import { app } from 'electron';
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
-import { ok } from '@cheeseoclock/shared-types';
-import { onboardingAdminSchema } from '@cheeseoclock/shared-schemas';
+import { NEW_SHOP_KEYS, ok } from '@cheeseoclock/shared-types';
+import { checkedNewShop, onboardingAdminSchema } from '@cheeseoclock/shared-schemas';
 import { ensureDeviceInfo } from '../../db/repositories/device-repo.js';
 import { createUser } from '../../db/repositories/user-repo.js';
 import { createTaxCategory } from '../../db/repositories/tax-category-repo.js';
+import { setBusinessSettings, type BusinessSettingEntry } from '../../db/repositories/business-settings-repo.js';
 import { getReceiptBranding, setReceiptBranding } from '../../services/printer-config.js';
 import { readShopSetting } from '../../db/business-settings-read.js';
 import { tillClose } from '../../services/till-close-hub.js';
@@ -93,18 +94,19 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
 
   /**
    * One-shot onboarding endpoint — creates the first admin user, writes
-   * branding, optionally seeds tax categories, all in one transaction.
-   * Refuses to run a second time.
+   * branding and the shop's website details, optionally seeds tax
+   * categories, all in one transaction. Refuses to run a second time.
    *
    * Auth gate: anyone can call this BEFORE the first user exists. Once there's
    * a user, the next call throws (the only path to create more users is via
    * users:create which requires a logged-in admin).
    *
-   * The owner's name and PIN or password are checked first, before anything
-   * is written: this used to save branding and tax categories, then fail on
-   * the PIN, and a retry added the tax categories a second time. The user,
-   * branding and tax now land together or not at all, and two calls at once
-   * cannot both make an owner (createUser firstUserOnly re-checks inside).
+   * The owner's name and PIN or password, and the website's answers, are
+   * checked first, before anything is written: this used to save branding
+   * and tax categories, then fail on the PIN, and a retry added the tax
+   * categories a second time. The user, branding, website details and tax
+   * now land together or not at all, and two calls at once cannot both make
+   * an owner (createUser firstUserOnly re-checks inside).
    */
   defineHandler('system:completeOnboarding', ctx, async (_ctx, payload) => {
     const existing = ctx.db
@@ -124,6 +126,22 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
         message: admin.error.issues[0]?.message ?? 'Check your name and your PIN or password',
       });
     }
+
+    // What the website shows: this shop's own, from the Website step (the
+    // name and tagline are the business's). The built-in ones are the first
+    // shop's (DEFAULT_SHOP_*: its name, numbers, address, greeting, hours,
+    // home picks and 10% off a pick-up) — only a till that never ran this
+    // setup falls back to them.
+    const shop = checkedNewShop(
+      typeof payload.storeName === 'string' ? payload.storeName : '',
+      typeof payload.storeTagline === 'string' ? payload.storeTagline : '',
+      payload.website,
+    );
+    if (!shop.value) {
+      throw new IpcGuardError({ code: 'validation_failed', message: shop.problem });
+    }
+    const shopSettings = shop.value;
+    const websiteDetails = NEW_SHOP_KEYS.map((key) => ({ key, value: shopSettings[key] }) as BusinessSettingEntry);
 
     const info = ensureDeviceInfo(ctx.db);
     const actor = { userId: null, deviceId: info.deviceId };
@@ -153,6 +171,12 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
             websiteLine: (payload.websiteLine ?? '').trim().slice(0, 60),
           });
 
+          // The website's shop details, hours, words, home lineup (nothing
+          // featured: no menu yet) and pick-up offer — always stored, like
+          // the website line, so no till ever publishes another shop's by
+          // default. Synced to the other till, with their audit rows.
+          setBusinessSettings(ctx.db, websiteDetails, actor);
+
           // Tax categories — only insert if the user picked some
           for (const t of payload.taxCategories) {
             if (!t.name.trim()) continue;
@@ -163,15 +187,18 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
             );
           }
 
-          // Where the shop delivers: its city on every address this till saves,
-          // and its areas — the built-in Karachi list, or none to start with.
-          // Absent (an older screen) = nothing written, as before.
+          // Where the shop delivers: its city on every address this till saves
+          // (absent = the default, as before), and its areas — the built-in
+          // Karachi list when picked, else none to start with. Always stored:
+          // the pick-up offer above is, so the website's settings block goes
+          // from the first publish, and areas never saved would send the
+          // first shop's built-in list.
           if (payload.deliveryCity !== undefined) {
             setTillSetting(ctx.db, { key: 'delivery.city', value: payload.deliveryCity.trim() }, null);
           }
           if (payload.deliveryAreas === 'karachi-dha-clifton') {
             saveDeliveryZones(ctx.db, { useDefault: true }, actor);
-          } else if (payload.deliveryAreas === 'none') {
+          } else {
             saveDeliveryZones(ctx.db, { zones: [] }, actor);
           }
         },

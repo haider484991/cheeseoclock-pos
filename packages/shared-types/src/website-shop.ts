@@ -23,6 +23,10 @@
  * PUBLIC REPO: the defaults below are the shop's own public details exactly
  * as the website already printed them (apps/web lib/business.ts, which now
  * derives from these). Tests use made-up values.
+ *
+ * They are the FIRST shop's, so only its tills (which never ran first-time
+ * setup with a Website step) fall back to them: every till set up since
+ * stores its own values at once (new-shop.ts), and never publishes these.
  */
 
 import { isDeliveryChargeMenuItem } from './delivery-areas.js';
@@ -182,7 +186,11 @@ export interface HomeEntry {
 
 export interface WebsiteHome {
   v: number;
-  /** The signature pizzas: the 3D carousel and the grid (1–8). */
+  /**
+   * The signature pizzas: the 3D carousel and the grid (1–8). None only in
+   * a lineup that features nothing at all (NOTHING_FEATURED: a new shop's,
+   * before it has a menu to pick from).
+   */
   pizzas: HomeEntry[];
   /** The signature burger card (none = no burger card). */
   burger: HomeEntry | null;
@@ -274,6 +282,32 @@ export const DEFAULT_WEBSITE_HOME: Readonly<WebsiteHome> = Object.freeze({
   burger: featured('Signature Cheese Dipped'),
   deals: Object.freeze([featured('Big Two'), featured('Family Feast'), featured('Perfect Pair')]) as HomeEntry[],
 }) as Readonly<WebsiteHome>;
+
+// ---------------------------------------------------------------------------
+// A lineup that features nothing
+// ---------------------------------------------------------------------------
+
+/**
+ * No pizza, no burger, no deal: the home lineup first-time setup stores for
+ * a new shop (new-shop.ts). It has no menu to pick from yet, and the first
+ * shop's picks (DEFAULT_WEBSITE_HOME) name that shop's dishes. The website's
+ * home page then shows no carousel, grid or deals — exactly as when no
+ * featured item is on the menu — until the owner picks some (Settings →
+ * Shop & logo → Home page). The one lineup without a pizza the rules take
+ * (shared-schemas websiteHomeRule); the Home page card itself still asks
+ * for at least one.
+ */
+export const NOTHING_FEATURED: Readonly<WebsiteHome> = Object.freeze({
+  v: 1,
+  pizzas: Object.freeze([] as HomeEntry[]) as HomeEntry[],
+  burger: null,
+  deals: Object.freeze([] as HomeEntry[]) as HomeEntry[],
+}) as Readonly<WebsiteHome>;
+
+/** The lineup features nothing at all (NOTHING_FEATURED's lists, whatever its format). */
+export function featuresNothing(h: Pick<WebsiteHome, 'pizzas' | 'burger' | 'deals'>): boolean {
+  return h.pizzas.length === 0 && h.burger === null && h.deals.length === 0;
+}
 
 // ---------------------------------------------------------------------------
 // Hours in words (the website's pages; the till's preview)

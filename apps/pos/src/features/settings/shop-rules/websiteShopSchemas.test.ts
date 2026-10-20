@@ -11,6 +11,7 @@ import {
   DEFAULT_SHOP_PROFILE,
   DEFAULT_SHOP_WEBSITE,
   DEFAULT_WEBSITE_HOME,
+  NOTHING_FEATURED,
   SHOP_PUBLISHED_KEYS,
   type ShopHours,
   type ShopProfile,
@@ -165,6 +166,25 @@ describe('website.home', () => {
     expect(saveProblem('website.home', home({ pizzas: [e('Test Pizza', { headline: '' })] }))).toMatch(/can’t be empty/);
     expect(saveProblem('website.home', home({ pizzas: [e('')] }))).toMatch(/Pick an item/);
     expect(saveProblem('website.home', home({ pizzas: [{ itemRef: { posItemId: 'id-1', name: 'Test Pizza' }, headline: 'Made-up hook', text: 'Made-up words.' }] }))).toBeNull();
+  });
+
+  it('nothing featured at all (a new shop’s lineup) is the one lineup without a pizza: saved, read, and taken by the website', () => {
+    expect(saveProblem('website.home', NOTHING_FEATURED)).toBeNull();
+    expect(BUSINESS_SETTING_READ_SCHEMAS['website.home'].parse(NOTHING_FEATURED)).toEqual(NOTHING_FEATURED);
+    expect(storedFormatIsNewer('website.home', NOTHING_FEATURED)).toBe(false);
+    // No pizza while a burger or a deal is featured is still refused.
+    expect(saveProblem('website.home', home({ pizzas: [], deals: [] }))).toMatch(/at least one pizza/);
+    expect(saveProblem('website.home', home({ pizzas: [], burger: null }))).toMatch(/at least one pizza/);
+    const block = buildShopBlock({
+      profile: profile(),
+      hours: DEFAULT_SHOP_HOURS,
+      website: website(),
+      home: NOTHING_FEATURED,
+      stamps: [{ version: 1, updatedAt: '2026-10-20T10:00:00.000Z' }, null, null, null],
+      deviceId: 'till-test',
+    });
+    expect(publishedShopSchema.safeParse(block).success).toBe(true);
+    expect(publishedShopReadSchema.parse(block).home).toEqual({ pizzas: [], burger: null, deals: [] });
   });
 });
 

@@ -1,17 +1,22 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
-import type { SecretKind } from '@cheeseoclock/shared-types';
+import { SHOP_NAME_MAX, SHOP_TAGLINE_MAX, type SecretKind } from '@cheeseoclock/shared-types';
+import { checkedNewShop } from '@cheeseoclock/shared-schemas';
 import { normalizeSecret } from '@cheeseoclock/shared-schemas/sign-in-secret';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { SecretFields } from '../../components/secret/SecretFields';
 import { secretFieldsReady } from '../../components/secret/secretRules';
 import { RestoreFromBackup } from './RestoreFromBackup';
+import { Field } from './Field';
+import { WebsiteStep } from './WebsiteStep';
+import { startingWebsiteForm, websiteAnswers, withBusinessDetails, type WebsiteForm } from './websiteStepForm';
 import { LogoPicker } from '../settings/LogoPicker';
 import { startingTaxRows } from '../menu-mgmt/taxForm';
 import {
   Store,
+  Globe,
   Receipt,
   ShieldCheck,
   Sparkles,
@@ -26,12 +31,15 @@ import {
 /**
  * First-run onboarding. Visible until at least one user exists. Collects:
  *   1. Business basics (logo, name, contact)
- *   2. Tax categories (pre-filled with the till's one starting set: the shop's 15%, and zero-rated)
- *   3. First admin user (name + a number PIN or a password)
+ *   2. What the website shows (its phone and WhatsApp numbers, address,
+ *      price range, opening hours and pick-up offer: shared-types new-shop.ts)
+ *   3. Tax categories (pre-filled with the till's one starting set: the shop's 15%, and zero-rated)
+ *   4. First admin user (name + a number PIN or a password)
  *
  * On finish, calls system:completeOnboarding which atomically creates the
- * user, writes branding, and inserts the chosen tax categories. After success
- * the parent re-queries setup status and the router unmounts this page.
+ * user, writes branding and the shop's own website details, and inserts the
+ * chosen tax categories. After success the parent re-queries setup status
+ * and the router unmounts this page.
  */
 
 interface TaxRow {
@@ -61,14 +69,20 @@ export function OnboardingPage({ onComplete }: Props) {
   const [deliveryCity, setDeliveryCity] = useState('Karachi');
   const [deliveryAreas, setDeliveryAreas] = useState<'none' | 'karachi-dha-clifton'>('none');
 
-  // Step 2
-  const [taxRows, setTaxRows] = useState<TaxRow[]>(DEFAULT_TAX_PRESETS);
+  // Step 2: what the website shows (this shop's own; never the first shop's built-in details)
+  const [web, setWeb] = useState<WebsiteForm>(startingWebsiteForm);
 
   // Step 3
+  const [taxRows, setTaxRows] = useState<TaxRow[]>(DEFAULT_TAX_PRESETS);
+
+  // Step 4
   const [adminName, setAdminName] = useState('');
   const [secretKind, setSecretKind] = useState<SecretKind>('pin');
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
+
+  // The same check the main process makes before it writes anything (the keys' own rules).
+  const website = checkedNewShop(storeName, storeTagline, websiteAnswers(web));
 
   const completeMut = useMutation({
     mutationFn: () =>
@@ -80,6 +94,7 @@ export function OnboardingPage({ onComplete }: Props) {
         ...(websiteLine.trim() ? { websiteLine: websiteLine.trim() } : {}),
         deliveryCity: deliveryCity.trim() || 'Karachi',
         deliveryAreas,
+        website: websiteAnswers(web),
         ...(logoUrl ? { logoUrl } : {}),
         taxCategories: taxRows.filter((r) => r.name.trim()),
         admin: { fullName: adminName.trim(), pin: normalizeSecret(pin) },
@@ -103,6 +118,7 @@ export function OnboardingPage({ onComplete }: Props) {
 
   const steps: Array<{ title: string; icon: typeof Store; complete: boolean }> = [
     { title: 'Business', icon: Store, complete: storeName.trim().length > 0 },
+    { title: 'Website', icon: Globe, complete: website.problem === null },
     { title: 'Tax', icon: Receipt, complete: taxRows.some((r) => r.name.trim()) },
     {
       title: 'Admin',
@@ -112,6 +128,8 @@ export function OnboardingPage({ onComplete }: Props) {
   ];
 
   function next() {
+    // The Website step starts from what the Business step says, where nothing is typed there yet.
+    if (step === 0) setWeb((f) => withBusinessDetails(f, { phoneLine, branchLine, city: deliveryCity }));
     if (step < steps.length - 1) setStep(step + 1);
   }
   function back() {
@@ -135,7 +153,8 @@ export function OnboardingPage({ onComplete }: Props) {
         aria-hidden
       />
 
-      <div className="relative w-[640px] animate-scale-in">
+      {/* Scrolls when a step is taller than the window (the Website step on a short screen). */}
+      <div className="relative max-h-full w-[672px] animate-scale-in overflow-y-auto px-4 py-6">
         {/* Logo header */}
         <div className="mb-6 flex flex-col items-center gap-2">
           <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lift">
@@ -215,6 +234,8 @@ export function OnboardingPage({ onComplete }: Props) {
                   autoFocus
                   onChange={(e) => setStoreName(e.target.value)}
                   placeholder="e.g. Karachi Grill House"
+                  // The website's name for the shop too ('shop.profile': at most 40 letters).
+                  maxLength={SHOP_NAME_MAX}
                   className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-base dark:border-stone-700 dark:bg-stone-800"
                 />
               </Field>
@@ -225,6 +246,7 @@ export function OnboardingPage({ onComplete }: Props) {
                   value={storeTagline}
                   onChange={(e) => setStoreTagline(e.target.value)}
                   placeholder="e.g. Pakistani Pizza · Cafe"
+                  maxLength={SHOP_TAGLINE_MAX}
                   className="w-full rounded-xl border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
                 />
               </Field>
@@ -286,6 +308,10 @@ export function OnboardingPage({ onComplete }: Props) {
           )}
 
           {step === 1 && (
+            <WebsiteStep form={web} problem={website.problem} onChange={(patch) => setWeb((f) => ({ ...f, ...patch }))} />
+          )}
+
+          {step === 2 && (
             <div className="space-y-4">
               <h2 className="text-lg font-bold">Set up sales tax</h2>
               <p className="text-xs text-stone-500">
@@ -350,7 +376,7 @@ export function OnboardingPage({ onComplete }: Props) {
             </div>
           )}
 
-          {step === 2 && (
+          {step === 3 && (
             <div className="space-y-4">
               <h2 className="text-lg font-bold">Create your admin login</h2>
               <p className="text-xs text-stone-500">
@@ -418,17 +444,6 @@ export function OnboardingPage({ onComplete }: Props) {
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">
-        {label}
-      </label>
-      {children}
     </div>
   );
 }

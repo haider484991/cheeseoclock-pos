@@ -680,7 +680,10 @@ export interface PublishedMenu {
 //     "Cash on Delivery" stay — cash is always taken), allergyNotice.
 //   home — the lineup (homeLineup): a missing item hides its card, slide or
 //     deal; `headline`/`text` absent = today's curated words for today's
-//     items, else the item's description; drink brands never shown.
+//     items, else the item's description; drink brands never shown. A
+//     lineup that features nothing (website-shop.ts NOTHING_FEATURED: what
+//     first-time setup stores for a new shop, never the first shop's picks)
+//     shows no carousel, grid or deals — as when none of them is on the menu.
 //
 // WHAT THE TILL DOES WITH THE ANSWERS (web-orders-bridge):
 //   - 200 with data.shop: records what the website holds (stamp, device,
@@ -700,7 +703,11 @@ export interface PublishedMenu {
 // A website ROLLED BACK to v0.7.30 drops the stored `shop` on the next
 // publish (its statement rebuilds menu_json): the pages show the defaults
 // (today's) and, once the website is back, the tills see no held block and
-// send it again by themselves.
+// send it again by themselves. A website older than NOTHING_FEATURED refuses
+// a new shop's block that features nothing (400 shop_invalid, "The home page
+// shows at least one pizza"): the till sends the menu again without it, and
+// a later Publish, Save or start-up sends the block again — taken once the
+// website is updated (or the owner has picked a pizza). Deploy it first.
 
 /** The four keys the shop block carries (their row versions and times make its stamp). */
 export const SHOP_PUBLISHED_KEYS = ['shop.profile', 'shop.hours', 'shop.website', 'website.home'] as const;

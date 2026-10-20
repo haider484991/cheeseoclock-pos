@@ -548,6 +548,9 @@ function savedEntry(e: HomeEntry): HomeEntry {
 }
 
 export function homeFromForm(f: Pick<WebsiteHome, 'pizzas' | 'burger' | 'deals'>, saved: WebsiteHome): Parsed<WebsiteHome> {
+  // The card's own rule: the owner always picks at least one pizza. Only first-time setup stores a lineup
+  // that features nothing at all (NOTHING_FEATURED, which the key's schema takes), before there is a menu.
+  if (f.pizzas.length === 0) return { value: null, problem: 'The home page shows at least one pizza' };
   const value: WebsiteHome = {
     ...clone(saved),
     v: SHOP_SETTING_FORMAT['website.home'],

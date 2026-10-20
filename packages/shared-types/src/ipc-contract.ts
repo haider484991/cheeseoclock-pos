@@ -56,6 +56,7 @@ import type {
 } from './shop-settings.js';
 import type { AnyTillSettingCard, OpeningFloatPrefill, SetTillSettingRequest, TillSettingKey } from './till-settings.js';
 import type { TillPowerStatus } from './till-power.js';
+import type { NewShopAnswers } from './new-shop.js';
 import type { FoodMade, OrderStockStatus, StockSettlement } from './order-stock.js';
 import type { OrderEditOp, OrderEditPreview, OrderEditSaved, OrderEditSaveInput } from './order-edit.js';
 import type {
@@ -295,8 +296,17 @@ export interface IpcContract {
       websiteLine?: string;
       /** The city on this till's delivery addresses ('delivery.city'); absent = unchanged default. */
       deliveryCity?: string;
-      /** 'karachi-dha-clifton' saves the built-in Karachi list; 'none' an empty list; absent = nothing saved. */
+      /** 'karachi-dha-clifton' saves the built-in Karachi list; 'none' or absent an empty list. */
       deliveryAreas?: 'karachi-dha-clifton' | 'none';
+      /**
+       * What the shop's website shows (the Website step; new-shop.ts), with
+       * `storeName` and `storeTagline`: always stored as this shop's own
+       * 'shop.profile', 'shop.hours', 'shop.website', 'website.home'
+       * (nothing featured) and 'discounts.websitePickup', so no till ever
+       * publishes another shop's details by default. Refused, with nothing
+       * written, when an answer does not fit.
+       */
+      website: NewShopAnswers;
       taxCategories: Array<{ name: string; rateBps: number }>;
       admin: { fullName: string; pin: string };
     };

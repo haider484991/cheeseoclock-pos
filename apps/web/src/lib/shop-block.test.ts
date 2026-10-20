@@ -25,6 +25,7 @@ import {
   DEFAULT_SHOP_PROFILE,
   DEFAULT_SHOP_WEBSITE,
   DEFAULT_WEBSITE_HOME,
+  NOTHING_FEATURED,
   type DeliveryZoneSetting,
   type PublishedMenu,
   type PublishedSettings,
@@ -446,6 +447,26 @@ describe('the store rule: the shop block in the publish’s one statement', () =
     const r = await publish(m, { shop: tillShop({ home }) });
     expect(r.json.data).toMatchObject({ shop: 'stored', homeMissing: ['Not On The Menu — Large'] });
     expect((await statusData())['homeMissing']).toEqual(['Not On The Menu — Large']);
+  });
+
+  it('a new shop’s block features nothing (first-time setup’s lineup): stored, nothing missing, and the home page shows no featured pizza, burger or deal', async () => {
+    const m = goldenMenu();
+    await publish(m, { shop: ownerShop() });
+    const before = await page(React.createElement(home.default));
+    // Today's lineup on this menu: the deals and the signatures.
+    expect(before).toContain('id="deals"');
+    expect(visible(before)).toContain('The signatures');
+
+    const r = await publish(m, { shop: tillShop({ rev: 2, profile: OWNER_PROFILE, hours: OWNER_HOURS, website: OWNER_WEBSITE, home: NOTHING_FEATURED as WebsiteHome }) });
+    expect(r.status).toBe(200);
+    expect(r.json.data).toMatchObject({ shop: 'stored', homeMissing: [] });
+    expect((await storedDoc())?.shop?.home).toEqual({ pizzas: [], burger: null, deals: [] });
+    expect((await statusData())['homeMissing']).toEqual([]);
+    const after = await page(React.createElement(home.default));
+    expect(after).not.toContain('id="deals"');
+    expect(visible(after)).not.toContain('The signatures');
+    // The rest of the page is the owner's, as with any lineup.
+    expect(visible(after)).toContain(OWNER_PROFILE.name);
   });
 });
 
