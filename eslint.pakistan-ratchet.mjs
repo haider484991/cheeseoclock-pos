@@ -328,7 +328,6 @@ export const PAKISTAN_ALLOWLIST = [
   'packages/pos-domain/src/menu-deploy.test.ts',
   'packages/pos-domain/src/menu-deploy.ts',
   'packages/pos-domain/src/missing-costs.test.ts',
-  'packages/pos-domain/src/money.ts',
   'packages/pos-domain/src/offers.test.ts',
   'packages/pos-domain/src/offers.ts',
   'packages/pos-domain/src/opening-float.test.ts',
@@ -388,11 +387,17 @@ export const PAKISTAN_ALLOWLIST = [
  * - the frozen oracle baselines, which are word-for-word v0.7.51 copies and
  *   MUST keep saying Rs and en-PK or they prove nothing;
  * - the shop locale and shop clock themselves, once they exist: they are
- *   where all of this is supposed to live.
+ *   where all of this is supposed to live;
+ * - the tests that pin those defaults, which have to be able to write "Rs"
+ *   and 'Asia/Karachi' in full to assert that Pakistan has not moved. They
+ *   are named one by one rather than by a *.test.ts pattern, so this stays a
+ *   short list of deliberate exceptions and not a hole every test falls into.
  */
 export const PAKISTAN_EXEMPT = [
   '**/__oracle__/**',
   '**/shop-locale.ts',
   '**/shop-locale/**',
   '**/shop-clock.ts',
+  '**/shop-locale.test.ts',
+  '**/money-locale.test.ts',
 ];

@@ -25,6 +25,7 @@ export * from './menu-deploy-view.js';
 export * from './dashboard.js';
 export * from './customer.js';
 export * from './shift.js';
+export * from './shop-locale.js';
 export * from './shift-report.js';
 export * from './printer.js';
 export * from './paper-time.js';
