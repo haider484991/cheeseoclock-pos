@@ -99,12 +99,17 @@ export function sameFields<V>(a: V, b: V, fields: ReadonlyArray<keyof V>): boole
  * fields; the oldest weighed against the default. A line this version
  * can't read is kept (it may have changed them). Whether the other till has
  * the key yet stays the key's.
+ *
+ * The default is the key's as the main process sends it (card.defaultValue,
+ * electron/db/till-defaults.ts): the built-in one on Cheese O'Clock's tills,
+ * what first-time setup stored on a Pixel & Oak POS till — never another
+ * shop's details.
  */
 export function cardPart<K extends ShopSettingKey>(
   card: ShopSettingCard<K>,
   fields: ReadonlyArray<keyof ShopSettingValues[K]>,
 ): ShopSettingCard<K> {
-  const defaults = SHOP_SETTING_DEFAULTS[card.key] as ShopSettingValues[K];
+  const defaults = card.defaultValue;
   const history = card.history.filter((h, i) => {
     if (!h.value) return true;
     const before = i + 1 < card.history.length ? card.history[i + 1]!.value : defaults;

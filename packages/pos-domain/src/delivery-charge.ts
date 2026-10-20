@@ -193,12 +193,15 @@ export function planFeeItems(input: {
  * the owner added stays, switched off (an area is never removed). Each area
  * keeps the fee item it has while its fee stays the same, so a list put
  * back reads as the default again (Save would point it there anyway).
+ * `base` is the list put back: the built-in one unless the till's default is
+ * another (a Pixel & Oak POS till's: what its first-time setup stored).
  */
 export function deliveryZonesPutBack(
   current: ReadonlyArray<DeliveryZoneSetting>,
+  base: ReadonlyArray<DeliveryZoneSetting> = DEFAULT_DELIVERY_ZONES.zones,
 ): DeliveryZoneSetting[] {
   const now = new Map(current.map((z) => [z.id, z]));
-  const defaults = DEFAULT_DELIVERY_ZONES.zones.map((z) => {
+  const defaults = base.map((z) => {
     const was = now.get(z.id);
     return {
       ...z,

@@ -53,6 +53,7 @@ import {
   type ShopSettingInUse,
 } from '../db/business-settings-read.js';
 import { businessSettingId } from '../db/business-settings-ids.js';
+import { tillDefaultOf } from '../db/till-defaults.js';
 
 export {
   readShopSetting,
@@ -232,20 +233,27 @@ export function itemFoodpandaLine(
  * the repository refuses removing one) — with none added it is exactly the
  * default. The Settings card shows this as the default, so its dialog says
  * what will be written and its "Default" badge comes back after a put back.
+ * `base` is the till's default (db/till-defaults.ts tillDefaultOf): the
+ * built-in one, or on a Pixel & Oak POS till what its setup stored.
  */
-export function putBackOf<K extends ShopSettingKey>(key: K, current: ShopSettingValues[K]): ShopSettingValues[K] {
+export function putBackOf<K extends ShopSettingKey>(
+  key: K,
+  current: ShopSettingValues[K],
+  base: Readonly<ShopSettingValues[K]> = SHOP_SETTING_DEFAULTS[key],
+): ShopSettingValues[K] {
   if (key === 'stock.rules') return stockRulesPutBack(current as ShopSettingValues['stock.rules']) as ShopSettingValues[K];
   // The areas: today's 21 and fees; one the owner added stays, switched off (never removed); each keeps its fee item while its fee stays.
   if (key === 'delivery.zones') {
     const zones = (current as ShopSettingValues['delivery.zones']).zones;
-    return { v: SHOP_SETTING_DEFAULTS['delivery.zones'].v, zones: deliveryZonesPutBack(zones) } as ShopSettingValues[K];
+    const baseZones = (base as Readonly<ShopSettingValues['delivery.zones']>).zones;
+    return { v: SHOP_SETTING_DEFAULTS['delivery.zones'].v, zones: deliveryZonesPutBack(zones, baseZones) } as ShopSettingValues[K];
   }
-  return { ...SHOP_SETTING_DEFAULTS[key] } as ShopSettingValues[K];
+  return { ...base } as ShopSettingValues[K];
 }
 
-/** What "Put back the default" writes for a key now (putBackOf the value in use). */
+/** What "Put back the default" writes for a key now (putBackOf the value in use, to this till's default). */
 export function putBackValue<K extends ShopSettingKey>(db: AppDatabase, key: K): ShopSettingValues[K] {
-  return putBackOf(key, readShopSetting(db, key).value);
+  return putBackOf(key, readShopSetting(db, key).value, tillDefaultOf(db, key));
 }
 
 /** Changes shown under a card. */
@@ -299,9 +307,10 @@ export function getShopSettingCard<K extends ShopSettingKey>(
       )
       .get(id) !== undefined;
 
-  // What "Put back the default" would write: the default's values (the stock
-  // rules also keep the owner's added waste reasons, hidden: putBackOf).
-  const defaultValue = putBackOf(key, inUse.value);
+  // What "Put back the default" would write: this till's default's values
+  // (db/till-defaults.ts; the stock rules also keep the owner's added waste
+  // reasons, hidden: putBackOf).
+  const defaultValue = putBackOf(key, inUse.value, tillDefaultOf(db, key));
   return {
     key,
     value: inUse.value,

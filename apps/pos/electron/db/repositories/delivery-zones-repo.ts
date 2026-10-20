@@ -5,6 +5,7 @@ import { setBusinessSettings, NEWER_FORMAT_REFUSAL } from './business-settings-r
 import { createCategory, updateCategory } from './category-repo.js';
 import { createMenuItem, restoreMenuItem, updateMenuItem } from './menu-item-repo.js';
 import { readShopSetting } from '../business-settings-read.js';
+import { tillDefaultOf } from '../till-defaults.js';
 import { listAreaUsage } from './customer-repo.js';
 import { BUSINESS_SETTING_SCHEMAS } from '@cheeseoclock/shared-schemas';
 import {
@@ -112,7 +113,7 @@ export function saveDeliveryZones(
     const current = readShopSetting(db, 'delivery.zones');
     if (current.newerFormat) throw new Error(NEWER_FORMAT_REFUSAL);
     const input =
-      'useDefault' in request ? deliveryZonesPutBack(current.value.zones) : request.zones;
+      'useDefault' in request ? deliveryZonesPutBack(current.value.zones, tillDefaultOf(db, 'delivery.zones').zones) : request.zones;
 
     // Never an area removed: the saved list's ids all stay (switched off is how an area goes).
     // Nothing saved yet = nothing to protect: first-time setup may save an

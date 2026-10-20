@@ -7,6 +7,7 @@ import {
   DEFAULT_SHOP_PROFILE,
   DEFAULT_SHOP_WEBSITE,
   DEFAULT_WEBSITE_HOME,
+  SHOP_SETTING_DEFAULTS,
   type Category,
   type Cents,
   type MenuItem,
@@ -65,15 +66,20 @@ const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 const T1 = '2026-10-01T10:00:00.000Z';
 const T2 = '2026-10-01T11:00:00.000Z';
 
+/**
+ * A key's card as the main process sends it. Its default is the till's: the built-in one on Cheese O'Clock's
+ * tills (as here unless `defaults` says), what first-time setup stored on a Pixel & Oak POS till.
+ */
 function cardOf<K extends 'shop.profile' | 'shop.website'>(
   key: K,
   value: ShopSettingCard<K>['value'],
   history: Array<{ at: string; value: ShopSettingCard<K>['value'] | null }> = [],
+  defaults: ShopSettingCard<K>['value'] = copy(SHOP_SETTING_DEFAULTS[key]) as ShopSettingCard<K>['value'],
 ): ShopSettingCard<K> {
   return {
     key,
     value,
-    defaultValue: value,
+    defaultValue: defaults,
     isDefault: false,
     readOnly: false,
     lastChanged: history[0] ? { at: history[0].at, byName: 'Test Owner', onThisTill: true } : null,
@@ -104,6 +110,36 @@ describe('one card’s part of a shared key (B1’s part helpers, for any key)',
     // Only the name saved: the links card is at its default, never changed.
     const onlyName = cardPart(cardOf('shop.profile', renamed, [{ at: T1, value: renamed }]), SHOP_CARD_FIELDS.contact);
     expect(onlyName).toMatchObject({ isDefault: true, lastChanged: null, history: [] });
+  });
+
+  it('a Pixel & Oak POS till’s card (its default = what setup stored): each part puts back the setup’s fields, never the built-in first shop’s', () => {
+    const setup: ShopProfile = {
+      ...copy(DEFAULT_SHOP_PROFILE),
+      name: 'Test Kitchen',
+      tagline: 'Made-up words',
+      phone: { display: '0300 1112233', e164: '+923001112233' },
+      whatsappLines: [{ display: '0300 1112233', e164: '+923001112233' }],
+      address: { street: 'Plot 9, Test Street', areaLine: 'Test Town, Karachi', postalCode: '75999' },
+      socialLinks: [],
+      priceRange: 'PKR 100–900',
+    };
+    // Since setup: a new name (Shop details), then a social link (WhatsApp & social).
+    const renamedAgain: ShopProfile = { ...setup, name: 'Test Kitchen Two' };
+    const linkedToo: ShopProfile = { ...renamedAgain, socialLinks: ['https://www.instagram.com/test.kitchen'] };
+    const card = cardOf('shop.profile', linkedToo, [{ at: T2, value: linkedToo }, { at: T1, value: renamedAgain }], setup);
+    const details = cardPart(card, SHOP_CARD_FIELDS.details);
+    const contact = cardPart(card, SHOP_CARD_FIELDS.contact);
+    expect([details.isDefault, contact.isDefault]).toEqual([false, false]);
+    expect(details.defaultValue).toEqual({ ...linkedToo, name: 'Test Kitchen' });
+    expect(contact.defaultValue).toEqual({ ...renamedAgain, socialLinks: [] });
+    for (const part of [details, contact]) {
+      expect(JSON.stringify(part.defaultValue)).not.toContain(DEFAULT_SHOP_PROFILE.name);
+      expect(JSON.stringify(part.defaultValue)).not.toContain(DEFAULT_SHOP_PROFILE.phone.e164);
+    }
+    // Right after setup every part is at its default.
+    const fresh = cardOf('shop.profile', setup, [{ at: T1, value: setup }], setup);
+    expect(cardPart(fresh, SHOP_CARD_FIELDS.details)).toMatchObject({ isDefault: true, defaultValue: setup });
+    expect(cardPart(fresh, SHOP_CARD_FIELDS.contact)).toMatchObject({ isDefault: true, defaultValue: setup });
   });
 
   it('a card’s Save keeps the other cards’ fields exactly as saved', () => {
