@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { moneyField } from './money-field.js';
 import {
   ALLERGY_NOTICE_MAX,
   ALLERGY_NOTICE_MIN,
@@ -165,14 +166,13 @@ export const publishedAnnouncementSchema = z.object({
 });
 
 /** The smallest website delivery order's food: paisa, whole rupees, Rs 0–5,000 (0 = no minimum). */
-export const minDeliveryOrderCentsSchema = z
-  .number()
-  .int({ message: 'The smallest delivery order is in whole rupees' })
-  .min(0, { message: "The smallest delivery order can't be below Rs 0" })
-  .max(MIN_DELIVERY_ORDER_MAX_CENTS, {
-    message: `The smallest delivery order is at most Rs ${(MIN_DELIVERY_ORDER_MAX_CENTS / 100).toLocaleString('en-US')}`,
-  })
-  .refine((c) => c % 100 === 0, { message: 'The smallest delivery order is in whole rupees' });
+export const minDeliveryOrderCentsSchema = moneyField({
+  what: 'The smallest delivery order',
+  minCents: 0,
+  maxCents: MIN_DELIVERY_ORDER_MAX_CENTS,
+  wholeMajorUnits: true,
+  belowWording: "can't be below",
+});
 
 // ---------------------------------------------------------------------------
 // BUY 1 GET 1 DEALS (v0.7.39, shared-types web-bridge.ts): the bounds the till

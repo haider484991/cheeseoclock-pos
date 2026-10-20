@@ -40,6 +40,18 @@ export interface MoneyFieldRules {
    * before, so the caller picks.
    */
   wholeWording?: 'is in whole' | 'is a whole number of';
+  /**
+   * Extra words after the minimum, where a field explains the way out:
+   * "A delivery charge is at least Rs 1 (to take it off, use Take it off)".
+   */
+  minSuffix?: string;
+  /**
+   * Said when the value is not a number at all. This goes through a
+   * schema-level errorMap rather than invalid_type_error, because an errorMap
+   * is consulted at PARSE time while invalid_type_error is a plain string
+   * fixed at import — the very thing this module exists to avoid.
+   */
+  invalidTypeWording?: 'is an amount in';
 }
 
 /**
@@ -54,8 +66,18 @@ export function moneyField(rules: MoneyFieldRules) {
     wholeMajorUnits,
     belowWording = 'is at least',
     wholeWording = 'is in whole',
+    minSuffix,
+    invalidTypeWording,
   } = rules;
-  return z.number().superRefine((value, ctx) => {
+  const base = invalidTypeWording
+    ? z.number({
+        errorMap: (issue, ctx) =>
+          issue.code === z.ZodIssueCode.invalid_type
+            ? { message: `${what} ${invalidTypeWording} ${getShopLocale().words.major}` }
+            : { message: ctx.defaultError },
+      })
+    : z.number();
+  return base.superRefine((value, ctx) => {
     const locale = getShopLocale();
     const fail = (message: string): void => {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message });
@@ -66,7 +88,7 @@ export function moneyField(rules: MoneyFieldRules) {
       return;
     }
     if (minCents !== undefined && value < minCents) {
-      fail(`${what} ${belowWording} ${formatCents(minCents)}`);
+      fail(`${what} ${belowWording} ${formatCents(minCents)}${minSuffix ? ` ${minSuffix}` : ''}`);
       return;
     }
     if (maxCents !== undefined && value > maxCents) {

@@ -7,7 +7,7 @@ import {
   TILL_SETTING_KEYS,
 } from '@cheeseoclock/shared-types';
 import type { OpeningFloatSetting, PcPowerSetting, TillSettingKey, TillSettingValues } from '@cheeseoclock/shared-types';
-import { formatNumber } from '@cheeseoclock/shared-types';
+import { moneyField } from './money-field.js';
 
 /**
  * The owner's settings that belong to one till (shared-types
@@ -50,14 +50,14 @@ export const receiptExtraLinesSchema = z
 export const openingFloatSchema = z
   .object({
     mode: z.enum(['lastCount', 'fixed'], { errorMap: () => ({ message: "The last shift's count, or a fixed amount" }) }),
-    fixedCents: z
-      .number({ invalid_type_error: 'The fixed float is an amount in rupees' })
-      .int({ message: 'The fixed float is in whole rupees' })
-      .min(0, { message: "The fixed float can't be below Rs 0" })
-      .max(OPENING_FLOAT_MAX_CENTS, {
-        message: `The fixed float is at most Rs ${formatNumber((OPENING_FLOAT_MAX_CENTS / 100))}`,
-      })
-      .refine((c) => c % 100 === 0, { message: 'The fixed float is in whole rupees' }),
+    fixedCents: moneyField({
+      what: 'The fixed float',
+      minCents: 0,
+      maxCents: OPENING_FLOAT_MAX_CENTS,
+      wholeMajorUnits: true,
+      belowWording: "can't be below",
+      invalidTypeWording: 'is an amount in',
+    }),
   })
   .strict()
   .transform((s): OpeningFloatSetting => (s.mode === 'lastCount' ? { mode: 'lastCount', fixedCents: 0 } : s));

@@ -355,8 +355,6 @@ export const PAKISTAN_ALLOWLIST = [
   'packages/printer-core/src/shift-report.ts',
   'packages/shared-schemas/src/business-settings.ts',
   'packages/shared-schemas/src/cash-count.ts',
-  'packages/shared-schemas/src/order.ts',
-  'packages/shared-schemas/src/till-settings.ts',
   'packages/shared-schemas/src/vouchers.ts',
   'packages/shared-schemas/src/web-settings.ts',
   'packages/shared-types/src/delivery-areas.ts',
