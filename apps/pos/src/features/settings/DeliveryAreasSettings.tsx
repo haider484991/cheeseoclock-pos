@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * Settings → Delivery areas & fees ('delivery.zones'; owner, 28 Sep 2026:
  * "the delvery fee should be editable in settings"). The owner alone (the
@@ -223,7 +224,7 @@ function ZonesCard({ card }: { card: ShopSettingCard<'delivery.zones'> }) {
                     </td>
                     <td className="p-1">
                       <input
-                        aria-label={`${r.name}: fee in rupees`}
+                        aria-label={`${r.name}: fee in ${getShopLocale().words.major}`}
                         inputMode="numeric"
                         value={r.fee}
                         onChange={(e) =>

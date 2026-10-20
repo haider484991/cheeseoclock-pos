@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * Settings → Online orders' two cards on the ONE key 'online.options'
  * (format 2, v0.7.30): "Publish the menu to the website by itself" and
@@ -182,7 +183,7 @@ export function websiteMessagesFromForm(
   if (cents !== null && (!Number.isFinite(cents) || cents > MIN_DELIVERY_ORDER_MAX_CENTS)) {
     return {
       value: null,
-      problem: `The smallest delivery order is whole rupees from Rs 0 to ${formatCents(MIN_DELIVERY_ORDER_MAX_CENTS)} (empty = no smallest order).`,
+      problem: `The smallest delivery order is whole ${getShopLocale().words.major} from ${formatCents(0)} to ${formatCents(MIN_DELIVERY_ORDER_MAX_CENTS)} (empty = no smallest order).`,
     };
   }
   const value = onlineOptionsWith(saved, {

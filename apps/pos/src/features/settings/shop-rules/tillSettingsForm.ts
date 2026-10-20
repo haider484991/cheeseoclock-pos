@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * The "this till" cards' forms and words (what is typed ↔ the setting's
  * value), pure: the receipt's extra lines (Settings → Shop & logo), the
@@ -102,7 +103,7 @@ export function openingFloatFromForm(f: OpeningFloatForm): Parsed<OpeningFloatSe
   const max = OPENING_FLOAT_MAX_CENTS;
   if (f.mode === 'fixed') {
     if (whole === null || whole > max) {
-      return { value: null, problem: `The fixed float is a whole number of rupees from Rs 0 to ${formatCents(max)}.` };
+      return { value: null, problem: `The fixed float is a whole number of ${getShopLocale().words.major} from ${formatCents(0)} to ${formatCents(max)}.` };
     }
     return { value: { mode: 'fixed', fixedCents: whole }, problem: null };
   }

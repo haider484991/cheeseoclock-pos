@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * Settings → Money & discounts → "Automatic offers" ('discounts.offers';
  * the owner, 28 Sep 2026: "the offer discount should have settings … so it
@@ -270,7 +271,7 @@ function OfferFields({
           <span className={labelClass}>How much off the food</span>
           <div className="flex gap-2">
             <input
-              aria-label={f.type === 'percent' ? 'Percent off' : 'Rupees off'}
+              aria-label={f.type === 'percent' ? 'Percent off' : `${getShopLocale().words.major.charAt(0).toUpperCase()}${getShopLocale().words.major.slice(1)} off`}
               inputMode="numeric"
               value={f.amount}
               onChange={(e) => set({ amount: e.target.value.replace(/[^\d,]/g, '').slice(0, 6) })}

@@ -222,14 +222,11 @@ export const PAKISTAN_ALLOWLIST = [
   'apps/pos/src/features/reports/tabs/FoodCostStockTab.tsx',
   'apps/pos/src/features/reports/tabs/foodpandaSection.test.ts',
   'apps/pos/src/features/reports/weeklySheet.test.ts',
-  'apps/pos/src/features/settings/DeliveryAreasSettings.tsx',
   'apps/pos/src/features/settings/MoneySettings.tsx',
-  'apps/pos/src/features/settings/OfferSettings.tsx',
   'apps/pos/src/features/settings/OpeningFloatCard.tsx',
   'apps/pos/src/features/settings/shop-rules/deliveryChargeTaxForm.test.ts',
   'apps/pos/src/features/settings/shop-rules/deliveryZonesForm.test.ts',
   'apps/pos/src/features/settings/shop-rules/deliveryZonesForm.ts',
-  'apps/pos/src/features/settings/shop-rules/discountRules.ts',
   'apps/pos/src/features/settings/shop-rules/foodpandaForm.ts',
   'apps/pos/src/features/settings/shop-rules/foodpandaWords.test.ts',
   'apps/pos/src/features/settings/shop-rules/kitchenStockOnScreen.test.tsx',
@@ -346,7 +343,6 @@ export const PAKISTAN_ALLOWLIST = [
   'packages/shared-schemas/src/business-settings.ts',
   'packages/shared-schemas/src/vouchers.ts',
   'packages/shared-schemas/src/web-settings.ts',
-  'packages/shared-types/src/delivery-areas.ts',
   'packages/shared-types/src/paper-time.ts',
   'packages/shared-types/src/shift.ts',
   'packages/shared-types/src/web-bridge.ts',
@@ -389,4 +385,6 @@ export const PAKISTAN_EXEMPT = [
   // Pin what a till stores and resolves to: Pakistan as 'Asia/Karachi', in full.
   '**/shop-locale-resolve.test.ts',
   '**/shop-locale.db.test.ts',
+  // Pins the fee item's Pakistani name, 'Delivery Charge (Rs 200)', in full.
+  '**/delivery-charge-name-locale.test.ts',
 ];

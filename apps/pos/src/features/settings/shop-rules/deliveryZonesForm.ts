@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * Settings → Delivery areas and the website cards (Money & discounts'
  * pick-up, Online orders' "publish by itself"): what is typed ↔ the
@@ -81,7 +82,7 @@ export function zonesFromForm(rows: readonly ZoneRow[]): Parsed<DeliveryZoneInpu
     if (cents === null || Number.isNaN(cents) || cents > DELIVERY_FEE_MAX_CENTS) {
       return {
         value: null,
-        problem: `${label}: the fee is whole rupees, Rs 0 to ${formatCents(DELIVERY_FEE_MAX_CENTS, { showSymbol: false })}.`,
+        problem: `${label}: the fee is whole ${getShopLocale().words.major}, ${formatCents(0)} to ${formatCents(DELIVERY_FEE_MAX_CENTS, { showSymbol: false })}.`,
       };
     }
     const aliases = list(r.aliases);

@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * Settings → Money & discounts (owner, 2026-09-27: "everything should be
  * editable for admin… as a developer I should not change anything every
@@ -294,7 +295,7 @@ function MoneyCards({
             {presetsD.form.rupees.map((t, i) => (
               <input
                 key={`f${i}`}
-                aria-label={`Rupee button ${i + 1}`}
+                aria-label={`${getShopLocale().words.majorOne.charAt(0).toUpperCase()}${getShopLocale().words.majorOne.slice(1)} button ${i + 1}`}
                 inputMode="numeric"
                 placeholder="—"
                 value={t}
@@ -529,7 +530,7 @@ function DeliveryChargeFields({ s }: { s: ReturnType<typeof useShopSetting<'disc
       card={card}
       title="Discounts and the delivery charge"
       icon={<Bike className="h-5 w-5" />}
-      intro="The delivery charge is separate from the food. With No, a % off is worked on the food only, rupees off are at most the food, and even 100% off leaves the delivery charge to pay."
+      intro={`The delivery charge is separate from the food. With No, a % off is worked on the food only, ${getShopLocale().words.major} off are at most the food, and even 100% off leaves the delivery charge to pay.`}
       describe={deliverySummary}
       dirty={dirty}
       problem={parsed.problem}

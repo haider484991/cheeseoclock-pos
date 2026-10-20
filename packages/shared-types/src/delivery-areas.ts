@@ -1,3 +1,4 @@
+import { getShopLocale } from './shop-locale.js';
 /**
  * Where Cheese O'Clock delivers: the COMPILED list, today's 21 areas and
  * fees (source: the Dropoff rider service's 2026 rate card, Zone 1). FROZEN
@@ -740,7 +741,8 @@ export function zoneAliasProblem(alias: string): string | null {
 /** "Rs 1,500": whole rupees for an item name (no locale: every till writes the same name). */
 function rupeesWords(cents: number): string {
   const r = Math.round(cents / 100);
-  return `Rs ${String(r).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+  const l = getShopLocale();
+  return `${l.symbol}${l.symbolSeparator}${String(r).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
 }
 
 /**

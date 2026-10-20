@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 /**
  * Settings → Money & discounts → "Automatic offers" ('discounts.offers'):
  * what is typed ↔ what is saved, and the card's words. The main process
@@ -135,8 +136,6 @@ export function newOfferForm(taken: ReadonlyArray<string>): OfferForm {
   };
 }
 
-const MAX_FLAT = formatCents(OFFER_MAX_FLAT_CENTS);
-const MAX_ORDER = formatCents(OFFER_MAX_ORDER_CENTS);
 
 function offerFromForm(f: OfferForm, i: number): Parsed<ChannelOffer> {
   const name = f.name.replace(/\s+/g, ' ').trim();
@@ -154,17 +153,17 @@ function offerFromForm(f: OfferForm, i: number): Parsed<ChannelOffer> {
     value = Number(amt);
   } else {
     const cents = centsFromRupeesText(amt);
-    if (cents === null || Number.isNaN(cents) || cents < 100 || cents > OFFER_MAX_FLAT_CENTS) return bad(`the rupees off are whole rupees, Rs 1 to ${MAX_FLAT}.`);
+    if (cents === null || Number.isNaN(cents) || cents < 100 || cents > OFFER_MAX_FLAT_CENTS) return bad(`the ${getShopLocale().words.major} off are whole ${getShopLocale().words.major}, ${formatCents(100)} to ${formatCents(OFFER_MAX_FLAT_CENTS)}.`);
     value = cents;
   }
   const categoryIds = [...new Set(f.categoryIds)];
   if (f.onCategories && categoryIds.length === 0) return bad('pick at least one category, or “The whole menu”.');
   if (f.onCategories && categoryIds.length > OFFER_CATEGORIES_MAX) return bad(`pick at most ${OFFER_CATEGORIES_MAX} categories.`);
   const minOrderCents = centsFromRupeesText(f.minOrder);
-  if (Number.isNaN(minOrderCents) || (minOrderCents ?? 0) > OFFER_MAX_ORDER_CENTS) return bad(`the smallest order is whole rupees up to ${MAX_ORDER}, or empty.`);
+  if (Number.isNaN(minOrderCents) || (minOrderCents ?? 0) > OFFER_MAX_ORDER_CENTS) return bad(`the smallest order is whole ${getShopLocale().words.major} up to ${formatCents(OFFER_MAX_ORDER_CENTS)}, or empty.`);
   const maxOffCents = centsFromRupeesText(f.maxOff);
   if (Number.isNaN(maxOffCents) || maxOffCents === 0 || (maxOffCents ?? 0) > OFFER_MAX_ORDER_CENTS) {
-    return bad(`the most off one order is whole rupees, Rs 1 to ${MAX_ORDER}, or empty.`);
+    return bad(`the most off one order is whole ${getShopLocale().words.major}, ${formatCents(100)} to ${formatCents(OFFER_MAX_ORDER_CENTS)}, or empty.`);
   }
   const days = [...new Set(f.days)].filter((d) => d >= 0 && d <= 6).sort((a, b) => a - b);
   if (days.length === 0) return bad('pick at least one day.');

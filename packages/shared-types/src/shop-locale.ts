@@ -108,7 +108,7 @@ export interface ShopLocale {
   /** The ways this shop can be paid. Never includes platform-settled methods. */
   readonly tenders: readonly PaymentMethod[];
   /** What the money is called in words, for the amount written out in full. */
-  readonly words: { readonly major: string; readonly minor: string };
+  readonly words: { readonly major: string; readonly minor: string; readonly majorOne: string };
 }
 
 /**
@@ -147,7 +147,7 @@ export const DEFAULT_SHOP_LOCALE: ShopLocale = Object.freeze({
   coinsReminderCents: 100_000,
   quickCashFacesCents: Object.freeze([10_000, 50_000, 100_000, 500_000]),
   tenders: Object.freeze<PaymentMethod[]>(['cash', 'card', 'easypaisa', 'jazzcash', 'bank_transfer']),
-  words: Object.freeze({ major: 'rupees', minor: 'paisa' }),
+  words: Object.freeze({ major: 'rupees', minor: 'paisa', majorOne: 'rupee' }),
 }) as ShopLocale;
 
 /**
@@ -189,7 +189,7 @@ export const US_SHOP_LOCALE: ShopLocale = Object.freeze({
   coinsReminderCents: 10_000,
   quickCashFacesCents: Object.freeze([1_000, 2_000, 5_000, 10_000]),
   tenders: Object.freeze<PaymentMethod[]>(['cash', 'card']),
-  words: Object.freeze({ major: 'dollars', minor: 'cents' }),
+  words: Object.freeze({ major: 'dollars', minor: 'cents', majorOne: 'dollar' }),
 }) as ShopLocale;
 
 /** The presets onboarding can start a shop from. */

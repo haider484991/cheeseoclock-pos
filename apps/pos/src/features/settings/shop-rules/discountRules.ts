@@ -1,3 +1,4 @@
+import { getShopLocale, shopIsInPakistan } from '@cheeseoclock/shared-types';
 /**
  * Settings → Money & discounts: the approval limit, the F3 buttons and
  * whether a discount also comes off the delivery charge, as typed ↔ as
@@ -45,7 +46,6 @@ export function approvalToForm(a: DiscountApproval): ApprovalForm {
   return { percent: String(a.percentOver), rupees: String(a.flatOverCents / 100), reasonRequired: a.reasonRequired };
 }
 
-const APPROVAL_MAX_RUPEES = formatCents(APPROVAL_MAX_FLAT_CENTS);
 
 export function approvalFromForm(f: ApprovalForm): Parsed<DiscountApproval> {
   const p = f.percent.trim();
@@ -54,7 +54,7 @@ export function approvalFromForm(f: ApprovalForm): Parsed<DiscountApproval> {
   }
   const cents = centsFromRupeesText(f.rupees);
   if (cents === null || Number.isNaN(cents) || cents > APPROVAL_MAX_FLAT_CENTS) {
-    return { value: null, problem: `The rupee limit is whole rupees, Rs 0 to ${APPROVAL_MAX_RUPEES}.` };
+    return { value: null, problem: `The ${getShopLocale().words.majorOne} limit is whole ${getShopLocale().words.major}, ${formatCents(0)} to ${formatCents(APPROVAL_MAX_FLAT_CENTS)}.` };
   }
   return {
     value: {
@@ -76,7 +76,7 @@ export function approvalFromForm(f: ApprovalForm): Parsed<DiscountApproval> {
 export function approvalSummary(a: ApprovalLimits & Pick<DiscountApproval, 'reasonRequired'>): string {
   const reason = a.reasonRequired ? ' · a reason is needed' : ' · a reason is optional';
   if (a.percentOver === 0) return `Every discount needs a manager${reason}`;
-  if (a.flatOverCents === 0) return `Up to ${a.percentOver}% without a manager; any amount in rupees needs one${reason}`;
+  if (a.flatOverCents === 0) return `Up to ${a.percentOver}% without a manager; any amount in ${getShopLocale().words.major} needs one${reason}`;
   return `Up to ${a.percentOver}% or ${formatCents(a.flatOverCents)} without a manager${reason}`;
 }
 
@@ -104,11 +104,11 @@ export const EXAMPLE_BIG_ORDER_CENTS = 1_000_000;
  */
 export function approvalExample(a: ApprovalLimits): string {
   if (a.percentOver === 0) {
-    return "With 0%, every discount needs a manager's PIN or password — even 5% or Rs 50 off.";
+    return `With 0%, every discount needs a manager's PIN or password — even 5% or ${formatCents(shopIsInPakistan() ? 5_000 : 500)} off.`;
   }
   const inRupees = (order: number) => {
     const most = mostOffWithoutManagerCents(a, order);
-    return most > 0 ? `or up to ${formatCents(most)} off in rupees` : 'but nothing off in rupees';
+    return most > 0 ? `or up to ${formatCents(most)} off in ${getShopLocale().words.major}` : `but nothing off in ${getShopLocale().words.major}`;
   };
   return (
     `On a ${formatCents(EXAMPLE_SMALL_ORDER_CENTS)} order a cashier can give up to ${a.percentOver}% off, ${inRupees(EXAMPLE_SMALL_ORDER_CENTS)}, without a manager. ` +
@@ -231,7 +231,6 @@ export function presetsToForm(p: Pick<DiscountPresets, 'percents' | 'flatCents' 
   };
 }
 
-const PRESET_FLAT_MAX_RUPEES = formatCents(PRESET_FLAT_MAX_CENTS);
 
 /** The main process refuses the same button (shared-schemas discountPresetsSchema), in these words. */
 export const NO_REASON_BUTTON_PROBLEM = `A reason button can't be “${NO_DISCOUNT_REASON_LABEL}”: Reports use those words for a discount with no reason.`;
@@ -246,13 +245,13 @@ export function presetsFromForm(f: PresetsForm): Parsed<DiscountPresets> {
   if (new Set(percents).size !== percents.length) return { value: null, problem: 'Two % buttons are the same.' };
 
   const rupeesText = f.rupees.map((t) => t.trim()).filter((t) => t !== '');
-  if (rupeesText.length === 0) return { value: null, problem: 'Keep at least one rupee button.' };
+  if (rupeesText.length === 0) return { value: null, problem: `Keep at least one ${getShopLocale().words.majorOne} button.` };
   const flatCents = rupeesText.map((t) => centsFromRupeesText(t));
   if (flatCents.some((c) => c === null || Number.isNaN(c) || c < 100 || c > PRESET_FLAT_MAX_CENTS)) {
-    return { value: null, problem: `A rupee button is whole rupees, Rs 1 to ${PRESET_FLAT_MAX_RUPEES}.` };
+    return { value: null, problem: `A ${getShopLocale().words.majorOne} button is whole ${getShopLocale().words.major}, ${formatCents(100)} to ${formatCents(PRESET_FLAT_MAX_CENTS)}.` };
   }
   const flats = flatCents as number[];
-  if (new Set(flats).size !== flats.length) return { value: null, problem: 'Two rupee buttons are the same.' };
+  if (new Set(flats).size !== flats.length) return { value: null, problem: `Two ${getShopLocale().words.majorOne} buttons are the same.` };
 
   const reasons = f.reasons.map((t) => t.replace(/\s+/g, ' ').trim()).filter((t) => t !== '');
   if (reasons.length === 0) return { value: null, problem: 'Keep at least one reason button.' };
