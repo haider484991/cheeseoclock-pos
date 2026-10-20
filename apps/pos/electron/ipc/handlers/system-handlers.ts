@@ -2,7 +2,7 @@ import { app } from 'electron';
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
 import { NEW_SHOP_KEYS, ok } from '@cheeseoclock/shared-types';
-import { checkedNewShop, onboardingAdminSchema } from '@cheeseoclock/shared-schemas';
+import { checkedNewShop, onboardingAdminSchema, shopLocaleSettingSchema } from '@cheeseoclock/shared-schemas';
 import { ensureDeviceInfo } from '../../db/repositories/device-repo.js';
 import { createUser } from '../../db/repositories/user-repo.js';
 import { createTaxCategory } from '../../db/repositories/tax-category-repo.js';
@@ -13,6 +13,7 @@ import { tillClose } from '../../services/till-close-hub.js';
 import { readTillSetting, setTillSetting } from '../../services/till-settings.js';
 import { saveDeliveryZones } from '../../db/repositories/delivery-zones-repo.js';
 import { getCurrentSession } from '../../services/auth-service.js';
+import { applyShopLocale, readStoredShopLocale, shopLocaleLocked } from '../../services/shop-locale.js';
 
 /** The close question's id, as the screen sent it back. */
 function closeRequestId(payload: unknown): string {
@@ -73,6 +74,13 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
       .prepare(`SELECT COUNT(*) AS n FROM users WHERE deleted_at IS NULL`)
       .get() as { n: number };
     return ok({ completed: row.n > 0, userCount: row.n });
+  });
+
+  // The shop's country: the screens set their money and notes from it before
+  // the first thing they draw (main.tsx RootGate). No login: the PIN screen too.
+  defineHandler('system:getShopLocale', ctx, () => {
+    const stored = readStoredShopLocale(ctx.db);
+    return ok({ country: stored.country, timeZone: stored.timeZone, locked: shopLocaleLocked(ctx.db) });
   });
 
   /**
@@ -143,6 +151,20 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
     const shopSettings = shop.value;
     const websiteDetails = NEW_SHOP_KEYS.map((key) => ({ key, value: shopSettings[key] }) as BusinessSettingEntry);
 
+    // The shop's country, checked with everything else before anything is
+    // written. Absent (Cheese O'Clock's setup) = nothing stored = Pakistan.
+    let shopLocale: BusinessSettingEntry | null = null;
+    if (payload.shopLocale !== undefined) {
+      const checked = shopLocaleSettingSchema.safeParse({ v: 1, ...payload.shopLocale });
+      if (!checked.success) {
+        throw new IpcGuardError({
+          code: 'validation_failed',
+          message: checked.error.issues[0]?.message ?? 'Pick the country the shop is in',
+        });
+      }
+      shopLocale = { key: 'shop.locale', value: checked.data };
+    }
+
     const info = ensureDeviceInfo(ctx.db);
     const actor = { userId: null, deviceId: info.deviceId };
 
@@ -177,6 +199,10 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
           // default. Synced to the other till, with their audit rows.
           setBusinessSettings(ctx.db, websiteDetails, actor);
 
+          // The shop's country, with its sync and audit rows, in the same
+          // transaction: a setup that fails leaves no country behind.
+          if (shopLocale) setBusinessSettings(ctx.db, [shopLocale], actor);
+
           // Tax categories — only insert if the user picked some
           for (const t of payload.taxCategories) {
             if (!t.name.trim()) continue;
@@ -204,6 +230,9 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
         },
       },
     );
+
+    // From here on this process runs as the shop's country (money, paper, notes).
+    applyShopLocale(ctx.db);
 
     return ok({ adminUserId: adminUser.id });
   });

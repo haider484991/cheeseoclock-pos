@@ -15,6 +15,7 @@ import { OrderAlerts } from './features/notifications/OrderAlerts';
 import { forgetOnWhoChanges } from './stores/forgetOnSignOut';
 import { staleCustomersOnSave } from './features/checkout/customerLookups';
 import { scrubEventForSend } from '@cheeseoclock/pos-domain';
+import { resolveShopLocale, setShopLocale } from '@cheeseoclock/shared-types';
 import './styles/globals.css';
 
 // Renderer-side Sentry — captures React errors + unhandled rejections in the
@@ -76,8 +77,21 @@ function RootGate() {
     queryKey: ['system', 'setupStatus'],
     queryFn: () => ipc.system.getSetupStatus(),
   });
+  // The shop's country, set before anything below draws money, notes or
+  // paper: applied inside the query, so it is in place by the time the
+  // screens render. A till that never stored one is Pakistan — and so is one
+  // whose answer does not come, rather than a till that will not open.
+  const localeQ = useQuery({
+    queryKey: ['system', 'shopLocale'],
+    queryFn: async () => {
+      const stored = await ipc.system.getShopLocale();
+      setShopLocale(resolveShopLocale(stored));
+      return stored;
+    },
+    staleTime: Infinity,
+  });
 
-  if (setupQ.isLoading) {
+  if (setupQ.isLoading || localeQ.isLoading) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="text-sm text-stone-500">Loading…</div>
@@ -94,6 +108,8 @@ function RootGate() {
       {!setupQ.data?.completed ? (
         <OnboardingPage
           onComplete={() => {
+            // Setup may have stored the shop's country: read it again first.
+            void qc.invalidateQueries({ queryKey: ['system', 'shopLocale'] });
             void qc.invalidateQueries({ queryKey: ['system', 'setupStatus'] });
           }}
         />

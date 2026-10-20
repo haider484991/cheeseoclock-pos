@@ -39,6 +39,7 @@ import {
   featuresNothing,
   homeDuplicateProblem,
   normalizePhone,
+  getShopLocale,
   sameSocialLink,
   shopHoursProblem,
   socialLinkProblem,
@@ -286,7 +287,15 @@ export const shopLine = (min: number, max: number, what: string) =>
       message: min <= 1 ? `${cap(what)} can’t be empty` : `${cap(what)} is at least ${min} letters`,
     });
 
-/** A phone line: printed as typed ("0300 9367865"), dialled as +92 and ten digits; the two must be the same number. */
+/**
+ * A phone line: printed as typed ("0300 9367865"), dialled in the shop's own
+ * country (+92 and ten digits in Pakistan); the two must be the same number.
+ *
+ * "Dialled in the shop's country" is a round trip — a number is canonical
+ * when normalizePhone gives it back unchanged — so for Pakistan it takes
+ * exactly what /^\+92\d{10}$/ took, and a US shop's +1 numbers fit too. The
+ * messages are written when the value is checked (money-field.ts says why).
+ */
 export const shopPhoneSchema = z
   .object({
     display: z
@@ -294,11 +303,20 @@ export const shopPhoneSchema = z
       .min(1, { message: 'Type the phone number' })
       .max(SHOP_PHONE_DISPLAY_MAX, { message: `Keep a phone number to ${SHOP_PHONE_DISPLAY_MAX} characters` })
       .regex(/^[0-9+\-() ]+$/, { message: 'A phone number is digits, spaces, + and -' }),
-    e164: z.string().regex(/^\+92\d{10}$/, { message: 'A phone number is a Pakistani number (+92 and ten digits)' }),
+    e164: z.string().refine(
+      (e) => normalizePhone(e) === e,
+      () => {
+        const l = getShopLocale();
+        return { message: `A phone number is a ${l.countryAdjective} number (${l.phoneE164Rule})` };
+      },
+    ),
   })
   .superRefine((p, ctx) => {
     if (normalizePhone(p.display) !== p.e164) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${p.display} is not a Pakistani phone number the website can call` });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${p.display} is not a ${getShopLocale().countryAdjective} phone number the website can call`,
+      });
     }
   });
 

@@ -13,6 +13,7 @@ import {
   WEBSITE_PICKUP_MAX_PERCENT,
   newShopSettings,
   normalizePhone,
+  getShopLocale,
   type NewShopAnswers,
   type NewShopSettings,
 } from '@cheeseoclock/shared-types';
@@ -42,7 +43,11 @@ export const newShopAnswersSchema = z
   })
   .strict();
 
-const PHONE_HINT = 'as it is dialled in Pakistan (like 0300 1234567)';
+/** "as it is dialled in Pakistan (like 0300 1234567)" — the shop's own country, when asked. */
+const phoneHint = (): string => {
+  const l = getShopLocale();
+  return `as it is dialled in ${l.countryName} (like ${l.phoneExample})`;
+};
 const PICKUP_PERCENT_HINT = `The pick-up discount is a whole % from 0 to ${WEBSITE_PICKUP_MAX_PERCENT}`;
 
 /**
@@ -62,9 +67,9 @@ export function checkedNewShop(
     return { value: null, problem: percent ? PICKUP_PERCENT_HINT : 'Fill in what the website shows' };
   }
   const a: NewShopAnswers = parsed.data;
-  if (!normalizePhone(a.phone)) return { value: null, problem: `Type the shop’s phone number ${PHONE_HINT}` };
+  if (!normalizePhone(a.phone)) return { value: null, problem: `Type the shop’s phone number ${phoneHint()}` };
   if (a.whatsapp.trim() !== '' && !normalizePhone(a.whatsapp)) {
-    return { value: null, problem: `Type the WhatsApp number ${PHONE_HINT}, or leave it empty for the same number` };
+    return { value: null, problem: `Type the WhatsApp number ${phoneHint()}, or leave it empty for the same number` };
   }
   const value = newShopSettings(name, tagline, a);
   for (const key of NEW_SHOP_KEYS) {

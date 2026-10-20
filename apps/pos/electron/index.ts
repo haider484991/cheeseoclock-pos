@@ -11,6 +11,7 @@ import { ensureSeedMenu } from './db/seed.js';
 import { seedPriceHistoryOnce } from './services/costing-seed.js';
 import { startWeeklyDigest } from './services/cost-digest.js';
 import { registerAllIpcHandlers } from './ipc/registry.js';
+import { applyShopLocale } from './services/shop-locale.js';
 import { printSpooler } from './services/print-spooler.js';
 import { getCurrentSession } from './services/auth-service.js';
 import { fbrWorker } from './services/fbr-worker.js';
@@ -177,6 +178,11 @@ async function bootstrap() {
 
   const deviceInfo = ensureDeviceInfo(db);
   log.info('Device registered', { deviceId: deviceInfo.deviceId });
+
+  // The shop's country, before anything formats money or prints a paper. A
+  // till that never stored one (every Cheese O'Clock till) runs as Pakistan.
+  const shopLocale = applyShopLocale(db);
+  log.info('Shop locale', { country: shopLocale.country, timeZone: shopLocale.timeZone });
   // A crash report names the till, never a person.
   tagErrorReporter({ deviceId: deviceInfo.deviceId, deviceName: deviceInfo.displayName, appVersion: app.getVersion() });
 

@@ -81,6 +81,14 @@ export interface ShopLocale {
   readonly tradingDayStartHour: number;
   /** ISO 3166-1 alpha-2 for reading and writing phone numbers. */
   readonly phoneCountry: string;
+  /** The country in a sentence: "as it is dialled in Pakistan". */
+  readonly countryName: string;
+  /** The country as a word before a noun: "a Pakistani number". */
+  readonly countryAdjective: string;
+  /** A phone number as people here write it, for hints: "0300 1234567". */
+  readonly phoneExample: string;
+  /** How a number is dialled from anywhere: "+92 and ten digits". */
+  readonly phoneE164Rule: string;
   /** The note rows of the Close shift count, largest first, in cents. */
   readonly cashFacesCents: readonly number[];
   /**
@@ -122,6 +130,10 @@ export const DEFAULT_SHOP_LOCALE: ShopLocale = Object.freeze({
   dateOrder: 'dmy',
   tradingDayStartHour: 5,
   phoneCountry: 'PK',
+  countryName: 'Pakistan',
+  countryAdjective: 'Pakistani',
+  phoneExample: '0300 1234567',
+  phoneE164Rule: '+92 and ten digits',
   cashFacesCents: Object.freeze([500_000, 100_000, 50_000, 10_000, 5_000, 2_000, 1_000]),
   coinsLabel: 'Rs 5, 2, 1 coins',
   quickCashFacesCents: Object.freeze([10_000, 50_000, 100_000, 500_000]),
@@ -157,6 +169,10 @@ export const US_SHOP_LOCALE: ShopLocale = Object.freeze({
   dateOrder: 'mdy',
   tradingDayStartHour: 5,
   phoneCountry: 'US',
+  countryName: 'the US',
+  countryAdjective: 'US',
+  phoneExample: '(415) 555-0123',
+  phoneE164Rule: '+1 and ten digits',
   // $100, $50, $20, $10, $5, $1 — no cent rows: a drawer is counted in notes.
   cashFacesCents: Object.freeze([10_000, 5_000, 2_000, 1_000, 500, 100]),
   coinsLabel: 'Quarters, dimes, nickels and pennies',
@@ -201,4 +217,63 @@ export function getShopLocale(): ShopLocale {
 /** Put the process back to Pakistan. For tests, so one cannot leak into the next. */
 export function resetShopLocale(): void {
   currentShopLocale = DEFAULT_SHOP_LOCALE;
+}
+
+// ---------------------------------------------------------------------------
+// What a till stores, and how it becomes the locale the till runs as
+// ---------------------------------------------------------------------------
+
+/**
+ * The United States zones a shop can pick at setup. A list rather than any
+ * IANA name: each is a zone the till is tested on, and a US shop's paper and
+ * trading day follow it (daylight saving included).
+ */
+export const US_TIME_ZONES = Object.freeze([
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Phoenix',
+  'America/Los_Angeles',
+  'America/Anchorage',
+  'Pacific/Honolulu',
+] as const);
+
+/**
+ * What 'shop.locale' holds: which preset the shop runs, and its own zone.
+ *
+ * Only the choice is stored, never a copy of the preset. A copy would freeze
+ * today's presets into every till's database, so a later fix to a preset (a
+ * new note, a better label) would never reach a shop that already chose it.
+ */
+export interface StoredShopLocale {
+  readonly v: 1;
+  /** A key of SHOP_LOCALE_PRESETS: 'PK' or 'US'. */
+  readonly country: string;
+  /** Pakistan is always Asia/Karachi; a US shop picks one of US_TIME_ZONES. */
+  readonly timeZone: string;
+}
+
+/** The stored value that means "Pakistan, as every till has always been". */
+export const DEFAULT_STORED_SHOP_LOCALE: StoredShopLocale = Object.freeze({
+  v: 1,
+  country: 'PK',
+  timeZone: 'Asia/Karachi',
+});
+
+/**
+ * The locale a till runs as, from whatever 'shop.locale' holds.
+ *
+ * Anything that is not a clean, known choice — nothing stored, a value a newer
+ * till wrote that this one cannot read, an unknown country or zone — is
+ * Pakistan. That is the safe direction: every till that existed before this
+ * setting is Pakistani, and Pakistan comes back as DEFAULT_SHOP_LOCALE itself
+ * (the same object), so nothing about a Pakistani till changes.
+ */
+export function resolveShopLocale(stored: unknown): ShopLocale {
+  if (typeof stored !== 'object' || stored === null) return DEFAULT_SHOP_LOCALE;
+  const { country, timeZone } = stored as { country?: unknown; timeZone?: unknown };
+  if (country === 'US' && typeof timeZone === 'string' && (US_TIME_ZONES as readonly string[]).includes(timeZone)) {
+    return timeZone === US_SHOP_LOCALE.timeZone ? US_SHOP_LOCALE : (Object.freeze({ ...US_SHOP_LOCALE, timeZone }) as ShopLocale);
+  }
+  return DEFAULT_SHOP_LOCALE;
 }

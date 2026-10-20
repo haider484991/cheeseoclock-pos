@@ -397,4 +397,7 @@ export const PAKISTAN_EXEMPT = [
   // Pins the drawer screen Cheese O'Clock's cashiers see ('Rs 5,000' … 'Rs 10')
   // beside the US one, so it has to spell both out.
   '**/drawerLocale.test.ts',
+  // Pin what a till stores and resolves to: Pakistan as 'Asia/Karachi', in full.
+  '**/shop-locale-resolve.test.ts',
+  '**/shop-locale.db.test.ts',
 ];

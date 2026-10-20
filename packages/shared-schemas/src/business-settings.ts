@@ -116,7 +116,7 @@ import type {
   ShopSettingKey,
   WhatIfRequest,
 } from '@cheeseoclock/shared-types';
-import { formatNumber } from '@cheeseoclock/shared-types';
+import { formatNumber, US_TIME_ZONES } from '@cheeseoclock/shared-types';
 import { moneyField } from './money-field.js';
 
 /**
@@ -1218,6 +1218,37 @@ export const riderCostSchema = z
   })
   .strict();
 
+// ---------------------------------------------------------------------------
+// 'shop.locale': the country the till runs as (international edition)
+// ---------------------------------------------------------------------------
+
+/**
+ * 'shop.locale': Pakistan, or the United States in one of the zones the till
+ * is tested on (shared-types shop-locale.ts). Only the choice is stored; the
+ * till resolves it to a whole locale with resolveShopLocale.
+ *
+ * Written once, by first-time setup on a Pixel & Oak till. Cheese O'Clock's
+ * tills never store it and read as Pakistan, exactly as before. Locked once
+ * the till has taken an order: a shop cannot change currency halfway through
+ * its own history. Read back with this same schema, as the costing keys are:
+ * a value that does not fit is "not set", which is Pakistan.
+ */
+export const shopLocaleSettingSchema = z
+  .object({
+    v: z.literal(1),
+    country: z.enum(['PK', 'US'], { errorMap: () => ({ message: 'Pick the country the shop is in' }) }),
+    timeZone: z.string(),
+  })
+  .strict()
+  .superRefine((s, ctx) => {
+    if (s.country === 'PK' && s.timeZone !== 'Asia/Karachi') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['timeZone'], message: 'A shop in Pakistan keeps Pakistan time' });
+    }
+    if (s.country === 'US' && !(US_TIME_ZONES as readonly string[]).includes(s.timeZone)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['timeZone'], message: 'Pick the time zone the shop is in' });
+    }
+  });
+
 /** Every key and its schema. A key not listed here cannot be written. */
 export const BUSINESS_SETTING_SCHEMAS = {
   'costing.targets': costingTargetsSchema,
@@ -1249,6 +1280,7 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'menu.lastPackage': menuLastPackageSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
+  'shop.locale': shopLocaleSettingSchema,
 } as const;
 
 export type BusinessSettingKey = keyof typeof BUSINESS_SETTING_SCHEMAS;
@@ -1294,6 +1326,7 @@ export const BUSINESS_SETTING_READ_SCHEMAS: { readonly [K in BusinessSettingKey]
   'menu.lastPackage': menuLastPackageReadSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
+  'shop.locale': shopLocaleSettingSchema,
 };
 
 /** The fields each shop rule has in the format this version writes. */

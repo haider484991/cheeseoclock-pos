@@ -279,6 +279,15 @@ export interface IpcContract {
     request: undefined;
     response: ApiResult<{ completed: boolean; userCount: number }>;
   };
+  /**
+   * The country this till runs as ('shop.locale'; Pakistan when never stored),
+   * and whether it can still change (only until the first order). No login:
+   * the PIN screen shows money in the shop's currency too.
+   */
+  'system:getShopLocale': {
+    request: undefined;
+    response: ApiResult<{ country: string; timeZone: string; locked: boolean }>;
+  };
   /** The city for this till's delivery addresses ('delivery.city'); any signed-in user. */
   'system:getDeliveryCity': {
     request: undefined;
@@ -298,6 +307,11 @@ export interface IpcContract {
       deliveryCity?: string;
       /** 'karachi-dha-clifton' saves the built-in Karachi list; 'none' or absent an empty list. */
       deliveryAreas?: 'karachi-dha-clifton' | 'none';
+      /**
+       * The shop's country and zone ('shop.locale'). Absent = nothing stored,
+       * which is Pakistan — Cheese O'Clock's setup never sends it.
+       */
+      shopLocale?: { country: 'PK' | 'US'; timeZone: string };
       /**
        * What the shop's website shows (the Website step; new-shop.ts), with
        * `storeName` and `storeTagline`: always stored as this shop's own

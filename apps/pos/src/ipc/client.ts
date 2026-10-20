@@ -59,6 +59,8 @@ export const ipc = {
     getDeviceInfo: () => unwrap(window.api.system.getDeviceInfo()),
     getBranding: () => unwrap(window.api.system.getBranding()),
     getSetupStatus: () => unwrap(window.api.system.getSetupStatus()),
+    /** The shop's country ('shop.locale'): Pakistan when never stored. */
+    getShopLocale: () => unwrap(window.api.system.getShopLocale()),
     getDeliveryCity: () => unwrap(window.api.system.getDeliveryCity()),
     completeOnboarding: (input: IpcRequest<'system:completeOnboarding'>) =>
       unwrap(window.api.system.completeOnboarding(input)),

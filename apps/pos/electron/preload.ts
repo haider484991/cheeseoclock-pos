@@ -34,6 +34,7 @@ const api: RendererApi = {
     getDeviceInfo: () => invoke('system:getDeviceInfo', undefined),
     getBranding: () => invoke('system:getBranding', undefined),
     getSetupStatus: () => invoke('system:getSetupStatus', undefined),
+    getShopLocale: () => invoke('system:getShopLocale', undefined),
     getDeliveryCity: () => invoke('system:getDeliveryCity', undefined),
     completeOnboarding: (req) => invoke('system:completeOnboarding', req),
     // "Close the till?": on screen, and the answer (no login: the PIN screen asks too).
