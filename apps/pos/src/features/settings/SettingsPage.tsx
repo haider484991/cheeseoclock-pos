@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { shopIsInPakistan } from '@cheeseoclock/shared-types';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { cn } from '@cheeseoclock/ui';
@@ -119,9 +120,11 @@ export function SettingsPage() {
   // Only the owner comes here (managers lost Settings on 2026-09-27); a role
   // with printer.manage but not settings.manage would see printers and sounds.
   const full = useSessionStore((s) => s.can('settings.manage'));
-  const tabs = full
-    ? TABS
-    : TABS.filter((t) => t.id === 'printer' || t.id === 'sounds' || t.id === 'about');
+  const tabs = (full ? TABS : TABS.filter((t) => t.id === 'printer' || t.id === 'sounds' || t.id === 'about')).filter(
+    // foodpanda and FBR invoicing are Pakistan's: a till abroad never shows them
+    // (and a remembered or linked tab of theirs falls back like any hidden one).
+    (t) => shopIsInPakistan() || (t.id !== 'foodpanda' && t.id !== 'fbr'),
+  );
   const [params] = useSearchParams();
   const fromUrl = params.get('tab');
   const [savedTab, setTab] = useState<SettingsTab>(() => (isTab(fromUrl) ? fromUrl : readSavedTab()));
@@ -298,7 +301,7 @@ export function SettingsOverview({ onSelect }: { onSelect: (tab: SettingsTab) =>
     { title: 'Online orders', tile: onlineTile, tab: 'online' },
     { title: 'Backups', tile: backupTile, tab: 'backups' },
     { title: 'FBR invoicing', tile: fbrTile, tab: 'fbr' },
-  ];
+  ].filter((t) => shopIsInPakistan() || t.tab !== 'fbr');
 
   return (
     <div className="grid grid-cols-2 gap-2 md:grid-cols-4" aria-label="Setup status">

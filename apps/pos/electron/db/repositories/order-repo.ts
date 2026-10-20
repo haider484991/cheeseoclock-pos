@@ -23,7 +23,7 @@ import {
   REFUSED_ITEM_REFUND_OWED_SQL,
 } from '../order-history-query.js';
 import { kitchenHearsOfClose } from '@cheeseoclock/pos-domain';
-import { shopTradingDay } from '@cheeseoclock/shared-types';
+import { shopIsInPakistan, shopTakes, shopTradingDay } from '@cheeseoclock/shared-types';
 import {
   activeFoodpandaDeal,
   computeDiscountCents,
@@ -547,6 +547,12 @@ function enqueuePaymentSyncAndAudit(
  * cash every night (audit 2026-09-25).
  */
 function assertMethodFitsOrder(mode: OrderMode, method: PaymentMethod, what: 'pay' | 'refund' = 'pay'): void {
+  // Only the ways this shop is paid (its locale's tenders). The screens never
+  // offer anything else; a stray ask — a stale screen, a bug — is refused here
+  // too. A Pakistani till takes all five, as it always has.
+  if (method !== 'foodpanda' && !shopTakes(method)) {
+    throw new Error(`This shop is not paid by ${method.replace('_', ' ')}`);
+  }
   if ((mode === 'foodpanda') === (method === 'foodpanda')) return;
   if (what === 'refund') {
     throw new Error(
@@ -617,6 +623,8 @@ export function createOrder(
   input: CreateOrderInput,
   actor: Actor & { userId: string },
 ): Order {
+  // Foodpanda is Pakistan's: a till abroad never offers it as an order type.
+  if (input.mode === 'foodpanda' && !shopIsInPakistan()) throw new Error('Foodpanda orders are not taken in this shop');
   const id = uuidv7();
   const now = nowIso();
 
@@ -1378,6 +1386,8 @@ export function setOrderMode(
   mode: OrderMode,
   actor: Actor & { userId: string },
 ): Order {
+  // Foodpanda is Pakistan's: a till abroad never offers it as an order type.
+  if (mode === 'foodpanda' && !shopIsInPakistan()) throw new Error('Foodpanda orders are not taken in this shop');
   let result!: Order;
   const tx = db.transaction(() => {
     const order = findOrder(db, orderId);

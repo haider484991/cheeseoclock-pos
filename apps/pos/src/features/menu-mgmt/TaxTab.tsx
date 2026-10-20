@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { shopTakes } from '@cheeseoclock/shared-types';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, Card } from '@cheeseoclock/ui';
@@ -177,7 +178,7 @@ export function TaxDialog({
             <div>
               <span className="mb-1 block text-xs uppercase tracking-wider text-stone-500">Rate by how the customer pays (%)</span>
               <div className="grid grid-cols-2 gap-2">
-                {RATED_PAYMENT_METHODS.map((m) => (
+                {RATED_PAYMENT_METHODS.filter((m) => shopTakes(m)).map((m) => (
                   <label key={m} className="flex items-center gap-2 text-sm">
                     <span className="w-24 shrink-0 text-stone-600 dark:text-stone-300">{RATED_METHOD_LABEL[m]}</span>
                     <input

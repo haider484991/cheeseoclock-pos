@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { shopTakes } from '@cheeseoclock/shared-types';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
@@ -141,7 +142,7 @@ export function ChangePaymentMethodDialog({
           ) : (
             <>
               <div className="grid grid-cols-3 gap-2">
-                {CHANGEABLE_PAYMENT_METHODS.map((m) => {
+                {CHANGEABLE_PAYMENT_METHODS.filter((m) => shopTakes(m)).map((m) => {
                   const now = m === payment.method;
                   const option = now ? null : optionOf(m);
                   const refused = option !== null && 'refusal' in option;

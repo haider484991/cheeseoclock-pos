@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { shopTakes } from '@cheeseoclock/shared-types';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
@@ -233,7 +234,7 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: ride
     }
   }
 
-  const methods: Array<{ key: PaymentMethod; label: string; icon: typeof Banknote }> = isFoodpanda
+  const offered: Array<{ key: PaymentMethod; label: string; icon: typeof Banknote }> = isFoodpanda
     ? [{ key: 'foodpanda', label: 'Foodpanda', icon: Smartphone }]
     : outside
       ? // An outside rider pays in cash or by wallet; the till refuses a card.
@@ -248,6 +249,8 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: ride
           { key: 'easypaisa', label: 'EasyPaisa', icon: Smartphone },
           { key: 'jazzcash', label: 'JazzCash', icon: Smartphone },
         ];
+  // Only the ways this shop is paid (its locale's tenders): no Pakistani wallet on a US till.
+  const methods = offered.filter((m) => m.key === 'foodpanda' || shopTakes(m.key));
   // Exact, then the same notes Pay offers (tenderAmounts quickCashRupees: one rule), of what this dialog takes.
   const quickNotes = outside ? quickCashRupees(takeCents) : quickCashRupees(order.totalCents);
 
@@ -343,7 +346,13 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: ride
                   <div
                     className={cn(
                       'grid gap-1.5',
-                      methods.length === 1 ? 'grid-cols-1' : methods.length === 3 ? 'grid-cols-3' : 'grid-cols-4',
+                      methods.length === 1
+                        ? 'grid-cols-1'
+                        : methods.length === 2
+                          ? 'grid-cols-2'
+                          : methods.length === 3
+                            ? 'grid-cols-3'
+                            : 'grid-cols-4',
                     )}
                   >
                     {methods.map((m) => {

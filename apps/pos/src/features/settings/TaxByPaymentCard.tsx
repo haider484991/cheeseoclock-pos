@@ -8,6 +8,7 @@
  * the bill show each way's total, and charge the way the customer pays.
  */
 import { useState } from 'react';
+import { shopTakes } from '@cheeseoclock/shared-types';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { Percent } from 'lucide-react';
@@ -45,7 +46,7 @@ export function TaxByPaymentCard() {
               <tr>
                 <th className="pb-2">Tax</th>
                 <th className="pb-2 text-right">Cash</th>
-                {RATED_PAYMENT_METHODS.map((m) => (
+                {RATED_PAYMENT_METHODS.filter((m) => shopTakes(m)).map((m) => (
                   <th key={m} className="pb-2 text-right">
                     {m === 'bank_transfer' ? 'Bank' : RATED_METHOD_LABEL[m]}
                   </th>
@@ -58,7 +59,7 @@ export function TaxByPaymentCard() {
                 <tr key={t.id} className="border-t border-stone-100 dark:border-stone-800">
                   <td className="py-2 font-medium">{t.name}</td>
                   <td className="py-2 text-right font-mono">{taxRatePercentText(t.rateBps)}</td>
-                  {RATED_PAYMENT_METHODS.map((m) => {
+                  {RATED_PAYMENT_METHODS.filter((m) => shopTakes(m)).map((m) => {
                     const rate = rateByMethod(t, m);
                     return (
                       <td

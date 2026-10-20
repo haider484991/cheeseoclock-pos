@@ -1,4 +1,5 @@
 import { cn } from '@cheeseoclock/ui';
+import { shopIsInPakistan } from '@cheeseoclock/shared-types';
 import { CAME_BY_CHOICES, CAME_BY_LABEL, type CameBy, type OrderMode } from '@cheeseoclock/shared-types';
 import { cameByChipsShown } from '@cheeseoclock/pos-domain';
 import { ShoppingBag, Bike, Smartphone, Footprints, Phone, MessageCircle } from 'lucide-react';
@@ -79,7 +80,8 @@ export function OrderDetails() {
           <h1 id="order-details-title">Choose items</h1>
         </div>
         <div className="ticket-modes" role="group" aria-label="Order type">
-          {MODES.map(({ id, label, icon: Icon }) => (
+          {/* Foodpanda is Pakistan's: not an order type on a till abroad. */}
+          {MODES.filter((m) => m.id !== 'foodpanda' || shopIsInPakistan()).map(({ id, label, icon: Icon }) => (
             <button key={id} type="button" aria-pressed={mode === id} onClick={() => void switchMode(id)} className={cn('ticket-mode', mode === id && 'is-active')}>
               <Icon className="h-4 w-4" aria-hidden="true" />{label}
             </button>

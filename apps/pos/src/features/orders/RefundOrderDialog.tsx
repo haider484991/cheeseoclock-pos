@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { shopTakes } from '@cheeseoclock/shared-types';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
@@ -163,14 +164,16 @@ export function RefundOrderDialog({ snap, onClose, onDone, startOn, startMethod,
   }
 
   // Foodpanda money goes back through Foodpanda, never out of the drawer.
-  const methods: Array<{ key: PaymentMethod; label: string }> = isFoodpanda
-    ? [{ key: 'foodpanda', label: 'Foodpanda' }]
-    : [
-        { key: 'cash', label: 'Cash' },
-        { key: 'card', label: 'Card' },
-        { key: 'easypaisa', label: 'EasyPaisa' },
-        { key: 'jazzcash', label: 'JazzCash' },
-      ];
+  const methods: Array<{ key: PaymentMethod; label: string }> = (
+    isFoodpanda
+      ? [{ key: 'foodpanda', label: 'Foodpanda' }]
+      : [
+          { key: 'cash', label: 'Cash' },
+          { key: 'card', label: 'Card' },
+          { key: 'easypaisa', label: 'EasyPaisa' },
+          { key: 'jazzcash', label: 'JazzCash' },
+        ]
+  ).filter((m) => m.key === 'foodpanda' || shopTakes(m.key)) as Array<{ key: PaymentMethod; label: string }>;
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
@@ -272,7 +275,12 @@ export function RefundOrderDialog({ snap, onClose, onDone, startOn, startMethod,
                   </label>
                   <div>
                     <span className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-200">Give back as</span>
-                    <div className={cn('grid gap-1.5', methods.length === 1 ? 'grid-cols-1' : 'grid-cols-4')}>
+                    <div
+                      className={cn(
+                        'grid gap-1.5',
+                        methods.length === 1 ? 'grid-cols-1' : methods.length === 2 ? 'grid-cols-2' : 'grid-cols-4',
+                      )}
+                    >
                       {methods.map((m) => (
                         <button
                           key={m.key}

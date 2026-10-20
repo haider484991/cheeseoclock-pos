@@ -191,6 +191,25 @@ export const SHOP_LOCALE_PRESETS = Object.freeze({
   US: US_SHOP_LOCALE,
 }) as Readonly<Record<string, ShopLocale>>;
 
+/**
+ * Whether the shop is paid this way: one of its locale's tenders. A Pakistani
+ * till takes all five (cash, card, EasyPaisa, JazzCash, bank), as it always
+ * did; a US till takes cash and card. Foodpanda is the platform's settlement,
+ * never a tender, and is not decided here.
+ */
+export function shopTakes(method: string, locale: ShopLocale = getShopLocale()): boolean {
+  return (locale.tenders as readonly string[]).includes(method);
+}
+
+/**
+ * Pakistan's own services — FBR invoicing and Foodpanda — are offered on a
+ * Pakistani till only. A US shop is never shown them, and a stray ask for a
+ * Foodpanda order is refused (order-repo).
+ */
+export function shopIsInPakistan(locale: ShopLocale = getShopLocale()): boolean {
+  return locale.country === 'PK';
+}
+
 /** The business_settings key the locale is stored under. */
 export const SHOP_LOCALE_KEY = 'shop.locale';
 

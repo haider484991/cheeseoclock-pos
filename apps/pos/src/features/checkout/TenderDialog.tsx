@@ -1,4 +1,5 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
+import { shopTakes } from '@cheeseoclock/shared-types';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn, NumberPad } from '@cheeseoclock/ui';
 import { formatCents, settleLegs } from '@cheeseoclock/pos-domain';
@@ -66,7 +67,9 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   const quote = quoteOf(snapshot.order);
   const byWay = dependsOnWay(quote, isFoodpanda);
   const netCents = quote.netCents;
-  const methods = METHODS.filter((m) => (m.id === 'foodpanda') === isFoodpanda);
+  // The ways this shop is paid (its locale's tenders): all five in Pakistan, cash and card in the US.
+  const methods = METHODS.filter((m) => (m.id === 'foodpanda') === isFoodpanda && (m.id === 'foodpanda' || shopTakes(m.id)));
+  const splitMethods = SPLIT_METHODS.filter((m) => shopTakes(m.id));
   const [method, setMethod] = useState<PaymentMethod>(isFoodpanda ? 'foodpanda' : 'cash');
   // Card + cash: the card amount typed, the cash due worked out from it; the
   // pad types into one of the two.
@@ -96,7 +99,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   const contentRef = useRef<HTMLDivElement>(null);
 
   const methodSpec = methods.find((m) => m.id === method) ?? methods[0]!;
-  const splitSpec = SPLIT_METHODS.find((m) => m.id === splitMethod) ?? SPLIT_METHODS[0]!;
+  const splitSpec = splitMethods.find((m) => m.id === splitMethod) ?? splitMethods[0] ?? SPLIT_METHODS[0]!;
   const onCardCents = split ? parseTenderedCents(onCard) : 0;
   // The bill as it is being settled: the split's card part at its way's rate
   // and its cash part at the cash rate — the one rule the till applies too.
@@ -364,7 +367,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                 <>
                   <div className="mb-2 text-xs uppercase tracking-wider text-stone-500">Part by card, part in cash</div>
                   <div className="mb-2 grid grid-cols-4 gap-1">
-                    {SPLIT_METHODS.map((m) => (
+                    {splitMethods.map((m) => (
                       <button
                         key={m.id}
                         type="button"
