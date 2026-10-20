@@ -20,3 +20,4 @@ export * from './shift-report.js';
 export * from './licence.js';
 export * from './dashboard.js';
 export * from './vouchers.js';
+export * from './money-field.js';

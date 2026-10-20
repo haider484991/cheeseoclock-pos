@@ -117,6 +117,7 @@ import type {
   WhatIfRequest,
 } from '@cheeseoclock/shared-types';
 import { formatNumber } from '@cheeseoclock/shared-types';
+import { moneyField } from './money-field.js';
 
 /**
  * Business settings (costing spec §3, migration 0032): shop-wide settings
@@ -161,11 +162,12 @@ export const costingTargetsSchema = z
   .strict();
 
 /** Phase 1: prices are suggested in steps of this many paisa (Rs 1 to Rs 1,000). */
-export const costingPriceStepSchema = z
-  .number()
-  .int({ message: 'The price step is a whole number of paisa' })
-  .min(100, { message: 'The price step is at least Rs 1' })
-  .max(100_000, { message: 'The price step is at most Rs 1,000' });
+export const costingPriceStepSchema = moneyField({
+  what: 'The price step',
+  minCents: 100,
+  maxCents: 100_000,
+  wholeWording: 'is a whole number of',
+});
 
 /** The key items as a list of ingredient ids (at most 1,000). */
 const keyIngredientIdsSchema = z.array(z.string().min(1)).max(1_000);
@@ -176,11 +178,12 @@ const alertThresholds = {
     .int({ message: 'The price-jump threshold is a whole number of basis points' })
     .min(100, { message: 'A price jump is at least 1%' })
     .max(10_000, { message: 'A price jump is at most 100%' }),
-  impactWeekCents: z
-    .number()
-    .int({ message: 'The weekly amount is in whole paisa' })
-    .min(0, { message: 'The weekly amount cannot be below Rs 0' })
-    .max(100_000_000, { message: 'The weekly amount is at most Rs 1,000,000' }),
+  impactWeekCents: moneyField({
+    what: 'The weekly amount',
+    minCents: 0,
+    maxCents: 100_000_000,
+    belowWording: 'cannot be below',
+  }),
 };
 
 /**
@@ -284,12 +287,13 @@ const readsFormat = z.number().int().min(1);
 
 /** Whole rupees in paisa, from Rs 0 up to `maxRupees`. */
 const wholeRupees = (maxRupees: number, what: string) =>
-  z
-    .number()
-    .int({ message: `${what} is in whole rupees` })
-    .min(0, { message: `${what} can't be below Rs 0` })
-    .max(maxRupees * 100, { message: `${what} is at most Rs ${formatNumber(maxRupees)}` })
-    .refine((c) => c % 100 === 0, { message: `${what} is in whole rupees` });
+  moneyField({
+    what,
+    minCents: 0,
+    maxCents: maxRupees * 100,
+    wholeMajorUnits: true,
+    belowWording: "can't be below",
+  });
 
 const wholePercent = (what: string) =>
   z

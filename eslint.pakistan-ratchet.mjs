@@ -391,4 +391,7 @@ export const PAKISTAN_EXEMPT = [
   // string waiting to be moved; a shop abroad should not be shown this screen
   // at all, which is a gating job (like FBR and Foodpanda), not a sweep.
   '**/noteChangeWords.ts',
+  // Pins the exact words a cashier reads when a value is refused, so it has
+  // to spell out both "Rs 1" and "$1" to prove the two differ.
+  '**/schemaMessages.test.ts',
 ];
