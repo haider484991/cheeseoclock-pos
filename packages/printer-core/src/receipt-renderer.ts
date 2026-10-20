@@ -118,6 +118,7 @@ import {
   ownRatesOf,
   RATED_PAYMENT_METHODS,
   waysOnPaper,
+  getShopLocale,
 } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode, toPrinterAscii } from './escpos.js';
 import { paperMoney } from './paper-money.js';
@@ -583,7 +584,7 @@ function appendTitle(
     case 'refund':
       if (!refund) break;
       big('REFUND');
-      b.bold(true).doubleHeight(true).wrappedText(`Rs ${money(sumOf(refund.rows))} RETURNED`, width);
+      b.bold(true).doubleHeight(true).wrappedText(`${paperAmount(sumOf(refund.rows))} RETURNED`, width);
       b.doubleHeight(false).bold(false);
       return;
     case 'bill': {
@@ -712,7 +713,7 @@ function appendSaleBody(
     appendDiscountLines(b, snapshot);
     for (const [label, cents] of taxLinesOf(snapshot)) b.line(label, money(cents));
     appendTotalsRule(b, dup, width);
-    b.bold(true).doubleHeight(true).line('TOTAL', `Rs ${money(order.totalCents)}`);
+    b.bold(true).doubleHeight(true).line('TOTAL', `${paperAmount(order.totalCents)}`);
     b.bold(false).doubleHeight(false);
     appendByCardLine(b, snapshot);
   }
@@ -829,10 +830,10 @@ function appendDeliveryTotals(
   if (bill.deliveryTaxCents !== null && bill.deliveryTaxCents !== 0) {
     b.line(salesTaxLabel(bill.deliveryTaxBps, true), money(bill.deliveryTaxCents));
   }
-  b.bold(true).line('FOOD TOTAL (with tax)', `Rs ${money(bill.foodTotalCents)}`).bold(false);
+  b.bold(true).line('FOOD TOTAL (with tax)', `${paperAmount(bill.foodTotalCents)}`).bold(false);
   b.line('Delivery charge', money(bill.deliveryChargeCents));
   appendTotalsRule(b, dup, width);
-  b.bold(true).doubleHeight(true).line('CUSTOMER PAYS', `Rs ${money(bill.customerPaysCents)}`);
+  b.bold(true).doubleHeight(true).line('CUSTOMER PAYS', `${paperAmount(bill.customerPaysCents)}`);
   b.bold(false).doubleHeight(false);
   appendByCardLine(b, snapshot);
 }
@@ -852,7 +853,7 @@ function appendByCardLine(b: EscPosBuilder, snapshot: OrderSnapshot): void {
   const groups = billsByMethod(order);
   for (const g of groups) {
     const label = g.methods.length === RATED_PAYMENT_METHODS.length ? 'By card / wallet' : `By ${waysOnPaper(g.methods)}`;
-    b.line(label, `Rs ${money(g.totalCents)}`);
+    b.line(label, `${paperAmount(g.totalCents)}`);
   }
 }
 
@@ -873,7 +874,7 @@ function appendPaidState(
     b.bold(true).doubleHeight(true).wrappedText(`REFUNDED IN FULL${suffix}`, width);
     b.doubleHeight(false);
     const when = lastRefund ? ` ${formatDateTime(new Date(lastRefund))}` : '';
-    b.wrappedText(`Rs ${money(refundedCents)} returned${when}`, width).bold(false);
+    b.wrappedText(`${paperAmount(refundedCents)} returned${when}`, width).bold(false);
     b.newline();
     b.bold(true).wrappedText('This sale was refunded - not valid for any claim.', width).bold(false);
     return;
@@ -886,7 +887,7 @@ function appendPaidState(
     b.doubleHeight(false).bold(false);
   }
   if (refundedCents > 0) {
-    b.bold(true).wrappedText(`PART REFUNDED - Rs ${money(refundedCents)} returned`, width).bold(false);
+    b.bold(true).wrappedText(`PART REFUNDED - ${paperAmount(refundedCents)} returned`, width).bold(false);
   }
   const when = order.mode === 'delivery' ? deliveryPaidLine(order) : null;
   if (when) b.bold(true).wrappedText(when, width).bold(false);
@@ -991,7 +992,7 @@ function appendOutsideRiderLines(b: EscPosBuilder, snapshot: OrderSnapshot, widt
     b.bold(true).wrappedText('RIDER GIVES THE SHOP NOTHING', width).bold(false);
     return;
   }
-  const handsIn = `Rs ${money(order.totalCents - keep)}`;
+  const handsIn = `${paperAmount(order.totalCents - keep)}`;
   b.bold(true).line(order.paidAt ? 'RIDER PAID THE SHOP' : 'RIDER GIVES THE SHOP', handsIn).bold(false);
   if (riderSettledWhileOut(order)) {
     const refunded = order.totalCents - riderCollectsCents(snapshot);
@@ -1016,12 +1017,12 @@ function appendDueState(
     b.doubleHeight(false).bold(false);
     return;
   }
-  b.bold(true).doubleHeight(true).line(cod ? 'TO COLLECT' : 'TO PAY', `Rs ${money(dueCents)}`);
+  b.bold(true).doubleHeight(true).line(cod ? 'TO COLLECT' : 'TO PAY', `${paperAmount(dueCents)}`);
   b.doubleHeight(false);
   b.newline();
   if (cod) {
     // The customer's only paper until the rider is paid: say who to pay.
-    b.wrappedText('NOT PAID', width).wrappedText(`Pay the rider Rs ${money(dueCents)}`, width).bold(false);
+    b.wrappedText('NOT PAID', width).wrappedText(`Pay the rider ${paperAmount(dueCents)}`, width).bold(false);
   } else {
     b.wrappedText('NOT PAID - pay at the counter', width).bold(false);
     b.wrappedText('This bill is not a receipt.', width);
@@ -1059,12 +1060,12 @@ function appendRefundBody(
     const handedTo = refund.handedTo ?? null;
     if (handedTo === 'none') {
       b.bold(true).wrappedText('No cash handed out', width).bold(false);
-      b.wrappedText(`The rider brought Rs ${money(returned)} less`, width).newline();
+      b.wrappedText(`The rider brought ${paperAmount(returned)} less`, width).newline();
     } else {
       b.bold(true)
-        .wrappedText(handedTo === 'rider' ? `Given to the rider Rs ${money(returned)}` : `Customer received Rs ${money(returned)}`, width)
+        .wrappedText(handedTo === 'rider' ? `Given to the rider ${paperAmount(returned)}` : `Customer received ${paperAmount(returned)}`, width)
         .bold(false);
-      if (handedTo === 'rider') b.wrappedText(`He collects Rs ${money(returned)} less`, width);
+      if (handedTo === 'rider') b.wrappedText(`He collects ${paperAmount(returned)} less`, width);
       b.newline().text(`Signature: ${'_'.repeat(Math.max(8, width - 11))}`).newline().newline();
     }
   }
@@ -1665,6 +1666,18 @@ function formatTicketTime(d: Date): string {
 /** "1,234.56" with thousands separators, no currency symbol: every paper's money (paper-money.ts). */
 function money(cents: number): string {
   return paperMoney(cents);
+}
+
+/**
+ * "Rs 1,234.56" — money with the shop's symbol in front, as the paper writes
+ * it. The symbol and its spacing come from the shop locale, because the
+ * printer's code page is ASCII: a GB shop prints "GBP 10", not "£10". The
+ * Pakistani default is "Rs " exactly as every receipt has always printed it,
+ * which the 80 golden papers hold to the character.
+ */
+function paperAmount(cents: number): string {
+  const locale = getShopLocale();
+  return `${locale.paperSymbol}${locale.paperSymbolSeparator}${money(cents)}`;
 }
 
 /** "26/09/2026 19:35" — the one date format on every paper (Pakistan writes the day first). */

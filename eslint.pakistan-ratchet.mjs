@@ -254,7 +254,6 @@ export const PAKISTAN_ALLOWLIST = [
   'apps/pos/src/features/shell/NoteCounter.tsx',
   'apps/pos/src/features/shell/ShiftWidget.tsx',
   'apps/pos/src/features/shell/noteChangeWords.test.ts',
-  'apps/pos/src/features/shell/noteChangeWords.ts',
   'apps/pos/src/features/shell/noteCounterState.test.ts',
   'apps/pos/src/features/shell/shiftCloseApproval.test.tsx',
   'apps/pos/src/features/shell/shiftHistory.test.tsx',
@@ -343,6 +342,7 @@ export const PAKISTAN_ALLOWLIST = [
   'packages/pos-domain/src/website-shop.test.ts',
   'packages/printer-core/src/escpos.test.ts',
   'packages/printer-core/src/order-changed-bill.test.ts',
+  'packages/printer-core/src/paper-locale.test.ts',
   'packages/printer-core/src/paper-money.test.ts',
   'packages/printer-core/src/paper-time.test.ts',
   'packages/printer-core/src/receipt-card-rate.test.ts',
@@ -351,7 +351,6 @@ export const PAKISTAN_ALLOWLIST = [
   'packages/printer-core/src/receipt-goldens.fixture.ts',
   'packages/printer-core/src/receipt-labels.test.ts',
   'packages/printer-core/src/receipt-renderer.test.ts',
-  'packages/printer-core/src/receipt-renderer.ts',
   'packages/printer-core/src/shift-report.test.ts',
   'packages/printer-core/src/shift-report.ts',
   'packages/shared-schemas/src/business-settings.ts',
@@ -385,4 +384,11 @@ export const PAKISTAN_EXEMPT = [
   '**/shop-clock.ts',
   '**/shop-locale.test.ts',
   '**/money-locale.test.ts',
+  // Roman Urdu for the cashiers, which the owner asked for by name on 8 Oct
+  // 2026. "naya paisa" there means NEW MONEY, not the hundredth of a rupee —
+  // the same trap 'easypaisa' set. Sweeping it would both be wrong and mangle
+  // words the staff actually read. It is Pakistani content by design, not a
+  // string waiting to be moved; a shop abroad should not be shown this screen
+  // at all, which is a gating job (like FBR and Foodpanda), not a sweep.
+  '**/noteChangeWords.ts',
 ];

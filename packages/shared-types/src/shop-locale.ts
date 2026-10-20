@@ -51,6 +51,12 @@ export interface ShopLocale {
    */
   readonly paperSymbol: string;
   /**
+   * What goes between the paper symbol and the figure. Separate from
+   * symbolSeparator because the two symbols can differ: a GB shop shows "£10"
+   * on screen but prints "GBP 10", since the printer has no pound sign.
+   */
+  readonly paperSymbolSeparator: string;
+  /**
    * The Intl tag used to group and punctuate numbers on screen. It also
    * carries the grouping rule, so Indian 3-2-2 grouping comes free with an
    * Indian tag rather than needing its own setting.
@@ -101,6 +107,7 @@ export const DEFAULT_SHOP_LOCALE: ShopLocale = Object.freeze({
   symbol: 'Rs',
   symbolSeparator: ' ',
   paperSymbol: 'Rs',
+  paperSymbolSeparator: ' ',
   numberLocale: 'en-PK',
   taxMode: 'exclusive',
   taxLabel: 'Tax',
@@ -133,6 +140,7 @@ export const US_SHOP_LOCALE: ShopLocale = Object.freeze({
   symbol: '$',
   symbolSeparator: '',
   paperSymbol: '$',
+  paperSymbolSeparator: '',
   numberLocale: 'en-US',
   taxMode: 'exclusive',
   taxLabel: 'Sales tax',
