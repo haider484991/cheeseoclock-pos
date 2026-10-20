@@ -391,7 +391,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                     >
                       <div className="text-xs uppercase tracking-wider text-stone-500">On {splitSpec.label}</div>
                       <div className="font-mono text-2xl font-bold" data-testid="on-card">
-                        {onCard ? `Rs ${formatNumber(parseInt(onCard, 10))}` : '—'}
+                        {onCard ? formatCents(parseInt(onCard, 10) * 100) : '—'}
                       </div>
                     </button>
                     <button

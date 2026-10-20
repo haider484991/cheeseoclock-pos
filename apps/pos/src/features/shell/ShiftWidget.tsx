@@ -1,4 +1,5 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -18,7 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import {
-  CASH_PAISA_DIFFERENCE_LABEL,
+  cashMinorDifferenceLabel,
   cashCountText,
   cashCountTotalCents,
   cashPaisaDifferenceCents,
@@ -594,7 +595,10 @@ export const CLOSE_HINT_NOT_STARTED = 'Type a count in at least one row (0 if th
 export const CLOSE_HINT_CHECKING = 'Checking the orders on this till…';
 export const CLOSE_HINT_CHECK_FAILED = 'Could not check the orders on this till.';
 export const CLOSE_HINT_REASON = 'Give a reason for the unpaid orders (below the count).';
-export const CLOSE_HINT_COINS_LARGE = 'Rs 1,000 or more in coins and other: count the notes in their own rows.';
+/** The reminder when 'Coins and other' is large: "Rs 1,000 or more …" in Pakistan, "$100 or more …" in the US. */
+export function closeHintCoinsLarge(): string {
+  return `${formatCents(getShopLocale().coinsReminderCents)} or more in coins and other: count the notes in their own rows.`;
+}
 
 /**
  * The one hint the close box's footer shows, first match wins: the check of
@@ -616,7 +620,7 @@ export function closeShiftHint(p: {
   if (!p.started) return { text: CLOSE_HINT_NOT_STARTED, amber: false };
   if (!p.checked) return { text: CLOSE_HINT_CHECKING, amber: false };
   if (p.reasonMissing) return { text: CLOSE_HINT_REASON, amber: false };
-  if (p.otherIsLarge) return { text: CLOSE_HINT_COINS_LARGE, amber: true };
+  if (p.otherIsLarge) return { text: closeHintCoinsLarge(), amber: true };
   return null;
 }
 
@@ -1330,7 +1334,7 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
             </div>
             {paisa !== null && (
               <div className="mt-0.5 text-xs">
-                {CASH_PAISA_DIFFERENCE_LABEL} {formatCents(paisa)}
+                {cashMinorDifferenceLabel()} {formatCents(paisa)}
               </div>
             )}
           </div>

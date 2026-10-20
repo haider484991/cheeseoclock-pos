@@ -3,7 +3,7 @@
  * Pure (no React, no DOM) so they are unit-tested.
  */
 import {
-  CASH_PAISA_DIFFERENCE_LABEL,
+  cashMinorDifferenceLabel,
   cashCountText,
   cashPaisaDifferenceCents,
   cashVarianceVerdict,
@@ -372,7 +372,7 @@ export function shiftResultOf(varianceCents: number | null): { verdict: CashVari
   return {
     verdict,
     words: verdict === 'matched' ? 'Matched' : `${verdict === 'over' ? 'Over' : 'Short'} ${formatCents(Math.abs(varianceCents))}`,
-    paisa: paisa === null ? null : `${CASH_PAISA_DIFFERENCE_LABEL} ${formatCents(paisa)}`,
+    paisa: paisa === null ? null : `${cashMinorDifferenceLabel()} ${formatCents(paisa)}`,
   };
 }
 

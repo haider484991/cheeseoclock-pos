@@ -1,4 +1,5 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
 import { approvalRuleText, DISCOUNT_REASON_REQUIRED, FREE_ORDER_NEEDS_REASON, formatCents } from '@cheeseoclock/pos-domain';
@@ -441,7 +442,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                     data-field="custom"
                     disabled={onlyValueDeals}
                     inputMode="decimal"
-                    aria-label={customKind === 'percent' ? 'Other percent off' : 'Other amount off in rupees'}
+                    aria-label={customKind === 'percent' ? 'Other percent off' : `Other amount off in ${getShopLocale().words.major}`}
                     placeholder="Other"
                     value={customText}
                     onChange={(e) => {

@@ -250,7 +250,7 @@ describe.skipIf(!Sqlite)('"Put back the default" for the rules first-time setup 
       expect(said(c.defaultValue), key).toEqual(said(SHOP_SETTING_DEFAULTS[key]));
     }
     for (const [key, change] of CHANGES) {
-      await call('settings:setBusiness', { key, value: change((await card(key)).value as Record<string, unknown>) });
+      await call('settings:setBusiness', { key, value: change((await card(key)).value as unknown as Record<string, unknown>) });
     }
     for (const key of NEW_SHOP_KEYS) {
       const c = await call<ShopSettingCard<typeof key>>('settings:setBusiness', { key, useDefault: true });

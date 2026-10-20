@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { useQuery } from '@tanstack/react-query';
 import { cn } from '@cheeseoclock/ui';
 import { ipc } from '../../ipc/client';
@@ -831,7 +832,7 @@ export function CustomChargeControl({
         Rs
         <input
           autoFocus
-          aria-label="Custom delivery charge in rupees"
+          aria-label={`Custom delivery charge in ${getShopLocale().words.major}`}
           inputMode="numeric"
           value={text}
           placeholder="300"

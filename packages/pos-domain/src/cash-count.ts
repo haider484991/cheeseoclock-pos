@@ -18,6 +18,7 @@ import { formatCents } from './money.js';
  */
 export {
   CASH_PAISA_DIFFERENCE_LABEL,
+  cashMinorDifferenceLabel,
   CASH_VARIANCE_MATCHED_UNDER_CENTS,
   cashPaisaDifferenceCents,
   cashVarianceVerdict,

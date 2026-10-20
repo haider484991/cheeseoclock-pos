@@ -1,4 +1,5 @@
 import type { Cents } from './money.js';
+import { getShopLocale } from './shop-locale.js';
 import type { UUID } from './ids.js';
 
 export interface Shift {
@@ -86,6 +87,16 @@ export const CASH_VARIANCE_MATCHED_UNDER_CENTS = 100;
 
 /** The words for a matched drawer's paisa: 'Paisa difference Rs 0.50'. */
 export const CASH_PAISA_DIFFERENCE_LABEL = 'Paisa difference';
+
+/**
+ * The label for a difference under one unit, in the shop's own word for the
+ * small money: "Paisa difference" in Pakistan — CASH_PAISA_DIFFERENCE_LABEL
+ * exactly — and "Cents difference" in the US.
+ */
+export function cashMinorDifferenceLabel(): string {
+  const minor = getShopLocale().words.minor;
+  return `${minor.charAt(0).toUpperCase()}${minor.slice(1)} difference`;
+}
 
 /**
  * The one rule for how a close's variance (counted − expected) reads, on

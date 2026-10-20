@@ -41,10 +41,12 @@ export const NOTE_COUNTER_NOTE_DIGITS = 4;
 export const NOTE_COUNTER_OTHER_DIGITS = 5;
 
 /**
- * 'Coins and other' at or above this (Rs 1,000) gets a reminder to count the
- * notes in their own rows. It never stops the close.
+ * 'Coins and other' at or above this gets a reminder to count the notes in
+ * their own rows (Rs 1,000 in Pakistan, $100 in the US). It never stops the close.
  */
-export const NOTE_COUNTER_OTHER_LARGE_CENTS = 100_000;
+export function noteCounterOtherLargeCents(): number {
+  return getShopLocale().coinsReminderCents;
+}
 
 export interface NoteCounterState {
   /** One entry per row, noteCounterRowCount() long: the digits typed, '' when none. */
@@ -161,5 +163,5 @@ export function noteCounterStarted(state: NoteCounterState): boolean {
 
 /** 'Coins and other' is Rs 1,000 or more (the reminder, never a block). */
 export function noteCounterOtherIsLarge(state: NoteCounterState): boolean {
-  return cellNumber(state.cells[noteCounterOtherRow()]) * 100 >= NOTE_COUNTER_OTHER_LARGE_CENTS;
+  return cellNumber(state.cells[noteCounterOtherRow()]) * 100 >= noteCounterOtherLargeCents();
 }

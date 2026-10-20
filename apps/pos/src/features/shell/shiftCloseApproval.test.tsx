@@ -53,7 +53,7 @@ import {
   CASHIER_CANNOT_CLOSE,
   CLOSE_HINT_CHECK_FAILED,
   CLOSE_HINT_CHECKING,
-  CLOSE_HINT_COINS_LARGE,
+  closeHintCoinsLarge,
   CLOSE_HINT_NOT_STARTED,
   CLOSE_HINT_REASON,
   CLOSE_SHIFT_DESCRIPTION,
@@ -795,7 +795,7 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
     expect(CLOSE_HINT_NOT_STARTED).toBe('Type a count in at least one row (0 if the drawer is empty).');
     expect(CLOSE_HINT_CHECKING).toBe('Checking the orders on this till…');
     expect(CLOSE_HINT_REASON).toBe('Give a reason for the unpaid orders (below the count).');
-    expect(CLOSE_HINT_COINS_LARGE).toBe('Rs 1,000 or more in coins and other: count the notes in their own rows.');
+    expect(closeHintCoinsLarge()).toBe('Rs 1,000 or more in coins and other: count the notes in their own rows.');
     const all = { failed: false, started: true, checked: true, reasonMissing: false, otherIsLarge: false };
     expect(closeShiftHint({ ...all, started: false, checked: false, reasonMissing: true, otherIsLarge: true })).toEqual({
       text: CLOSE_HINT_NOT_STARTED,
@@ -803,7 +803,7 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
     });
     expect(closeShiftHint({ ...all, checked: false, reasonMissing: true, otherIsLarge: true })).toEqual({ text: CLOSE_HINT_CHECKING, amber: false });
     expect(closeShiftHint({ ...all, reasonMissing: true, otherIsLarge: true })).toEqual({ text: CLOSE_HINT_REASON, amber: false });
-    expect(closeShiftHint({ ...all, otherIsLarge: true })).toEqual({ text: CLOSE_HINT_COINS_LARGE, amber: true });
+    expect(closeShiftHint({ ...all, otherIsLarge: true })).toEqual({ text: closeHintCoinsLarge(), amber: true });
     expect(closeShiftHint(all)).toBeNull();
 
     // On screen: nothing typed yet, so it says so beside a Close shift that waits.

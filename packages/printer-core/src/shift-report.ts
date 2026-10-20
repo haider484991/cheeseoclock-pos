@@ -69,7 +69,8 @@
  * through toPrinterAscii ('—' prints '-', '×' prints 'x').
  */
 import {
-  CASH_PAISA_DIFFERENCE_LABEL,
+  cashMinorDifferenceLabel,
+  getShopLocale,
   SHIFT_REPORT_SECTIONS,
   cashPaisaDifferenceCents,
   cashVarianceVerdict,
@@ -528,7 +529,9 @@ function appendCounted(p: Paper, r: ShiftReport): void {
   const notes = d.countedNotes;
   if (notes) {
     const rows = notes.notes.filter((n) => n.count > 0).sort((a, z) => z.faceCents - a.faceCents);
-    for (const n of rows) row(p, `Rs ${paperRupees(n.faceCents)} x ${n.count}`, money(n.faceCents * n.count));
+    // "Rs 5,000 x 12": the shop's paper symbol (ASCII), as the receipt prints it.
+    const sym = `${getShopLocale().paperSymbol}${getShopLocale().paperSymbolSeparator}`;
+    for (const n of rows) row(p, `${sym}${paperRupees(n.faceCents)} x ${n.count}`, money(n.faceCents * n.count));
     if (notes.otherCents > 0) row(p, 'Coins and other', money(notes.otherCents));
   }
   strongRow(p, 'COUNTED', money(d.countedCents));
@@ -538,7 +541,10 @@ function appendCounted(p: Paper, r: ShiftReport): void {
   row(p, verdict === 'short' ? 'SHORT' : verdict === 'over' ? 'OVER' : 'MATCHES EXPECTED', paperSignedMoney(v));
   p.b.doubleHeight(false).bold(false);
   const paisa = cashPaisaDifferenceCents(v);
-  if (paisa !== null) row(p, `${CASH_PAISA_DIFFERENCE_LABEL} Rs ${money(paisa)}`);
+  if (paisa !== null) {
+    const sym = `${getShopLocale().paperSymbol}${getShopLocale().paperSymbolSeparator}`;
+    row(p, `${cashMinorDifferenceLabel()} ${sym}${money(paisa)}`);
+  }
 }
 
 /**

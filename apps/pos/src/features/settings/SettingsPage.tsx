@@ -296,12 +296,14 @@ export function SettingsOverview({ onSelect }: { onSelect: (tab: SettingsTab) =>
     else fbrTile = { label: 'Live', tone: 'good' };
   }
 
-  const tiles: Array<{ title: string; tile: Tile; tab: SettingsTab }> = [
+  const allTiles: Array<{ title: string; tile: Tile; tab: SettingsTab }> = [
     { title: 'Printer', tile: printerTile, tab: 'printer' },
     { title: 'Online orders', tile: onlineTile, tab: 'online' },
     { title: 'Backups', tile: backupTile, tab: 'backups' },
     { title: 'FBR invoicing', tile: fbrTile, tab: 'fbr' },
-  ].filter((t) => shopIsInPakistan() || t.tab !== 'fbr');
+  ];
+  // FBR invoicing is Pakistan's: no tile for it on a till abroad.
+  const tiles = allTiles.filter((t) => shopIsInPakistan() || t.tab !== 'fbr');
 
   return (
     <div className="grid grid-cols-2 gap-2 md:grid-cols-4" aria-label="Setup status">

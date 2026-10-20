@@ -98,6 +98,11 @@ export interface ShopLocale {
    * screen names them under that row: "Rs 5, 2, 1 coins" in Pakistan.
    */
   readonly coinsLabel: string;
+  /**
+   * 'Coins and other' at or above this gets a reminder to count the notes in
+   * their own rows (never a block): Rs 1,000 in Pakistan, $100 in the US.
+   */
+  readonly coinsReminderCents: number;
   /** The notes a customer is likely to hand over, for the one-tap cash buttons. */
   readonly quickCashFacesCents: readonly number[];
   /** The ways this shop can be paid. Never includes platform-settled methods. */
@@ -139,6 +144,7 @@ export const DEFAULT_SHOP_LOCALE: ShopLocale = Object.freeze({
   phoneE164Rule: '+92 and ten digits',
   cashFacesCents: Object.freeze([500_000, 100_000, 50_000, 10_000, 5_000, 2_000, 1_000]),
   coinsLabel: 'Rs 5, 2, 1 coins',
+  coinsReminderCents: 100_000,
   quickCashFacesCents: Object.freeze([10_000, 50_000, 100_000, 500_000]),
   tenders: Object.freeze<PaymentMethod[]>(['cash', 'card', 'easypaisa', 'jazzcash', 'bank_transfer']),
   words: Object.freeze({ major: 'rupees', minor: 'paisa' }),
@@ -180,6 +186,7 @@ export const US_SHOP_LOCALE: ShopLocale = Object.freeze({
   // $100, $50, $20, $10, $5, $1 — no cent rows: a drawer is counted in notes.
   cashFacesCents: Object.freeze([10_000, 5_000, 2_000, 1_000, 500, 100]),
   coinsLabel: 'Quarters, dimes, nickels and pennies',
+  coinsReminderCents: 10_000,
   quickCashFacesCents: Object.freeze([1_000, 2_000, 5_000, 10_000]),
   tenders: Object.freeze<PaymentMethod[]>(['cash', 'card']),
   words: Object.freeze({ major: 'dollars', minor: 'cents' }),

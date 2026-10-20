@@ -19,7 +19,8 @@
  * both read this one function.
  */
 import type { PaymentMethod } from '@cheeseoclock/shared-types';
-import { formatNumber } from './money.js';
+import { formatCents, formatNumber } from './money.js';
+import { getShopLocale } from '@cheeseoclock/shared-types';
 
 /** The ways of paying the card rate is for: everything but cash (and foodpanda, which settles its own orders). */
 export const DIGITAL_PAYMENT_METHODS: ReadonlyArray<PaymentMethod> = Object.freeze(['card', 'easypaisa', 'jazzcash', 'bank_transfer']);
@@ -60,6 +61,16 @@ function rupees(cents: number): string {
 }
 
 /**
+ * An amount in a refusal, as these always read on a Pakistani till ("Rs 540",
+ * "Rs 641.1") — built from the locale, which gives the very same characters —
+ * and as the shop writes money elsewhere ("$540.00").
+ */
+function amount(cents: number): string {
+  const l = getShopLocale();
+  return l.country === 'PK' ? `${l.symbol}${l.symbolSeparator}${rupees(cents)}` : formatCents(cents);
+}
+
+/**
  * The sale with `digitalCents` of the bill on a card / wallet / bank (the
  * sum of those legs; 0 = all cash). Whole paisa in, whole paisa out: the
  * cash part is rounded to the paisa once, the card part's tax is what is
@@ -72,14 +83,14 @@ export function splitTender(quote: TenderQuote, digitalCents: number): SplitTend
   const cardTotal = quote.digitalTotalCents ?? total;
   const net = quote.netCents;
   if (!Number.isInteger(digitalCents) || digitalCents < 0) {
-    return { ok: false, reason: 'The card amount must be whole paisa, not below zero' };
+    return { ok: false, reason: `The card amount must be whole ${getShopLocale().words.minor}, not below zero` };
   }
   if (digitalCents > cardTotal) {
     return {
       ok: false,
       reason: hasCardRate
-        ? `Rs ${rupees(digitalCents)} on the card is more than the bill by card (Rs ${rupees(cardTotal)})`
-        : `Rs ${rupees(digitalCents)} on the card is more than the bill (Rs ${rupees(total)})`,
+        ? `${amount(digitalCents)} on the card is more than the bill by card (${amount(cardTotal)})`
+        : `${amount(digitalCents)} on the card is more than the bill (${amount(total)})`,
     };
   }
   // Nothing can go on a card against a Rs 0 bill by card: all of it is cash (Rs 0 of it, usually).

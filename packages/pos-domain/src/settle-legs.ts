@@ -28,7 +28,8 @@ import {
   type RatedPaymentMethod,
 } from '@cheeseoclock/shared-types';
 import { splitTender, type SplitTenderOutcome } from './split-tender.js';
-import { formatNumber } from './money.js';
+import { formatCents, formatNumber } from './money.js';
+import { getShopLocale } from '@cheeseoclock/shared-types';
 
 /**
  * An order's bill as Pay settles it: by each way of paying, and what the tax
@@ -49,6 +50,16 @@ export interface SettleLeg {
 
 function rupees(cents: number): string {
   return formatNumber(cents / 100, { minFractionDigits: 0, maxFractionDigits: 2 });
+}
+
+/**
+ * An amount in a refusal, as these always read on a Pakistani till ("Rs 540",
+ * "Rs 641.1") — built from the locale, which gives the very same characters —
+ * and as the shop writes money elsewhere ("$540.00").
+ */
+function amount(cents: number): string {
+  const l = getShopLocale();
+  return l.country === 'PK' ? `${l.symbol}${l.symbolSeparator}${rupees(cents)}` : formatCents(cents);
 }
 
 /** "card", "JazzCash", "bank transfer": a way of paying in a sentence. */
@@ -98,7 +109,7 @@ function roundDiv(n: bigint, d: bigint): bigint {
 export function settleLegs(quote: MethodQuote, legs: ReadonlyArray<SettleLeg>): SplitTenderOutcome {
   for (const leg of legs) {
     if (!Number.isInteger(leg.amountCents) || leg.amountCents < 0) {
-      return { ok: false, reason: 'Each payment must be whole paisa, not below zero' };
+      return { ok: false, reason: `Each payment must be whole ${getShopLocale().words.minor}, not below zero` };
     }
   }
   const groups = groupsOf(quote, legs).filter((g) => g.amountCents > 0);
@@ -116,7 +127,7 @@ export function settleLegs(quote: MethodQuote, legs: ReadonlyArray<SettleLeg>): 
     const what = g.methods.map(methodWords).join(' / ');
     if (g.billCents <= 0) return { ok: false, reason: `Nothing of this bill can be paid by ${what}` };
     if (g.amountCents > g.billCents) {
-      return { ok: false, reason: `Rs ${rupees(g.amountCents)} by ${what} is more than the bill by ${what} (Rs ${rupees(g.billCents)})` };
+      return { ok: false, reason: `${amount(g.amountCents)} by ${what} is more than the bill by ${what} (${amount(g.billCents)})` };
     }
   }
   const total = BigInt(quote.totalCents);
@@ -124,7 +135,7 @@ export function settleLegs(quote: MethodQuote, legs: ReadonlyArray<SettleLeg>): 
   const all = groups.reduce((p, g) => p * BigInt(g.billCents), 1n);
   const left = groups.reduce((rest, g) => rest - (BigInt(g.amountCents) * all) / BigInt(g.billCents), all);
   if (left < 0n) {
-    const paid = groups.map((g) => `Rs ${rupees(g.amountCents)} by ${g.methods.map(methodWords).join(' / ')}`).join(' and ');
+    const paid = groups.map((g) => `${amount(g.amountCents)} by ${g.methods.map(methodWords).join(' / ')}`).join(' and ');
     return { ok: false, reason: `${paid} come to more than the bill` };
   }
   const cashDueCents = Number(roundDiv(total * left, all));

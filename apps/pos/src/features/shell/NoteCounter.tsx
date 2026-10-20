@@ -180,7 +180,7 @@ export function NoteCounter({
                   cell === '' ? 'text-stone-300 dark:text-stone-600' : 'text-stone-900 dark:text-stone-100',
                 )}
               >
-                {other ? `Rs ${cell === '' ? '0' : cell}` : cell === '' ? '0' : cell}
+                {other ? `${getShopLocale().symbol}${getShopLocale().symbolSeparator}${cell === '' ? '0' : cell}` : cell === '' ? '0' : cell}
               </span>
               <span className="w-3 shrink-0 text-center text-stone-400" aria-hidden="true">
                 =

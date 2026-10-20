@@ -6,6 +6,7 @@ import {
   type Cents,
 } from '@cheeseoclock/shared-types';
 import { formatCents } from './money.js';
+import { getShopLocale } from '@cheeseoclock/shared-types';
 
 export type DiscountType = 'percent' | 'flat';
 
@@ -120,7 +121,7 @@ export function approvalRuleText(limits: ApprovalLimits, of: ApprovalRuleBasis =
         ? 'the food and delivery charge (value deals not counted)'
         : `the ${of}`;
   if (limits.flatOverCents === 0) {
-    return `Up to ${p}% off${of === 'order' ? '' : ` ${what}`} without a manager. More, or any amount off in rupees, needs a manager's PIN or password.`;
+    return `Up to ${p}% off${of === 'order' ? '' : ` ${what}`} without a manager. More, or any amount off in ${getShopLocale().words.major}, needs a manager's PIN or password.`;
   }
   return `Up to ${p}% off, or up to ${formatCents(limits.flatOverCents)} off if that is no more than ${p}% of ${what}, without a manager. More needs a manager's PIN or password.`;
 }
