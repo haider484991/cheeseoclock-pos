@@ -1,7 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
-import { SHOP_NAME_MAX, SHOP_TAGLINE_MAX, type SecretKind } from '@cheeseoclock/shared-types';
+import {
+  SHOP_NAME_MAX,
+  SHOP_TAGLINE_MAX,
+  US_TIME_ZONES,
+  resolveShopLocale,
+  setShopLocale,
+  type SecretKind,
+} from '@cheeseoclock/shared-types';
 import { checkedNewShop } from '@cheeseoclock/shared-schemas';
 import { normalizeSecret } from '@cheeseoclock/shared-schemas/sign-in-secret';
 import { ipc } from '../../ipc/client';
@@ -14,7 +21,16 @@ import { WebsiteStep } from './WebsiteStep';
 import { startingWebsiteForm, websiteAnswers, withBusinessDetails, type WebsiteForm } from './websiteStepForm';
 import { LogoPicker } from '../settings/LogoPicker';
 import { startingTaxRows } from '../menu-mgmt/taxForm';
-import { APP_NAME } from '../../edition';
+import { APP_NAME, EDITION } from '../../edition';
+import {
+  COUNTRY_LABELS,
+  SETUP_EXAMPLES,
+  STARTING_US_ZONE,
+  US_ZONE_LABELS,
+  startingTaxRowsFor,
+  storedLocaleFor,
+  type SetupCountry,
+} from './setupCountry';
 import {
   Store,
   Globe,
@@ -60,6 +76,17 @@ export function OnboardingPage({ onComplete }: Props) {
   const [step, setStep] = useState(0);
   const [restoring, setRestoring] = useState(false);
 
+  // Where the shop is: asked on a Pixel & Oak till only (Cheese O'Clock's is
+  // Pakistan). The screens follow the choice at once — the Website step reads
+  // phone numbers, and the tax rows show money, in the shop's own country.
+  const choosesCountry = EDITION.id === 'pixelandoak';
+  const [country, setCountry] = useState<SetupCountry>('PK');
+  const [usZone, setUsZone] = useState<string>(STARTING_US_ZONE);
+  const ex = SETUP_EXAMPLES[country];
+  useEffect(() => {
+    if (choosesCountry) setShopLocale(resolveShopLocale(storedLocaleFor(country, usZone)));
+  }, [choosesCountry, country, usZone]);
+
   // Step 1
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [storeName, setStoreName] = useState('');
@@ -82,6 +109,20 @@ export function OnboardingPage({ onComplete }: Props) {
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
 
+  /** A new country: starting values follow it; anything the owner already typed stays. */
+  function pickCountry(next: SetupCountry) {
+    if (next === country) return;
+    if (JSON.stringify(taxRows) === JSON.stringify(startingTaxRowsFor(country))) setTaxRows(startingTaxRowsFor(next));
+    if (next === 'US') {
+      // The built-in city and the Karachi areas are Pakistan's; a US shop types its own city.
+      if (deliveryCity.trim() === 'Karachi') setDeliveryCity('');
+      setDeliveryAreas('none');
+    } else if (deliveryCity.trim() === '') {
+      setDeliveryCity('Karachi');
+    }
+    setCountry(next);
+  }
+
   // The same check the main process makes before it writes anything (the keys' own rules).
   const website = checkedNewShop(storeName, storeTagline, websiteAnswers(web));
 
@@ -99,6 +140,8 @@ export function OnboardingPage({ onComplete }: Props) {
         ...(logoUrl ? { logoUrl } : {}),
         taxCategories: taxRows.filter((r) => r.name.trim()),
         admin: { fullName: adminName.trim(), pin: normalizeSecret(pin) },
+        // The shop's country (a Pixel & Oak till); none sent = Pakistan, as Cheese O'Clock's setup always was.
+        ...(choosesCountry ? { shopLocale: { country, timeZone: storedLocaleFor(country, usZone).timeZone } } : {}),
       }),
     onSuccess: () => {
       toast({
@@ -118,7 +161,12 @@ export function OnboardingPage({ onComplete }: Props) {
   });
 
   const steps: Array<{ title: string; icon: typeof Store; complete: boolean }> = [
-    { title: 'Business', icon: Store, complete: storeName.trim().length > 0 },
+    {
+      title: 'Business',
+      icon: Store,
+      // A US shop names its own city: the built-in one is Karachi.
+      complete: storeName.trim().length > 0 && (country !== 'US' || deliveryCity.trim().length > 0),
+    },
     { title: 'Website', icon: Globe, complete: website.problem === null },
     { title: 'Tax', icon: Receipt, complete: taxRows.some((r) => r.name.trim()) },
     {
@@ -221,6 +269,46 @@ export function OnboardingPage({ onComplete }: Props) {
                 Replacing a PC or recovering after a crash? Restore from a backup instead →
               </button>
 
+              {choosesCountry && (
+                <div className="space-y-1">
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Where is the shop? *" htmlFor="onboarding-country">
+                      <select
+                        id="onboarding-country"
+                        data-testid="onboarding-country"
+                        value={country}
+                        onChange={(e) => pickCountry(e.target.value as SetupCountry)}
+                        className="w-full rounded-xl border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
+                      >
+                        <option value="PK">{COUNTRY_LABELS.PK}</option>
+                        <option value="US">{COUNTRY_LABELS.US}</option>
+                      </select>
+                    </Field>
+                    {country === 'US' && (
+                      <Field label="Time zone *" htmlFor="onboarding-zone">
+                        <select
+                          id="onboarding-zone"
+                          data-testid="onboarding-zone"
+                          value={usZone}
+                          onChange={(e) => setUsZone(e.target.value)}
+                          className="w-full rounded-xl border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
+                        >
+                          {US_TIME_ZONES.map((z) => (
+                            <option key={z} value={z}>
+                              {US_ZONE_LABELS[z]}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-stone-500">
+                    Sets the money, the receipts, the drawer&apos;s notes and how phone numbers are read. It
+                    can&apos;t be changed once the till has taken an order.
+                  </p>
+                </div>
+              )}
+
               <div>
                 <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
                   Logo (optional)
@@ -234,7 +322,7 @@ export function OnboardingPage({ onComplete }: Props) {
                   value={storeName}
                   autoFocus
                   onChange={(e) => setStoreName(e.target.value)}
-                  placeholder="e.g. Karachi Grill House"
+                  placeholder={ex.businessName}
                   // The website's name for the shop too ('shop.profile': at most 40 letters).
                   maxLength={SHOP_NAME_MAX}
                   className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-base dark:border-stone-700 dark:bg-stone-800"
@@ -246,7 +334,7 @@ export function OnboardingPage({ onComplete }: Props) {
                   type="text"
                   value={storeTagline}
                   onChange={(e) => setStoreTagline(e.target.value)}
-                  placeholder="e.g. Pakistani Pizza · Cafe"
+                  placeholder={ex.tagline}
                   maxLength={SHOP_TAGLINE_MAX}
                   className="w-full rounded-xl border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
                 />
@@ -258,7 +346,7 @@ export function OnboardingPage({ onComplete }: Props) {
                     type="tel"
                     value={phoneLine}
                     onChange={(e) => setPhoneLine(e.target.value)}
-                    placeholder="+92 51 1234 5678"
+                    placeholder={ex.receiptPhone}
                     className="w-full rounded-xl border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
                   />
                 </Field>
@@ -267,7 +355,7 @@ export function OnboardingPage({ onComplete }: Props) {
                     type="text"
                     value={branchLine}
                     onChange={(e) => setBranchLine(e.target.value)}
-                    placeholder="F-10 Markaz, Islamabad"
+                    placeholder={ex.branch}
                     className="w-full rounded-xl border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
                   />
                 </Field>
@@ -278,7 +366,7 @@ export function OnboardingPage({ onComplete }: Props) {
                   type="text"
                   value={websiteLine}
                   onChange={(e) => setWebsiteLine(e.target.value)}
-                  placeholder="yourshop.pk"
+                  placeholder={ex.websiteLine}
                   maxLength={60}
                   className="w-full rounded-xl border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
                 />
@@ -301,7 +389,9 @@ export function OnboardingPage({ onComplete }: Props) {
                     className="w-full rounded-xl border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
                   >
                     <option value="none">None yet — add them in Settings → Delivery areas</option>
-                    <option value="karachi-dha-clifton">Karachi: DHA Phases 1–8 & Clifton Blocks 1–9 (Rs 200/250)</option>
+                    {country === 'PK' && (
+                      <option value="karachi-dha-clifton">Karachi: DHA Phases 1–8 & Clifton Blocks 1–9 (Rs 200/250)</option>
+                    )}
                   </select>
                 </Field>
               </div>
@@ -309,16 +399,18 @@ export function OnboardingPage({ onComplete }: Props) {
           )}
 
           {step === 1 && (
-            <WebsiteStep form={web} problem={website.problem} onChange={(patch) => setWeb((f) => ({ ...f, ...patch }))} />
+            <WebsiteStep
+              form={web}
+              problem={website.problem}
+              examples={ex}
+              onChange={(patch) => setWeb((f) => ({ ...f, ...patch }))}
+            />
           )}
 
           {step === 2 && (
             <div className="space-y-4">
               <h2 className="text-lg font-bold">Set up sales tax</h2>
-              <p className="text-xs text-stone-500">
-                Categories you'll assign per menu item. Pakistani defaults are pre-filled — change them
-                to match your registration.
-              </p>
+              <p className="text-xs text-stone-500">{ex.taxHelp}</p>
 
               <div className="space-y-2">
                 {taxRows.map((row, i) => (

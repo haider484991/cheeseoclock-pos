@@ -11,6 +11,7 @@ import {
 import { OPENING_TIMES, closesLabel, closingTimes, timeLabel } from '../settings/shop-rules/websiteShopForm';
 import { Field } from './Field';
 import { withDay, type WebsiteForm } from './websiteStepForm';
+import { SETUP_EXAMPLES, type SetupExamples } from './setupCountry';
 
 const DAY_LABEL: Record<ShopDay, string> = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
 const inputClass = 'w-full rounded-xl border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800';
@@ -26,10 +27,13 @@ export function WebsiteStep({
   form,
   problem,
   onChange,
+  examples = SETUP_EXAMPLES.PK,
 }: {
   form: WebsiteForm;
   problem: string | null;
   onChange: (patch: Partial<WebsiteForm>) => void;
+  /** The placeholders for the shop's country (setupCountry.ts); Pakistan's when not given. */
+  examples?: SetupExamples;
 }) {
   const closes = closingTimes(form.opens);
   return (
@@ -47,7 +51,7 @@ export function WebsiteStep({
             type="tel"
             value={form.phone}
             onChange={(e) => onChange({ phone: e.target.value })}
-            placeholder="0300 1234567"
+            placeholder={examples.websitePhone}
             maxLength={SHOP_PHONE_DISPLAY_MAX}
             className={cn(inputClass, 'font-mono')}
           />
@@ -71,7 +75,7 @@ export function WebsiteStep({
           type="text"
           value={form.street}
           onChange={(e) => onChange({ street: e.target.value })}
-          placeholder="e.g. Shop 2, Main Road, Block 6"
+          placeholder={examples.street}
           maxLength={SHOP_STREET_MAX}
           className={inputClass}
         />
@@ -84,7 +88,7 @@ export function WebsiteStep({
             type="text"
             value={form.areaLine}
             onChange={(e) => onChange({ areaLine: e.target.value })}
-            placeholder="e.g. Gulshan-e-Iqbal, Karachi"
+            placeholder={examples.areaLine}
             maxLength={SHOP_AREA_LINE_MAX}
             className={inputClass}
           />
@@ -107,7 +111,7 @@ export function WebsiteStep({
             type="text"
             value={form.priceRange}
             onChange={(e) => onChange({ priceRange: e.target.value })}
-            placeholder="e.g. PKR 300–1,500"
+            placeholder={examples.priceRange}
             maxLength={PRICE_RANGE_MAX}
             className={inputClass}
           />
