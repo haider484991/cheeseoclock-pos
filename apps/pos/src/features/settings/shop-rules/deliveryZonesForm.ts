@@ -174,8 +174,11 @@ export function zonesExample(
   return `Picking ${z.name} on a delivery order puts “${deliveryChargeItemName(z.feeCents)}” on the bill by itself, and the website charges the same ${formatCents(z.feeCents)}. A discount comes off it only when Money & discounts → “A discount also comes off the delivery charge” is Yes.`;
 }
 
-export const ZONES_SAVE_NOTE =
-  'Save also makes the “Delivery Charge (Rs …)” items the fees need (they are not listed in Menu: this card and “Tax on the delivery charge” look after them) and sends the website the areas and those charge items only. Menu changes you have not published stay on the till until you press Publish. An area is switched off, never removed: its website page stays and says delivery is paused.';
+/** Under the areas: what Save does. The charge items are named in the shop's money. */
+export function zonesSaveNote(): string {
+  const l = getShopLocale();
+  return `Save also makes the “Delivery Charge (${l.symbol}${l.symbolSeparator}…)” items the fees need (they are not listed in Menu: this card and “Tax on the delivery charge” look after them) and sends the website the areas and those charge items only. Menu changes you have not published stay on the till until you press Publish. An area is switched off, never removed: its website page stays and says delivery is paused.`;
+}
 
 /** The message after the areas are saved. */
 export const ZONES_SAVED_TOAST =

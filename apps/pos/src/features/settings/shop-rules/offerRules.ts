@@ -1,4 +1,4 @@
-import { getShopLocale } from '@cheeseoclock/shared-types';
+import { getShopLocale, shopIsInPakistan } from '@cheeseoclock/shared-types';
 /**
  * Settings → Money & discounts → "Automatic offers" ('discounts.offers'):
  * what is typed ↔ what is saved, and the card's words. The main process
@@ -336,9 +336,13 @@ export function offerExample(o: ChannelOffer, alsoOffDeliveryCharge: boolean, na
   return `${order}: ${offerAmountWords(o)} takes ${formatCents(off)} off${alsoOffDeliveryCharge && charge ? ' the bill' : ' the food'}.${tail}`;
 }
 
-/** The rules every offer follows, as the card says them. */
-export const OFFER_RULES_NOTE = [
-  'The till puts the biggest offer that fits on a counter order by itself — never on a website or foodpanda order. An offer on some categories goes on beside it: their items take that offer, the rest of the food the whole-menu one, never both on one item, and each prints on its own line. A cashier’s discount (F3) replaces them all with the usual manager rule, and removing that brings the offers back.',
-  'Phone and WhatsApp offers need the customer’s phone on the order. How the order came in is locked when it is sent: changing it after needs a manager’s PIN or password, and the till keeps a record.',
-  'The offer’s name prints on the bill. An order keeps the terms it got; a change here is for orders started from then on. Reports list offers under Standing offers, and Team & leakage flags a cashier with far more Phone or WhatsApp orders, or offer rupees, than the shop.',
-] as const;
+/** The rules every offer follows, as the card says them: in the shop's money, and
+ * foodpanda only where the till takes it (Pakistan). */
+export function offerRulesNote(): readonly string[] {
+  const l = getShopLocale();
+  return [
+    `The till puts the biggest offer that fits on a counter order by itself — never on a website${shopIsInPakistan(l) ? ' or foodpanda' : ''} order. An offer on some categories goes on beside it: their items take that offer, the rest of the food the whole-menu one, never both on one item, and each prints on its own line. A cashier’s discount (F3) replaces them all with the usual manager rule, and removing that brings the offers back.`,
+    'Phone and WhatsApp offers need the customer’s phone on the order. How the order came in is locked when it is sent: changing it after needs a manager’s PIN or password, and the till keeps a record.',
+    `The offer’s name prints on the bill. An order keeps the terms it got; a change here is for orders started from then on. Reports list offers under Standing offers, and Team & leakage flags a cashier with far more Phone or WhatsApp orders, or offer ${l.words.major}, than the shop.`,
+  ];
+}

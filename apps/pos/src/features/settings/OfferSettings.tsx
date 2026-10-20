@@ -47,7 +47,6 @@ import { sameValue } from './shop-rules/foodpandaForm';
 import {
   ALL_DAYS,
   DAY_SHORT,
-  OFFER_RULES_NOTE,
   newOfferForm,
   offerExample,
   offerSummary,
@@ -57,6 +56,7 @@ import {
   formWithOfferSwitched,
   withOfferSwitched,
   type OfferForm,
+  offerRulesNote,
 } from './shop-rules/offerRules';
 
 const inputClass =
@@ -156,7 +156,7 @@ function OffersFields({ s }: { s: ReturnType<typeof useShopSetting<'discounts.of
               {offerExample(example, alsoOff, names)}
             </p>
           )}
-          {OFFER_RULES_NOTE.map((n) => (
+          {offerRulesNote().map((n) => (
             <p key={n} className="text-xs">
               {n}
             </p>

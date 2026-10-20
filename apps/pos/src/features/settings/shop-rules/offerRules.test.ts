@@ -1,14 +1,20 @@
-import { describe, expect, it } from 'vitest';
-import { DEFAULT_DISCOUNT_OFFERS, type ChannelOffer } from '@cheeseoclock/shared-types';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  DEFAULT_DISCOUNT_OFFERS,
+  US_SHOP_LOCALE,
+  resetShopLocale,
+  setShopLocale,
+  type ChannelOffer,
+} from '@cheeseoclock/shared-types';
 import { discountOffersSchema } from '@cheeseoclock/shared-schemas';
 import {
-  OFFER_RULES_NOTE,
   categoryWords,
   dayWords,
   hourWords,
   newOfferForm,
   newOfferId,
   offerExample,
+  offerRulesNote,
   offerSummary,
   offersFromForm,
   offersSummary,
@@ -117,7 +123,7 @@ describe('the words', () => {
     expect(offerExample(offer({ cameBy: 'any', orderTypes: ['takeaway'], type: 'flat', value: 30_000 }), false)).toBe(
       'A takeaway, Rs 2,000 of food: Rs 300 off takes Rs 300 off the food.',
     );
-    expect(OFFER_RULES_NOTE.join(' ')).toMatch(/never on a website or foodpanda order/);
+    expect(offerRulesNote().join(' ')).toMatch(/never on a website or foodpanda order/);
   });
 });
 
@@ -215,5 +221,17 @@ describe('an offer on some categories', () => {
     expect(offerExample(pizzas, false, NAMES)).toBe(
       'A delivery with Rs 2,000 of Regular Pizzas: 20% off takes Rs 400 off them, on its own line of the bill. The rest of the food takes your whole-menu offer, if one fits — never both on one item.',
     );
+  });
+});
+
+describe('the rules card in the shop’s money', () => {
+  afterEach(resetShopLocale);
+  it('Pakistan as ever; a US till says dollars and never names foodpanda', () => {
+    expect(offerRulesNote().join(' ')).toMatch(/or offer rupees, than the shop/);
+    setShopLocale(US_SHOP_LOCALE);
+    const us = offerRulesNote().join(' ');
+    expect(us).toMatch(/never on a website order\. /);
+    expect(us).toMatch(/or offer dollars, than the shop/);
+    expect(us).not.toMatch(/foodpanda|rupee|\bRs\b/i);
   });
 });

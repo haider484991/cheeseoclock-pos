@@ -1,10 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { DEFAULT_DELIVERY_ZONES } from '@cheeseoclock/shared-types';
+import { afterEach, describe, expect, it } from 'vitest';
+import { DEFAULT_DELIVERY_ZONES, US_SHOP_LOCALE, resetShopLocale, setShopLocale } from '@cheeseoclock/shared-types';
 import {
   PICKUP_CATEGORIES_NOTE,
   PICKUP_INTRO,
   ZONES_SAVED_TOAST,
-  ZONES_SAVE_NOTE,
   moveZoneRow,
   newZoneRow,
   categoryPercentsExample,
@@ -17,6 +16,7 @@ import {
   zonesFromForm,
   zonesExample,
   zonesSummary,
+  zonesSaveNote,
   zonesToForm,
 } from './deliveryZonesForm';
 
@@ -167,12 +167,12 @@ describe('Settings → Online orders: where the areas stand with the website', (
 
 describe('what a Save says about the website: the areas go ALONE, never the menu', () => {
   it('the areas’ Save note, the saved message and the pick-up card never say the menu goes with them', () => {
-    for (const t of [ZONES_SAVE_NOTE, ZONES_SAVED_TOAST, PICKUP_INTRO]) {
+    for (const t of [zonesSaveNote(), ZONES_SAVED_TOAST, PICKUP_INTRO]) {
       expect(t).toEqual(expect.any(String));
       expect(t).not.toMatch(/with the menu|menu changes not published yet go/i);
     }
     // And they say what stays on the till.
-    expect(ZONES_SAVE_NOTE).toMatch(/Menu changes you have not published stay on the till/);
+    expect(zonesSaveNote()).toMatch(/Menu changes you have not published stay on the till/);
     expect(ZONES_SAVED_TOAST).toMatch(/not the rest of the menu/);
     expect(PICKUP_INTRO).toMatch(/by itself when saved/);
   });
@@ -186,5 +186,15 @@ describe('the worked example under Delivery areas', () => {
     expect(text).toContain(
       'A discount comes off it only when Money & discounts → “A discount also comes off the delivery charge” is Yes.',
     );
+  });
+});
+
+describe('the Save note names the charge items in the shop’s money', () => {
+  afterEach(resetShopLocale);
+  it('“Rs …” in Pakistan, as ever; “$…” on a US till, and no rupees', () => {
+    expect(zonesSaveNote()).toContain('“Delivery Charge (Rs …)”');
+    setShopLocale(US_SHOP_LOCALE);
+    expect(zonesSaveNote()).toContain('“Delivery Charge ($…)”');
+    expect(zonesSaveNote()).not.toMatch(/\bRs\b|rupee/i);
   });
 });

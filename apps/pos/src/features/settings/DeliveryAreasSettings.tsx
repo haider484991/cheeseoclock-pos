@@ -34,7 +34,6 @@ import {
 } from './shop-rules/useShopSetting';
 import {
   ZONES_SAVED_TOAST,
-  ZONES_SAVE_NOTE,
   moveZoneRow,
   newZoneRow,
   setFeeFor,
@@ -43,6 +42,7 @@ import {
   zonesSummary,
   zonesToForm,
   type ZoneRow,
+  zonesSaveNote,
 } from './shop-rules/deliveryZonesForm';
 
 const inputClass =
@@ -143,7 +143,7 @@ function ZonesCard({ card }: { card: ShopSettingCard<'delivery.zones'> }) {
             <span className="font-semibold">For example: </span>
             {zonesExample(shown)}
           </p>
-          <p className="text-xs">{ZONES_SAVE_NOTE}</p>
+          <p className="text-xs">{zonesSaveNote()}</p>
         </div>
       }
     >
