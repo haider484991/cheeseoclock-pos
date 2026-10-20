@@ -20,7 +20,6 @@ import { BUSINESS_SETTING_READ_SCHEMAS } from '@cheeseoclock/shared-schemas';
 import { shopSettingDefault } from '@cheeseoclock/shared-types';
 import {
   NEW_SHOP_KEYS,
-  SHOP_SETTING_DEFAULTS,
   SHOP_SETTING_FORMAT,
   type ShopSettingKey,
   type ShopSettingValues,

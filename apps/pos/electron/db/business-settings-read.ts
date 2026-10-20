@@ -36,7 +36,6 @@ import {
   DEFAULT_WEBSITE_HOME,
   DEFAULT_STOCK_RULES,
   DEFAULT_WEBSITE_PICKUP,
-  SHOP_SETTING_DEFAULTS,
   deliveryZoneFeeItemIds,
   type ApprovalLimits,
   type Buy1Get1Rules,
