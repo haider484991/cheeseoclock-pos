@@ -1229,7 +1229,9 @@ function pctText(bps: number): string {
 /** "Tax (16%)" when every line carries the same rate, otherwise "Tax". */
 function taxLabel(snapshot: OrderSnapshot): string {
   const bps = oneRateOf(snapshot.items.map((it) => it.taxRateBps));
-  return bps === null ? 'Tax' : `Tax (${pctText(bps)}%)`;
+  // The shop's own word for it: "Tax" in Pakistan, as ever; "Sales tax" in the US.
+  const word = getShopLocale().taxLabel;
+  return bps === null ? word : `${word} (${pctText(bps)}%)`;
 }
 
 /**

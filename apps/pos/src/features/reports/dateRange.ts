@@ -13,6 +13,12 @@
  * cuts the day in the right place.
  */
 import { pickStockTakePair as pickPair, type StockTakeRef } from '@cheeseoclock/pos-domain';
+import {
+  getShopLocale,
+  shopTradingDayIndex,
+  shopTradingDayStartOfIndex,
+  shopWallClock,
+} from '@cheeseoclock/shared-types';
 
 export type RangePreset =
   | 'today'
@@ -61,13 +67,15 @@ export interface ReportPeriod extends DateRange {
 
 // ------------------------------------------------------------ day numbers --
 
-/** The trading day an instant falls in, as a day number (days since 1970-01-01). */
+/** The trading day an instant falls in, as a day number (days since 1970-01-01), on the shop's clock. */
 function dayNumberOf(ms: number): number {
+  if (getShopLocale().country !== 'PK') return shopTradingDayIndex(ms);
   return Math.floor((ms - DAY_START_OFFSET_MS) / DAY_MS);
 }
 
-/** The instant a trading day starts (05:00 Pakistan time). */
+/** The instant a trading day starts: 05:00 at the shop (Pakistan time on a Pakistani till). */
 function dayStartMs(dayNumber: number): number {
+  if (getShopLocale().country !== 'PK') return shopTradingDayStartOfIndex(dayNumber);
   return dayNumber * DAY_MS + DAY_START_OFFSET_MS;
 }
 
@@ -140,7 +148,11 @@ export function fmtDay(ymd: string, withYear = true): string {
   const n = dayNumberFromYmd(ymd);
   if (n === null) return ymd;
   const d = new Date(n * DAY_MS);
-  const text = `${WEEKDAYS[weekdayIndex(n)]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
+  // The month first where the shop writes it first ("Sat Sep 26"); the day first in Pakistan, as ever.
+  const text =
+    getShopLocale().dateOrder === 'mdy'
+      ? `${WEEKDAYS[weekdayIndex(n)]} ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`
+      : `${WEEKDAYS[weekdayIndex(n)]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
   return withYear ? `${text} ${d.getUTCFullYear()}` : text;
 }
 
@@ -321,10 +333,20 @@ export function periodFor(
   };
 }
 
-/** "Mon 21 Sep 2026, 10:15" in Pakistan time (a stock take's finish). */
+/** "Mon 21 Sep 2026, 10:15" in the shop's time (a stock take's finish); Pakistan time on a Pakistani till. */
 export function fmtMoment(iso: string): string {
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return iso;
+  const locale = getShopLocale();
+  if (locale.country !== 'PK') {
+    const w = shopWallClock(ms);
+    const ymd = `${w.y}-${String(w.m).padStart(2, '0')}-${String(w.d).padStart(2, '0')}`;
+    const clock =
+      locale.hourCycle === 'h12'
+        ? `${w.h % 12 === 0 ? 12 : w.h % 12}:${String(w.mi).padStart(2, '0')} ${w.h < 12 ? 'AM' : 'PM'}`
+        : `${String(w.h).padStart(2, '0')}:${String(w.mi).padStart(2, '0')}`;
+    return `${fmtDay(ymd)}, ${clock}`;
+  }
   const pk = new Date(ms + PKT_OFFSET_HOURS * HOUR_MS);
   const hh = String(pk.getUTCHours()).padStart(2, '0');
   const mm = String(pk.getUTCMinutes()).padStart(2, '0');

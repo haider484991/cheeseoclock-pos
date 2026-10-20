@@ -10,6 +10,7 @@ import type {
   PaymentMethod,
 } from '@cheeseoclock/shared-types';
 import { formatNumber } from '@cheeseoclock/pos-domain';
+import { getShopLocale, shopTradingDayIndex, shopTradingDayStartOfIndex } from '@cheeseoclock/shared-types';
 
 export const HISTORY_PAGE_SIZE = 50;
 
@@ -73,11 +74,13 @@ const DAY_START_HOUR_PKT = 5;
 /** Where a trading day starts relative to 00:00 UTC (0 for 05:00 PKT). */
 const DAY_START_OFFSET_MS = DAY_START_HOUR_PKT * 3_600_000 - PKT_OFFSET_MS;
 
-/** The trading day an instant falls in, as a whole number of days. */
+/** The trading day an instant falls in, as a whole number of days, on the shop's clock. */
 export function tradingDayOf(ms: number): number {
+  if (getShopLocale().country !== 'PK') return shopTradingDayIndex(ms);
   return Math.floor((ms - DAY_START_OFFSET_MS) / DAY_MS);
 }
 function dayStartIso(day: number): string {
+  if (getShopLocale().country !== 'PK') return new Date(shopTradingDayStartOfIndex(day)).toISOString();
   return new Date(day * DAY_MS + DAY_START_OFFSET_MS).toISOString();
 }
 /** "2026-09-26" (a date input's value) → its trading day, or null. */
@@ -153,12 +156,32 @@ const DAY_FMT = new Intl.DateTimeFormat('en-GB', {
   month: 'short',
 });
 
+/**
+ * The two formatters for a shop outside Pakistan, in its own zone and words
+ * ("Thu, Sep 24, 9:15 PM"). Built the first time they are asked for, not at
+ * import: this module loads before the till has read which shop it is.
+ */
+const abroadFormats = new Map<string, { time: Intl.DateTimeFormat; day: Intl.DateTimeFormat }>();
+function formatsAbroad(): { time: Intl.DateTimeFormat; day: Intl.DateTimeFormat } {
+  const { timeZone, numberLocale } = getShopLocale();
+  let f = abroadFormats.get(timeZone);
+  if (!f) {
+    f = {
+      time: new Intl.DateTimeFormat(numberLocale, { timeZone, hour: 'numeric', minute: '2-digit', hour12: true }),
+      day: new Intl.DateTimeFormat(numberLocale, { timeZone, weekday: 'short', day: 'numeric', month: 'short' }),
+    };
+    abroadFormats.set(timeZone, f);
+  }
+  return f;
+}
+
 export function orderTimeLabel(iso: string, now: Date = new Date()): string {
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return '';
-  const time = TIME_FMT.format(ms);
+  const abroad = getShopLocale().country !== 'PK' ? formatsAbroad() : null;
+  const time = (abroad?.time ?? TIME_FMT).format(ms);
   if (tradingDayOf(ms) === tradingDayOf(now.getTime())) return time;
-  return `${DAY_FMT.format(ms)}, ${time}`;
+  return `${(abroad?.day ?? DAY_FMT).format(ms)}, ${time}`;
 }
 
 /** Status in cashier words. Paid-in-advance orders still on the board say so. */

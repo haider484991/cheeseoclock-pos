@@ -23,6 +23,7 @@ import {
   REFUSED_ITEM_REFUND_OWED_SQL,
 } from '../order-history-query.js';
 import { kitchenHearsOfClose } from '@cheeseoclock/pos-domain';
+import { shopTradingDay } from '@cheeseoclock/shared-types';
 import {
   activeFoodpandaDeal,
   computeDiscountCents,
@@ -561,11 +562,15 @@ function assertMethodFitsOrder(mode: OrderMode, method: PaymentMethod, what: 'pa
   );
 }
 
+/**
+ * The next order number: the trading day and a count within it
+ * ("20261020-0007"). The day is the shop's own (shop-clock.ts), so a US till
+ * keeps counting through the evening instead of starting again at #0001 when
+ * the UTC date turns over at 7 or 8 pm. A Pakistani till's trading day is the
+ * UTC date, so its numbers are exactly what they were.
+ */
 function nextOrderNumber(db: AppDatabase): string {
-  const today = new Date();
-  const ymd = `${today.getUTCFullYear()}${String(today.getUTCMonth() + 1).padStart(2, '0')}${String(
-    today.getUTCDate(),
-  ).padStart(2, '0')}`;
+  const ymd = shopTradingDay(Date.now()).replace(/-/g, '');
   const existing = db
     .prepare(`SELECT next_value FROM order_number_counter WHERE day_ymd = ?`)
     .get(ymd) as { next_value: number } | undefined;

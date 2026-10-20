@@ -9,6 +9,7 @@
  */
 import type { ReportChannel, ReportPaymentGroup } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../../db/connection.js';
+import { getShopLocale, shopHourOf, shopTradingDay } from '@cheeseoclock/shared-types';
 
 /** Pakistan is UTC+5 all year (no daylight saving). */
 export const PKT_OFFSET_MS = 5 * 3_600_000;
@@ -42,13 +43,15 @@ export function channelOf(mode: string, source: string): ReportChannel {
   return 'online';
 }
 
-/** The trading day (YYYY-MM-DD) an instant belongs to. */
+/** The trading day (YYYY-MM-DD) an instant belongs to, on the shop's clock (shop-clock.ts). */
 export function tradingDayOf(iso: string): string {
+  if (getShopLocale().country !== 'PK') return shopTradingDay(Date.parse(iso));
   return new Date(Date.parse(iso) - TRADING_DAY_OFFSET_MS).toISOString().slice(0, 10);
 }
 
-/** The Pakistan clock hour (0–23) of an instant. */
+/** The clock hour (0–23) of an instant at the shop; Pakistan's (UTC+5) on a Pakistani till. */
 export function pakistanHourOf(iso: string): number {
+  if (getShopLocale().country !== 'PK') return shopHourOf(Date.parse(iso));
   return new Date(Date.parse(iso) + PKT_OFFSET_MS).getUTCHours();
 }
 

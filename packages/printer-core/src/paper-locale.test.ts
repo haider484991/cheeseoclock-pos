@@ -13,14 +13,13 @@ import {
   resetShopLocale,
 } from '@cheeseoclock/shared-types';
 import { goldenCases } from './receipt-goldens.fixture.js';
+import { decodeEscPos, escPosToText } from './escpos-decode.js';
 
 afterEach(resetShopLocale);
 
-/** The plain text of a paper, with the ESC/POS control bytes dropped. */
+/** The plain text of a paper, as the mock printer writes it (escpos-decode.ts). */
 function textOf(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : b === 0x0a ? '\n' : ''))
-    .join('');
+  return escPosToText(bytes);
 }
 
 /** A real receipt from the goldens — a paper the till actually prints. */
@@ -45,6 +44,13 @@ describe('the symbol on the paper comes from the shop', () => {
     expect(text).not.toContain('Rs ');
   });
 
+  it('names the tax in the shop’s words: "Tax" in Pakistan, "Sales tax" in the US', () => {
+    expect(receiptText()).toContain('Tax (16%)');
+    expect(receiptText()).not.toContain('Sales tax (16%)');
+    setShopLocale(US_SHOP_LOCALE);
+    expect(receiptText()).toContain('Sales tax (16%)');
+  });
+
   it('goes back to Rs when the locale is reset', () => {
     setShopLocale(US_SHOP_LOCALE);
     receiptText();
@@ -56,6 +62,33 @@ describe('the symbol on the paper comes from the shop', () => {
     for (const locale of [DEFAULT_SHOP_LOCALE, US_SHOP_LOCALE]) {
       // The printer's code page is ASCII; anything else comes out as '?'.
       expect(/^[\x20-\x7e]*$/.test(locale.paperSymbol + locale.paperSymbolSeparator)).toBe(true);
+    }
+  });
+});
+
+describe('the time on paper is the shop’s own', () => {
+  it('prints New York time, month first, on a 12-hour clock', async () => {
+    const { paperDateTime, paperDayMonthClock, paperClock } = await import('@cheeseoclock/shared-types');
+    setShopLocale(US_SHOP_LOCALE);
+    // 00:35 UTC on the 21st is 20:35 on the 20th in New York (EDT).
+    expect(paperDateTime('2026-10-21T00:35:00.000Z')).toBe('10/20/2026 8:35 PM');
+    expect(paperDayMonthClock('2026-10-21T00:35:00.000Z')).toBe('10/20 8:35 PM');
+    expect(paperClock('2026-10-20T16:05:00.000Z')).toBe('12:05 PM');
+    expect(paperClock('2026-10-20T04:00:00.000Z')).toBe('12:00 AM');
+    // Winter: EST is UTC-5.
+    expect(paperDateTime('2026-01-15T17:00:00.000Z')).toBe('01/15/2026 12:00 PM');
+    expect(paperDateTime('not a date')).toBe('');
+  });
+
+  it('keeps every line of every golden paper inside the paper on a US till', () => {
+    setShopLocale(US_SHOP_LOCALE);
+    for (const paper of goldenCases()) {
+      const width = paper.name.endsWith('/32') ? 32 : 48;
+      for (const { text, scale } of decodeEscPos(paper.render((b) => b))) {
+        if (text.startsWith('[')) continue; // [cut], [QR], [logo …], [drawer …]: not printed text
+        const columns = text.length * scale; // double-width text takes two columns a letter
+        if (columns > width) throw new Error(`${paper.name}: "${text}" takes ${columns} columns on ${width}-column paper`);
+      }
     }
   });
 });

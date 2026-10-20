@@ -27,6 +27,7 @@ export * from './customer.js';
 export * from './shift.js';
 export * from './shop-locale.js';
 export * from './money-format.js';
+export * from './shop-clock.js';
 export * from './shift-report.js';
 export * from './printer.js';
 export * from './paper-time.js';

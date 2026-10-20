@@ -10,7 +10,13 @@
  * Pakistan time, which is exactly 00:00 UTC: an instant's trading day is its
  * UTC date, and a trading day's number is floor(ms ÷ one day).
  */
-import { daypartHours, type Daypart, type ReportDaypartLine, type ReportHeatCell, type ReportHeatmap, type TrendChange } from '@cheeseoclock/shared-types';
+import {
+  getShopLocale,
+  shopHourOf,
+  shopTradingDayIndex,
+  shopTradingDayStartOf,
+  daypartHours,
+  type Daypart, type ReportDaypartLine, type ReportHeatCell, type ReportHeatmap, type TrendChange } from '@cheeseoclock/shared-types';
 import { mulDivRound } from './units.js';
 
 export const DAY_MS = 86_400_000;
@@ -24,14 +30,22 @@ export interface TimeWindow {
   untilMs: number;
 }
 
-/** The trading day an instant falls in, as a day number (days since 1970-01-01). */
+/**
+ * The trading day an instant falls in, as a day number (days since
+ * 1970-01-01), on the shop's clock (shared-types shop-clock.ts). Pakistan:
+ * Math.floor(ms / DAY_MS), exactly as before.
+ */
 export function tradingDayOfMs(ms: number): number {
-  return Math.floor(ms / DAY_MS);
+  return shopTradingDayIndex(ms);
 }
 
-/** The instant a trading day starts (05:00 Pakistan time = 00:00 UTC). */
+/**
+ * The instant a trading day starts: 05:00 on the shop's wall clock. Pakistan:
+ * dayNumber × DAY_MS (05:00 Pakistan time = 00:00 UTC), exactly as before.
+ */
 export function tradingDayStartMs(dayNumber: number): number {
-  return dayNumber * DAY_MS;
+  if (getShopLocale().country === 'PK') return dayNumber * DAY_MS;
+  return shopTradingDayStartOf(new Date(dayNumber * DAY_MS).toISOString().slice(0, 10));
 }
 
 /** 0 = Monday … 6 = Sunday (1970-01-01 was a Thursday). */
@@ -39,8 +53,12 @@ export function weekdayOfDay(dayNumber: number): number {
   return (((dayNumber + 3) % 7) + 7) % 7;
 }
 
-/** The Pakistan clock hour (0–23) of an instant. */
+/**
+ * The clock hour (0–23) of an instant at the shop. The name is from when every
+ * till was in Pakistan; on a Pakistani till it is still UTC+5, the same maths.
+ */
 export function pakistanHourOfMs(ms: number): number {
+  if (getShopLocale().country !== 'PK') return shopHourOf(ms);
   return Math.floor((((ms + PKT_OFFSET_MS) % DAY_MS) + DAY_MS) % DAY_MS / HOUR_MS);
 }
 

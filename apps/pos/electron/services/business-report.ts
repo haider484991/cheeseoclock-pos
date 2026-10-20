@@ -34,7 +34,7 @@ import type {
   OrderItemCostStatus,
   ReportTabFigures,
 } from '@cheeseoclock/shared-types';
-import { isDeliveryChargeMenuItem, NO_DISCOUNT_REASON_LABEL } from '@cheeseoclock/shared-types';
+import { isDeliveryChargeMenuItem, NO_DISCOUNT_REASON_LABEL, shopTradingDayStart } from '@cheeseoclock/shared-types';
 import {
   emptyFoodCostTally,
   type FoodCostTally,
@@ -92,15 +92,13 @@ import {
   COUNTED,
   DAY_MS,
   IN_RANGE,
-  PKT_OFFSET_MS,
   REFUNDED,
-  TRADING_DAY_OFFSET_MS,
   channelOf,
   pakistanHourOf,
   paymentGroup,
   tradingDayOf,
 } from './analytics/sql.js';
-import { formatNumber } from '@cheeseoclock/pos-domain';
+import { formatNumber, pakistanHourOfMs, tradingDayOfMs } from '@cheeseoclock/pos-domain';
 
 /**
  * The Reports page's figures, a builder per tab (costing spec Phase 3; see
@@ -392,8 +390,8 @@ export function aggregateSales(
     if (r.refunded > 0) totals.partialRefundOrderCount += 1;
 
     const at = Date.parse(r.createdAt);
-    tally(days, Math.floor((at - TRADING_DAY_OFFSET_MS) / DAY_MS), net);
-    tally(hours, Math.floor((((at + PKT_OFFSET_MS) % DAY_MS) + DAY_MS) % DAY_MS / 3_600_000), net);
+    tally(days, tradingDayOfMs(at), net);
+    tally(hours, pakistanHourOfMs(at), net);
     tally(channels, channelOf(r.mode, r.source), net);
 
     // Website orders are booked under whichever manager the bridge ran as;
@@ -2319,7 +2317,7 @@ export function getFoodCost(db: AppDatabase, range: ReportRange, now = new Date(
   const waste = getWaste(db, range, pricing);
   const sentNotPaid = foodOfOrders(db, unpaidOrderIds(db, range, ['served', 'delivered']), pricing);
   // Before today's trading day started: a board order from then is stale.
-  const todayStarts = new Date(Math.floor((now.getTime() - TRADING_DAY_OFFSET_MS) / DAY_MS) * DAY_MS + TRADING_DAY_OFFSET_MS).toISOString();
+  const todayStarts = new Date(shopTradingDayStart(now.getTime())).toISOString();
   const stillOpen = foodOfOrders(db, unpaidOrderIds(db, range, IN_PROGRESS, todayStarts), pricing);
 
   const missing = [...t.missing.values()].sort((a, b) => b.salesCents - a.salesCents || a.name.localeCompare(b.name));

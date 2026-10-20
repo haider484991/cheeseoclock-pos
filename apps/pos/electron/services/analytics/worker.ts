@@ -29,6 +29,8 @@ import { warmOwnerWeek } from './owner-week.js';
 import { keepEstimates, ordersWithoutCost, warmEstimates } from '../business-report.js';
 import { warmLatestVariance } from './stock-control.js';
 import { DAY_MS } from './sql.js';
+import { applyShopLocale } from '../shop-locale.js';
+import { shopTradingDayIndex, shopTradingDayStartOf } from '@cheeseoclock/shared-types';
 import {
   isWorkerData,
   type AnalyticsWorkerData,
@@ -197,6 +199,11 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
     port.postMessage({ type: 'startFailed', reason: e instanceof Error ? e.message : String(e) } satisfies WorkerReply);
     return;
   }
+  // This thread has its own copy of every module, so it reads the shop's country
+  // itself: on a US till, Reports group by the shop's trading day and hour, not
+  // Pakistan's. Read again before every ask — on a fresh till this thread starts
+  // before first-time setup has stored the country.
+  applyShopLocale(conn.db);
   // Orders from before costing started are estimated from their stock rows: keep each estimate between asks
   // (Profit, Channels, Food cost & stock and the trends read the same orders), dropped when its rows or any price change.
   keepEstimates(conn.db);
@@ -204,7 +211,7 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
   /** The second-till link as the main process last said it is (off, as the shop runs, until told). */
   let link: TillLinkState = { on: false, stale: false, lastHeardAt: null };
   // The Dashboard card's "Do this" reads four weeks of order lines once a trading day (owner-week.ts): read
-  // them as the worker starts and again just after each trading day begins (05:00 Pakistan time = 00:00 UTC),
+  // them as the worker starts and again just after each trading day begins (05:00 at the shop: 00:00 UTC in Pakistan),
   // between asks, so the first tap of the day does not wait for them. Never keeps the thread alive.
   let warmTimer: ReturnType<typeof setTimeout> | null = null;
   // The last year's estimates, a step at a time between asks (ESTIMATE_WARM_*). Never keeps the thread alive.
@@ -230,6 +237,7 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
   };
   const warm = () => {
     if (closed) return;
+    applyShopLocale(conn.db);
     try {
       warmOwnerWeek(conn.db, new Date(), link);
     } catch {
@@ -237,7 +245,9 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
     }
     warmEstimatesLater();
     const now = Date.now();
-    warmTimer = setTimeout(warm, (Math.floor(now / DAY_MS) + 1) * DAY_MS + 1_000 - now);
+    // Pakistan: (Math.floor(now / DAY_MS) + 1) × DAY_MS, the next 00:00 UTC, as before.
+    const nextDay = new Date((shopTradingDayIndex(now) + 1) * DAY_MS).toISOString().slice(0, 10);
+    warmTimer = setTimeout(warm, shopTradingDayStartOf(nextDay) + 1_000 - now);
     warmTimer.unref?.();
   };
   port.on('message', (msg: WorkerRequest) => {
@@ -258,6 +268,7 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
       port.close();
       return;
     }
+    applyShopLocale(conn.db);
     if (msg?.type === 'warm') {
       // A stock take was just finished: the card's latest comparison, worked out now (no answer).
       link = msg.link;

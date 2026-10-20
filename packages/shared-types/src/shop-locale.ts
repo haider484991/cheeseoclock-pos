@@ -73,6 +73,8 @@ export interface ShopLocale {
   /** IANA zone, e.g. 'Asia/Karachi', 'America/New_York'. */
   readonly timeZone: string;
   readonly dateOrder: DateOrder;
+  /** The clock on paper and screens: 24-hour (19:35) or 12-hour (7:35 PM). */
+  readonly hourCycle: 'h23' | 'h12';
   /**
    * The hour the trading day rolls over, in the shop's own clock. Cheese
    * O'Clock closes after midnight, so its day starts at 05:00 and a 2 a.m.
@@ -128,6 +130,7 @@ export const DEFAULT_SHOP_LOCALE: ShopLocale = Object.freeze({
   receiptTitle: 'RECEIPT',
   timeZone: 'Asia/Karachi',
   dateOrder: 'dmy',
+  hourCycle: 'h23',
   tradingDayStartHour: 5,
   phoneCountry: 'PK',
   countryName: 'Pakistan',
@@ -167,6 +170,7 @@ export const US_SHOP_LOCALE: ShopLocale = Object.freeze({
   // Set per shop at onboarding; this is only the preset's starting point.
   timeZone: 'America/New_York',
   dateOrder: 'mdy',
+  hourCycle: 'h12',
   tradingDayStartHour: 5,
   phoneCountry: 'US',
   countryName: 'the US',
