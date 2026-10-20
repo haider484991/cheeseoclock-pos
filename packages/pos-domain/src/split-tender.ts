@@ -19,6 +19,7 @@
  * both read this one function.
  */
 import type { PaymentMethod } from '@cheeseoclock/shared-types';
+import { formatNumber } from './money.js';
 
 /** The ways of paying the card rate is for: everything but cash (and foodpanda, which settles its own orders). */
 export const DIGITAL_PAYMENT_METHODS: ReadonlyArray<PaymentMethod> = Object.freeze(['card', 'easypaisa', 'jazzcash', 'bank_transfer']);
@@ -55,7 +56,7 @@ export interface SplitTender {
 export type SplitTenderOutcome = ({ ok: true } & SplitTender) | { ok: false; reason: string };
 
 function rupees(cents: number): string {
-  return (cents / 100).toLocaleString('en-PK', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  return formatNumber(cents / 100, { minFractionDigits: 0, maxFractionDigits: 2 });
 }
 
 /**

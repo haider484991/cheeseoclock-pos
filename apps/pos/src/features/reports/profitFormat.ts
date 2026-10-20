@@ -15,6 +15,7 @@ import {
 } from '@cheeseoclock/shared-types';
 import { formatBps } from '../costing/costingFormat';
 import { andList } from '../settings/shop-rules/foodpandaWords';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 export const PROFIT_STEP_LABEL: Record<ProfitStepKey, string> = {
   sales: 'Sales before tax',
@@ -163,5 +164,5 @@ export function menuMapAdvice(d: Pick<MenuMapItem, 'class' | 'belowAverageCents'
 
 /** Units a week from tenths: 125 → "12.5 a week". */
 export function perWeekUnits(tenths: number): string {
-  return `${new Intl.NumberFormat('en-PK', { maximumFractionDigits: 1 }).format(tenths / 10)} a week`;
+  return `${formatNumber(tenths / 10, { maxFractionDigits: 1 })} a week`;
 }

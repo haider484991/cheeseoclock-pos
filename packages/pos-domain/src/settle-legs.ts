@@ -28,6 +28,7 @@ import {
   type RatedPaymentMethod,
 } from '@cheeseoclock/shared-types';
 import { splitTender, type SplitTenderOutcome } from './split-tender.js';
+import { formatNumber } from './money.js';
 
 /**
  * An order's bill as Pay settles it: by each way of paying, and what the tax
@@ -47,7 +48,7 @@ export interface SettleLeg {
 }
 
 function rupees(cents: number): string {
-  return (cents / 100).toLocaleString('en-PK', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  return formatNumber(cents / 100, { minFractionDigits: 0, maxFractionDigits: 2 });
 }
 
 /** "card", "JazzCash", "bank transfer": a way of paying in a sentence. */

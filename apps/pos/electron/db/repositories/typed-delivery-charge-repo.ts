@@ -4,6 +4,7 @@ import { writeAudit } from './audit-repo.js';
 import { addOrderItem, deliveryChargeLinesOf, findOrder, removeOrderItem } from './order-repo.js';
 import { deliveryChargeItemForTypedFee } from './delivery-zones-repo.js';
 import { DELIVERY_FEE_MAX_CENTS } from '@cheeseoclock/shared-types';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 /**
  * orders:setDeliveryCharge — a delivery charge the cashier types on the
@@ -43,7 +44,7 @@ export function setTypedDeliveryCharge(
     if (order.mode !== 'delivery') throw new Error('Only a delivery order has a delivery charge');
     if (!Number.isInteger(feeCents) || feeCents < 100 || feeCents > DELIVERY_FEE_MAX_CENTS || feeCents % 100 !== 0) {
       throw new Error(
-        `A delivery charge is in whole rupees, Rs 1 to Rs ${(DELIVERY_FEE_MAX_CENTS / 100).toLocaleString('en-PK')}`,
+        `A delivery charge is in whole rupees, Rs 1 to Rs ${formatNumber(DELIVERY_FEE_MAX_CENTS / 100)}`,
       );
     }
     const lines = deliveryChargeLinesOf(db, orderId);

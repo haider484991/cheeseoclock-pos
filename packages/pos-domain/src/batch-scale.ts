@@ -13,6 +13,7 @@
 
 import type { PriceKind } from '@cheeseoclock/shared-types';
 import { lineCostMc, mcToCents, mulDivRound, ratioRound, shareBps, unitCostMc, type Pack } from './units.js';
+import { formatNumber } from './money.js';
 
 export interface ScaleInput {
   inputId: string;
@@ -112,7 +113,7 @@ export function scaleBatch(batchYield: number, inputs: readonly ScaleInput[], am
 export function batchesText(amount: number, batchYield: number): string {
   const hundredths = mulDivRound(amount, 100, batchYield);
   if (hundredths === 0) return 'under 0.01 of a batch';
-  const n = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2 }).format(hundredths / 100);
+  const n = formatNumber(hundredths / 100, { maxFractionDigits: 2 });
   if (hundredths < 100) return `${n} of a batch`;
   return hundredths === 100 ? '1 batch' : `${n} batches`;
 }

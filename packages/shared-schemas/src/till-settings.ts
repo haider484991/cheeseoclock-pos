@@ -7,6 +7,7 @@ import {
   TILL_SETTING_KEYS,
 } from '@cheeseoclock/shared-types';
 import type { OpeningFloatSetting, PcPowerSetting, TillSettingKey, TillSettingValues } from '@cheeseoclock/shared-types';
+import { formatNumber } from '@cheeseoclock/shared-types';
 
 /**
  * The owner's settings that belong to one till (shared-types
@@ -54,7 +55,7 @@ export const openingFloatSchema = z
       .int({ message: 'The fixed float is in whole rupees' })
       .min(0, { message: "The fixed float can't be below Rs 0" })
       .max(OPENING_FLOAT_MAX_CENTS, {
-        message: `The fixed float is at most Rs ${(OPENING_FLOAT_MAX_CENTS / 100).toLocaleString('en-PK')}`,
+        message: `The fixed float is at most Rs ${formatNumber((OPENING_FLOAT_MAX_CENTS / 100))}`,
       })
       .refine((c) => c % 100 === 0, { message: 'The fixed float is in whole rupees' }),
   })

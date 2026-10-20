@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { uuidSchema, centsSchema } from './common.js';
 import { signInSecretSchema } from './auth.js';
 import { CHANGEABLE_PAYMENT_METHODS, DELIVERY_FEE_MAX_CENTS } from '@cheeseoclock/shared-types';
+import { formatNumber } from '@cheeseoclock/shared-types';
 
 export const orderModeSchema = z.enum(['dine_in', 'takeaway', 'delivery', 'online', 'foodpanda']);
 export const orderStatusSchema = z.enum([
@@ -51,7 +52,7 @@ export const setDeliveryChargeInputSchema = z
       .int({ message: 'A delivery charge is in whole rupees' })
       .min(100, { message: 'A delivery charge is at least Rs 1 (to take it off, use Take it off)' })
       .max(DELIVERY_FEE_MAX_CENTS, {
-        message: `A delivery charge is at most Rs ${(DELIVERY_FEE_MAX_CENTS / 100).toLocaleString('en-PK')}`,
+        message: `A delivery charge is at most Rs ${formatNumber((DELIVERY_FEE_MAX_CENTS / 100))}`,
       })
       .refine((c) => c % 100 === 0, { message: 'A delivery charge is in whole rupees' }),
   })

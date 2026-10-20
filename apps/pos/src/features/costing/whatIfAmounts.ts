@@ -7,6 +7,7 @@
  * plate the recipe editor's footer and the cost sheet show.
  */
 import { formatCents } from '@cheeseoclock/pos-domain';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 /** How much a − / + tap moves an amount: 10 g / ml on a big amount, 5 on a small one; 1 of anything counted. */
 export function amountStep(unit: string, qty: number): number {
@@ -32,7 +33,7 @@ export function bpsDiff(beforeBps: number | null, afterBps: number | null): stri
   if (beforeBps === null || afterBps === null) return null;
   const d = afterBps - beforeBps;
   if (d === 0) return 'no change';
-  const pts = new Intl.NumberFormat('en-PK', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(Math.abs(d) / 100);
+  const pts = formatNumber(Math.abs(d) / 100, { minFractionDigits: 1, maxFractionDigits: 1 });
   return `${d > 0 ? '+' : '−'}${pts} points`;
 }
 

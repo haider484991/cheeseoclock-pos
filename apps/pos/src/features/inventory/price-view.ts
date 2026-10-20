@@ -69,7 +69,7 @@ export function priceChange(prevUnitCostMc: number | null, unitCostMc: number, p
   const bps = priceChangeBps(prevUnitCostMc, unitCostMc);
   if (bps === null) return null;
   if (bps === 0) return { text: 'same', tone: 'same' };
-  const pct = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 1 }).format(Math.abs(bps) / 100);
+  const pct = formatNumber(Math.abs(bps) / 100, { maxFractionDigits: 1 });
   return bps > 0 ? { text: `▲ ${pct}%`, tone: 'up' } : { text: `▼ ${pct}%`, tone: 'down' };
 }
 

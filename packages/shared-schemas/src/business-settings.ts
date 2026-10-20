@@ -116,6 +116,7 @@ import type {
   ShopSettingKey,
   WhatIfRequest,
 } from '@cheeseoclock/shared-types';
+import { formatNumber } from '@cheeseoclock/shared-types';
 
 /**
  * Business settings (costing spec §3, migration 0032): shop-wide settings
@@ -287,7 +288,7 @@ const wholeRupees = (maxRupees: number, what: string) =>
     .number()
     .int({ message: `${what} is in whole rupees` })
     .min(0, { message: `${what} can't be below Rs 0` })
-    .max(maxRupees * 100, { message: `${what} is at most Rs ${maxRupees.toLocaleString('en-PK')}` })
+    .max(maxRupees * 100, { message: `${what} is at most Rs ${formatNumber(maxRupees)}` })
     .refine((c) => c % 100 === 0, { message: `${what} is in whole rupees` });
 
 const wholePercent = (what: string) =>
@@ -673,7 +674,7 @@ const offerRules = (
   if (o.type === 'flat' && !(o.value >= 100 && o.value <= OFFER_MAX_FLAT_CENTS && o.value % 100 === 0)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: `${which}whole rupees from Rs 1 to Rs ${(OFFER_MAX_FLAT_CENTS / 100).toLocaleString('en-PK')}`,
+      message: `${which}whole rupees from Rs 1 to Rs ${formatNumber((OFFER_MAX_FLAT_CENTS / 100))}`,
     });
   }
   if (o.startsOn && o.endsOn && o.endsOn < o.startsOn) {

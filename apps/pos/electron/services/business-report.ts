@@ -100,6 +100,7 @@ import {
   paymentGroup,
   tradingDayOf,
 } from './analytics/sql.js';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 /**
  * The Reports page's figures, a builder per tab (costing spec Phase 3; see
@@ -238,7 +239,7 @@ export function rollUpCategories(items: ReportItemLine[]): ReportCategoryLine[] 
 function discountEntered(type: string | null, value: number | null): string | null {
   if (type === null || value === null) return null;
   if (type === 'percent') return `${Number.isInteger(value) ? value : value.toFixed(1)}%`;
-  return `Rs ${new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2 }).format(value / 100)}`;
+  return `Rs ${formatNumber(value / 100, { maxFractionDigits: 2 })}`;
 }
 
 /** What a standing offer is called on Team & leakage, by its source. */

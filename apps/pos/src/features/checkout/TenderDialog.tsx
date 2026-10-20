@@ -14,6 +14,7 @@ import { foodpandaDealLine } from './foodpandaDealLine';
 import { offerOnOrder, payDiscountLabel, severalOffersOn } from './discountWords';
 import { foodpandaPayStep } from './tabletAtPay';
 import { billFor, billsLine, dependsOnWay, quoteOf, wayRateNote } from './billByWay';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 interface Props {
   snapshot: OrderSnapshot;
@@ -387,7 +388,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                     >
                       <div className="text-xs uppercase tracking-wider text-stone-500">On {splitSpec.label}</div>
                       <div className="font-mono text-2xl font-bold" data-testid="on-card">
-                        {onCard ? `Rs ${parseInt(onCard, 10).toLocaleString('en-PK')}` : '—'}
+                        {onCard ? `Rs ${formatNumber(parseInt(onCard, 10))}` : '—'}
                       </div>
                     </button>
                     <button
@@ -438,7 +439,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                             }}
                             className={cn('h-12 rounded-lg border-2 px-2 font-mono text-sm font-semibold', !exact && tendered === String(r) ? chosen : unchosen)}
                           >
-                            {r.toLocaleString('en-PK')}
+                            {formatNumber(r)}
                           </button>
                         ))}
                       </div>
@@ -497,7 +498,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                         }}
                         className={cn('h-12 rounded-lg border-2 px-2 font-mono text-sm font-semibold', !exact && tendered === String(r) ? chosen : unchosen)}
                       >
-                        {r.toLocaleString('en-PK')}
+                        {formatNumber(r)}
                       </button>
                     ))}
                   </div>

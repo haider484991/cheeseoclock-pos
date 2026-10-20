@@ -61,8 +61,8 @@ export const OFFER_FLAG_WORDS: Record<OfferFlag, string> = {
  * when a cashier is flagged (pos-domain offerFlags), from the values.
  */
 export function offerCheckNote(c: ReportOfferCheck): string {
-  const factor = (c.factorPct / 100).toLocaleString('en-PK', { maximumFractionDigits: 2 });
-  const share = `${(c.phoneShareBps / 100).toLocaleString('en-PK', { maximumFractionDigits: 1 })}%`;
+  const factor = formatNumber(c.factorPct / 100, { maxFractionDigits: 2 });
+  const share = `${formatNumber(c.phoneShareBps / 100, { maxFractionDigits: 1 })}%`;
   return (
     `Counter takeaways and deliveries where Walk-in, Phone or WhatsApp was tapped; orders nobody was asked about are left out. ` +
     `The shop this period: ${share} marked Phone or WhatsApp, ${formatCents(c.offerCentsPerOrder)} of offers an order. ` +
@@ -507,7 +507,7 @@ export function foodCostHeadline(f: Pick<ReportFoodCost, 'foodCostBps' | 'foodSa
 export function menuPriceLine(f: Pick<ReportFoodCost, 'foodCostBps' | 'menuFoodCostBps'>): string {
   if (f.foodCostBps === null || f.menuFoodCostBps === null || f.foodCostBps === f.menuFoodCostBps) return '';
   const diff = f.foodCostBps - f.menuFoodCostBps;
-  const points = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 1 }).format(Math.abs(diff) / 100);
+  const points = formatNumber(Math.abs(diff) / 100, { maxFractionDigits: 1 });
   const why = diff > 0 ? `discounts and refunds cost you ${points} point${points === '1' ? '' : 's'}` : `${points} point${points === '1' ? '' : 's'} lower`;
   return `At menu prices ${formatBps(f.menuFoodCostBps)} → after discounts ${formatBps(f.foodCostBps)} (${why})`;
 }

@@ -152,6 +152,7 @@ import type {
   OrderHistoryRow,
 } from '@cheeseoclock/shared-types';
 import { orderChoiceGroups, saleOpensDrawer, type DrawerOpensOn } from '@cheeseoclock/shared-types';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 interface OrderRow {
   id: string;
@@ -3659,7 +3660,7 @@ function cardRateSettlement(
   if (!split.ok) throw new Error(split.reason);
   const cash = sum - digital;
   if (cash !== split.cashDueCents) {
-    const rs = (cents: number) => (cents / 100).toLocaleString('en-PK', { maximumFractionDigits: 2 });
+    const rs = (cents: number) => formatNumber(cents / 100, { maxFractionDigits: 2 });
     if (digital === 0) throw new Error(`Payments (Rs ${sum / 100}) must equal the order total (Rs ${order.totalCents / 100})`);
     // The way paid other than cash, as the cashier reads it: "on the card", "by JazzCash".
     const ways = [...new Set(rated.map((p) => p.method))].filter(isRatedPaymentMethod);

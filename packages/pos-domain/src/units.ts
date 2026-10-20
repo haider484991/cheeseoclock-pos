@@ -85,10 +85,7 @@ export function formatUnitCost(i: {
 }): string {
   const fromPack = !!i.packSize && i.packSize > 0 && i.packPriceCents !== null;
   const rupees = fromPack ? i.packPriceCents! / i.packSize! / 100 : i.costPerUnitCents / 100;
-  const text = new Intl.NumberFormat('en-PK', {
-    minimumFractionDigits: rupees < 1 ? 2 : 0,
-    maximumFractionDigits: rupees < 1 ? 3 : 2,
-  }).format(rupees);
+  const text = formatNumber(rupees, { minFractionDigits: rupees < 1 ? 2 : 0, maxFractionDigits: rupees < 1 ? 3 : 2 });
   return `Rs ${text} / ${i.unit}`;
 }
 

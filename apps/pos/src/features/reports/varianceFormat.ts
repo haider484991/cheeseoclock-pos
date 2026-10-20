@@ -17,6 +17,7 @@ import {
 } from '@cheeseoclock/shared-types';
 import { formatBps } from '../costing/costingFormat';
 import { fmtMoment } from './dateRange';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 /** The rating, as the owner reads it: by default under 2% good, 2–3% OK, 3–5% needs work, over 5% look at it now. */
 export const VARIANCE_BAND_LABEL: Record<VarianceBand, string> = {
@@ -94,7 +95,7 @@ export function lineVerdict(l: Pick<VarianceLine, 'unexplained' | 'unit'>): stri
 
 /** Percentage points: 400 → "4 points", 100 → "1 point", 250 → "2.5 points". */
 export function pointsText(bps: number): string {
-  const n = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 1 }).format(bps / 100);
+  const n = formatNumber(bps / 100, { maxFractionDigits: 1 });
   return `${n} ${bps === 100 ? 'point' : 'points'}`;
 }
 

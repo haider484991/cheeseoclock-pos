@@ -13,6 +13,7 @@ import { DRAWER_NOT_OPENED_CODE, DRAWER_UNSURE_CODE } from '@cheeseoclock/shared
 import { failedPrintNote } from '../printing/failedPrintNote';
 import { noteShiftReportFailed } from './shiftCloseOutcome';
 import { printShiftReportAndSay } from './shiftReportPrint';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 export function AppShell() {
   const user = useSessionStore((s) => s.user);
@@ -115,7 +116,7 @@ export function AppShell() {
       toast({
         title: items.length === 1 ? `Running low: ${items[0]!.name}` : `Running low on ${items.length} items`,
         description: items
-          .map((i) => `${i.name}: ${Math.max(0, i.resultingQty).toLocaleString('en-PK')} ${i.unit} left`)
+          .map((i) => `${i.name}: ${formatNumber(Math.max(0, i.resultingQty))} ${i.unit} left`)
           .join(' · '),
         variant: 'warning',
         duration: 15_000,

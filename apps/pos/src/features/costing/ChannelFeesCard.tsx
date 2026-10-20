@@ -34,6 +34,7 @@ import { COSTING_KEY } from './costingQueries';
 import { parsePercent, parseRupees } from './costingFormat';
 import { openFoodpandaSettings } from './deepLinks';
 import { rupeesInput } from '../inventory/price-view';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 const FEES_KEY = [...COSTING_KEY, 'channelFees'] as const;
 
@@ -50,7 +51,7 @@ const RIDER_LABEL: Record<RiderCostMode, string> = {
  */
 export const OUTSIDE_RIDER_FEES_NOTE = 'Deliveries sent out with an outside rider: the delivery charge he kept counts, whatever is chosen here.';
 
-const pct = (bps: number) => new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2, useGrouping: false }).format(bps / 100);
+const pct = (bps: number) => formatNumber(bps / 100, { maxFractionDigits: 2, useGrouping: false });
 
 export function ChannelFeesCard({ canEdit }: { canEdit: boolean }) {
   const q = useQuery({ queryKey: FEES_KEY, queryFn: () => ipc.costing.getChannelFees(), staleTime: 0 });

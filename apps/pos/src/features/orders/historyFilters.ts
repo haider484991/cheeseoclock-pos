@@ -9,6 +9,7 @@ import type {
   OrderStatus,
   PaymentMethod,
 } from '@cheeseoclock/shared-types';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 export const HISTORY_PAGE_SIZE = 50;
 
@@ -131,7 +132,7 @@ export function shortOrderNumber(orderNumber: string): string {
 /** "Showing 51–100 of 1,234". */
 export function pageLabel(offset: number, shown: number, total: number): string {
   if (total === 0 || shown === 0) return 'No orders';
-  const n = (x: number) => x.toLocaleString('en-PK');
+  const n = (x: number) => formatNumber(x);
   return `Showing ${n(offset + 1)}–${n(offset + shown)} of ${n(total)}`;
 }
 

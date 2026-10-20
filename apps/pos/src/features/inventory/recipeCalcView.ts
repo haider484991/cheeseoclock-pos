@@ -26,6 +26,7 @@ import type {
 import { matchesSearch } from '../../components/list';
 import { searchMenu } from '../checkout/menuSearch';
 import { amountProblem, readAmount, splitSize, thousandUnit } from '../costing/costingFormat';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 /** Session memory: the lines being worked out (they survive a tab switch). */
 export const CALC_LINES_KEY = 'inv.calc.lines';
@@ -258,7 +259,7 @@ export type LineReading =
 export function readLine(line: CalcLine, picks: TypicalPicksView | undefined): LineReading {
   if (line.kind === 'item') {
     const count = readCount(line.countText);
-    if (count === null) return { ok: false, waiting: false, problem: `Type how many, 1 to ${MAX_CALC_COUNT.toLocaleString('en-PK')}.` };
+    if (count === null) return { ok: false, waiting: false, problem: `Type how many, 1 to ${formatNumber(MAX_CALC_COUNT)}.` };
     if (!picks) return { ok: false, waiting: true, problem: null };
     const portions = Object.entries(effectivePortions(line, picks, count))
       .filter(([, n]) => n > 0)
@@ -267,7 +268,7 @@ export function readLine(line: CalcLine, picks: TypicalPicksView | undefined): L
   }
   const reading = readAmount(line.text, line.inBig, line.unit);
   if (!reading.ok) return { ok: false, waiting: false, problem: amountProblem(reading, line.unit, line.inBig && !!thousandUnit(line.unit)) ?? 'Type an amount.' };
-  if (reading.amount > MAX_CALC_AMOUNT) return { ok: false, waiting: false, problem: `At most ${MAX_CALC_AMOUNT.toLocaleString('en-PK')} ${line.unit} at once.` };
+  if (reading.amount > MAX_CALC_AMOUNT) return { ok: false, waiting: false, problem: `At most ${formatNumber(MAX_CALC_AMOUNT)} ${line.unit} at once.` };
   return { ok: true, req: { kind: 'batch', ingredientId: line.ingredientId, amount: reading.amount } };
 }
 

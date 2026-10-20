@@ -66,6 +66,7 @@ import {
 import type { AppDatabase } from '../db/connection.js';
 import { loadPriceBook, priceOfBook } from '../db/price-book.js';
 import { loadItemPickMix, loadMenu, type MenuData } from './costing-service.js';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 /** An ingredient as the calculator reads it: its stock and its units, no price. */
 interface StockIngredient {
@@ -234,7 +235,7 @@ export function workOutRecipeCalc(db: AppDatabase, req: RecipeCalcRequest, book:
       if (!hit) throw new Error(`A choice asked for is not one of ${item.name}'s (the menu may have changed): pick the choices again`);
       if (counts.has(p.modifierId)) throw new Error(`"${hit.name}" is counted twice`);
       if (hit.leaveOut && p.count > 0) throw new Error(`"${hit.name}" is a leave-out: it only uses less, so the calculator does not count it`);
-      if (p.count > l.count) throw new Error(`"${hit.name}": at most ${l.count.toLocaleString('en-PK')} (one on each)`);
+      if (p.count > l.count) throw new Error(`"${hit.name}": at most ${formatNumber(l.count)} (one on each)`);
       counts.set(p.modifierId, p.count);
     }
     const portions = [...counts].filter(([, n]) => n > 0).map(([modifierId, count]) => ({ modifierId, count }));

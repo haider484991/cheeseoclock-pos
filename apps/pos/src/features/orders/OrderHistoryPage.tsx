@@ -33,6 +33,7 @@ import {
   shortOrderNumber,
   type HistoryDatePreset,
 } from './historyFilters';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 /**
  * Order History — every order that was actually placed (sent to the kitchen,
@@ -276,7 +277,7 @@ export function OrderHistoryPage() {
 
       {summary && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-          <SummaryTile label="Orders" value={summary.orderCount.toLocaleString('en-PK')} />
+          <SummaryTile label="Orders" value={formatNumber(summary.orderCount)} />
           <SummaryTile
             label="Sales (paid)"
             value={formatCents(summary.salesCents)}

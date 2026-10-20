@@ -27,6 +27,7 @@ import { initialPriceEntry, perChoices, type PricePer } from './price-view';
 import { billUnitText, lineCheck, lineWords, orderedPriceText, purchaseTotalText, readBill, readBoughtQty, readQty } from './purchase-view';
 import { PriceQuestion, RecordPurchaseDialog, type PayoutToConvert } from './RecordPurchaseDialog';
 import { PO_LIST_KEY, PO_RECENT_LIMIT, fetchPurchaseList } from './purchaseListQuery';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 const STATUS_LABEL: Record<PurchaseOrderStatus, string> = {
   draft: 'Draft',
@@ -302,7 +303,7 @@ export function PurchaseOrdersTab() {
       />
       {capped && (
         <p className="mt-2 text-xs text-stone-500">
-          Showing the newest {PO_RECENT_LIMIT.toLocaleString('en-PK')} purchases and every order still open. Reports has the spend for any
+          Showing the newest {formatNumber(PO_RECENT_LIMIT)} purchases and every order still open. Reports has the spend for any
           period.
         </p>
       )}

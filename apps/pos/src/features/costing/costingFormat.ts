@@ -9,7 +9,7 @@ import type { BatchCalc, CategoryTargetView, CostLineKind, FoodCostFlag, LeaveOu
 export function formatBps(bps: number | null | undefined): string {
   if (bps === null || bps === undefined) return '—';
   const pct = bps / 100;
-  return `${new Intl.NumberFormat('en-PK', { maximumFractionDigits: 1 }).format(pct)}%`;
+  return `${formatNumber(pct, { maxFractionDigits: 1 })}%`;
 }
 
 /** Millicents as rupees, rounded once to paisa. */
@@ -37,7 +37,7 @@ export function formatUnitPrice(unitCostMc: number | null, unit: string): string
 
 /** An exact amount in hundredths of a base unit: 1250 → "12.5 g". */
 export function formatHundredths(hundredths: number, unit: string): string {
-  const n = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2 }).format(hundredths / 100);
+  const n = formatNumber(hundredths / 100, { maxFractionDigits: 2 });
   return `${n} ${unit}`;
 }
 

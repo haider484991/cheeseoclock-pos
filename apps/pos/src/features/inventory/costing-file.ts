@@ -12,6 +12,7 @@ import { effectivePack, thousandSize, unitCostMc } from '@cheeseoclock/pos-domai
 import type { Ingredient } from '@cheeseoclock/shared-types';
 import { toCsv, type CsvCell } from '../reports/exporters';
 import { SOURCE_CHIP } from './price-view';
+import { formatNumber } from '@cheeseoclock/pos-domain';
 
 const KIND_WORD: Record<Ingredient['priceKind'], string> = {
   set: 'known',
@@ -49,7 +50,7 @@ function differenceText(till: number | null, sheet: number | null): string {
   if (till === null || sheet === null || sheet <= 0) return '';
   if (till === sheet) return 'same';
   const bps = Math.round(((till - sheet) * 10_000) / sheet);
-  const pct = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 1 }).format(Math.abs(bps) / 100);
+  const pct = formatNumber(Math.abs(bps) / 100, { maxFractionDigits: 1 });
   return `${pct}% ${bps > 0 ? 'dearer' : 'cheaper'}`;
 }
 

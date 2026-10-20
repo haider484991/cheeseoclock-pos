@@ -11,6 +11,7 @@ import {
   WASTE_REASON_ID_RE,
 } from '@cheeseoclock/shared-types';
 import { centsSchema } from './common.js';
+import { formatNumber } from '@cheeseoclock/shared-types';
 
 /**
  * Inventory quantities are whole numbers of the ingredient's base unit
@@ -178,7 +179,7 @@ const recipeCalcLineSchema = z.discriminatedUnion('kind', [
       .number()
       .int({ message: 'Say how many as a whole number' })
       .min(1, { message: 'Make at least 1' })
-      .max(RECIPE_CALC_MAX_COUNT, { message: `At most ${RECIPE_CALC_MAX_COUNT.toLocaleString('en-PK')} at once` }),
+      .max(RECIPE_CALC_MAX_COUNT, { message: `At most ${formatNumber(RECIPE_CALC_MAX_COUNT)} at once` }),
     portions: z
       .array(
         z.object({
