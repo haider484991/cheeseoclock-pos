@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
-import { DEFAULT_DAYPARTS, daypartHours, type Daypart, type DaypartsView } from '@cheeseoclock/shared-types';
+import { DEFAULT_DAYPARTS, daypartHours, type Daypart, type DaypartsView, shopTimeName } from '@cheeseoclock/shared-types';
 import { Clock, Lock, Plus, Trash2 } from 'lucide-react';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
@@ -72,7 +72,7 @@ function DaypartsForm({ view, canEdit }: { view: DaypartsView; canEdit: boolean 
             <Clock className="h-4 w-4" /> Parts of the day
           </h2>
           <p className="mt-0.5 text-sm text-stone-500">
-            How Reports → When splits the sales. Pakistan time; a part can run past midnight (Late: 11 pm to 4:59 am, the same
+            How Reports → When splits the sales. {shopTimeName({ capital: true })}; a part can run past midnight (Late: 11 pm to 4:59 am, the same
             night). Hours in no part show as &quot;Other hours&quot;.
             {view.isDefault ? ' These are the till’s usual parts.' : ''}
           </p>

@@ -49,6 +49,8 @@ import {
   type ShopSettingValues,
   type ShopWebsite,
   type WebsiteHome,
+  getShopLocale,
+  shopIsInPakistan,
 } from '@cheeseoclock/shared-types';
 import type { Parsed } from './foodpandaForm';
 import { andList } from './foodpandaWords';
@@ -197,7 +199,7 @@ const line = (t: string) => t.trim();
 export function shopDetailsFromForm(f: ShopDetailsWebForm, saved: ShopProfile): Parsed<ShopProfile> {
   const display = line(f.phone);
   const e164 = normalizePhone(display);
-  if (!e164) return { value: null, problem: 'Type the phone number as it is dialled in Pakistan (like 0300 1234567).' };
+  if (!e164) return { value: null, problem: `Type the phone number as it is dialled in ${getShopLocale().countryName} (like ${getShopLocale().phoneExample}).` };
   const value = withFields(
     'shop.profile',
     saved,
@@ -215,7 +217,7 @@ export function shopDetailsFromForm(f: ShopDetailsWebForm, saved: ShopProfile): 
 
 /** The Shop details card's part in one line (History, "Put back"). */
 export function shopDetailsSummary(p: ShopProfile): string {
-  return `${p.name} · ${p.phone.display} · ${p.address.street}, Karachi ${p.address.postalCode}`;
+  return `${p.name} · ${p.phone.display} · ${p.address.street}, ${shopIsInPakistan() ? 'Karachi' : p.address.areaLine} ${p.address.postalCode}`;
 }
 
 /** Which of the Google listing's details this change touches (name, phone, address), in words; [] when none. */
@@ -375,7 +377,7 @@ export function contactFromForm(f: ContactForm, saved: ShopProfile): Parsed<Shop
   const whatsappLines: ShopProfile['whatsappLines'] = [];
   for (const typed of f.lines.map(line).filter((t) => t !== '')) {
     const e164 = normalizePhone(typed);
-    if (!e164) return { value: null, problem: `${typed} is not a Pakistani phone number (like 0300 1234567).` };
+    if (!e164) return { value: null, problem: `${typed} is not a ${getShopLocale().countryAdjective} phone number (like ${getShopLocale().phoneExample}).` };
     whatsappLines.push({ display: typed, e164 });
   }
   const socialLinks = f.links.map(line).filter((t) => t !== '');

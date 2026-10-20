@@ -4,7 +4,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
 import { ArrowDownToLine, ArrowUpFromLine, Bike, Wallet, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import { COST_CAPABILITY, type CashMovementType } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, type CashMovementType, getShopLocale } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -17,8 +17,9 @@ import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
   CASH_IN_EXAMPLE,
   CASH_IN_HINT,
-  NOTE_CHANGE_TEXT,
-  NOTE_CHANGE_TITLE,
+  noteChangeText,
+  noteChangeTitle,
+  noteWordsLang,
   noteChangeQuestion,
   showsNoteChangeNote,
 } from './noteChangeWords';
@@ -147,7 +148,7 @@ export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onCl
           <div className="space-y-3">
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
-                Amount (Rs)
+                Amount ({getShopLocale().symbol})
               </span>
               <input
                 inputMode="decimal"
@@ -194,11 +195,11 @@ export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onCl
             {showsNoteChangeNote(type, reason) && (
               <div
                 role="note"
-                lang="ur-Latn"
+                lang={noteWordsLang()}
                 className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950"
               >
-                <p className="font-semibold text-amber-900 dark:text-amber-100">{NOTE_CHANGE_TITLE}</p>
-                <p className="mt-1 text-amber-900 dark:text-amber-100">{NOTE_CHANGE_TEXT}</p>
+                <p className="font-semibold text-amber-900 dark:text-amber-100">{noteChangeTitle()}</p>
+                <p className="mt-1 text-amber-900 dark:text-amber-100">{noteChangeText()}</p>
               </div>
             )}
             {!canDirect && (

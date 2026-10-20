@@ -69,7 +69,7 @@ import {
   ShiftWidget,
 } from './ShiftWidget';
 import { CashMovementDialog } from './CashMovementDialog';
-import { CASH_IN_HINT, NOTE_CHANGE_TITLE } from './noteChangeWords';
+import { CASH_IN_HINT, noteChangeTitle } from './noteChangeWords';
 import { NO_SHIFT_TEXT, NoShiftBanner } from './NoShiftBanner';
 import {
   CLOSE_PAUSES_WEBSITE_NOTE,
@@ -538,7 +538,7 @@ describe('Drawer cash in / out: a payout to an outside rider is never a purchase
     expect(text(out)).toContain('Cash in New money put in');
     expect(out).not.toContain('Change from the bank');
     // Opened on Cash out with nothing typed: no note yet (noteChangeWords.test.ts has when it shows).
-    expect(out).not.toContain(NOTE_CHANGE_TITLE);
+    expect(out).not.toContain(noteChangeTitle());
   });
 
   it('a cashier never had the purchase action, and still has none', () => {

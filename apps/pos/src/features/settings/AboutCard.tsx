@@ -1,3 +1,4 @@
+import { shopIsInPakistan } from '@cheeseoclock/shared-types';
 import { useQuery } from '@tanstack/react-query';
 import { Card } from '@cheeseoclock/ui';
 import { ipc } from '../../ipc/client';
@@ -105,7 +106,7 @@ export function AboutCard() {
 
       <div className="mt-4 flex items-center justify-between border-t border-stone-200 pt-4 text-xs text-stone-500 dark:border-stone-700">
         <span className="inline-flex items-center gap-1">
-          Built with <Heart className="h-3 w-3 text-red-500" /> for Pakistani restaurants
+          Built with <Heart className="h-3 w-3 text-red-500" /> for {shopIsInPakistan() ? 'Pakistani restaurants' : 'restaurants'}
         </span>
         <span>© 2026 Haider Ali</span>
       </div>

@@ -1,3 +1,5 @@
+import { SETUP_EXAMPLES } from '../onboarding/setupCountry';
+import { shopIsInPakistan } from '@cheeseoclock/shared-types';
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../../ipc/client';
@@ -141,7 +143,7 @@ export function BrandingSettings() {
               hint="At the bottom of receipts."
               value={branchLine}
               onChange={setField('branchLine')}
-              placeholder="Shop 3, Main Boulevard, Gulshan, Karachi"
+              placeholder={shopIsInPakistan() ? 'Shop 3, Main Boulevard, Gulshan, Karachi' : SETUP_EXAMPLES.US.branch}
             />
             <Field
               label="Phone"

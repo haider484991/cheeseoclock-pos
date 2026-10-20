@@ -158,7 +158,7 @@ function ZonesCard({ card }: { card: ShopSettingCard<'delivery.zones'> }) {
                 </th>
                 <th className="p-1">Area</th>
                 <th className="w-28 p-1">Chip</th>
-                <th className="w-24 p-1">Fee (Rs)</th>
+                <th className="w-24 p-1">Fee ({getShopLocale().symbol})</th>
                 <th className="w-16 p-1">On</th>
                 <th className="w-20 p-1">
                   <span className="sr-only">Order</span>
@@ -295,7 +295,7 @@ function ZonesCard({ card }: { card: ShopSettingCard<'delivery.zones'> }) {
       <div className="flex flex-wrap items-end gap-2 rounded-lg bg-stone-50 p-3 dark:bg-stone-800/60">
         <div>
           <label className={labelClass} htmlFor="dz-bulk">
-            Change the fee for the {ticked.size} ticked area{ticked.size === 1 ? '' : 's'} (Rs)
+            Change the fee for the {ticked.size} ticked area{ticked.size === 1 ? '' : 's'} ({getShopLocale().symbol})
           </label>
           <input
             id="dz-bulk"
@@ -313,7 +313,7 @@ function ZonesCard({ card }: { card: ShopSettingCard<'delivery.zones'> }) {
           Set the fee
         </Button>
         <span className="text-xs text-stone-500">
-          Whole rupees, Rs 0 to {formatCents(DELIVERY_FEE_MAX_CENTS, { showSymbol: false })}. Rs 0 =
+          Whole {getShopLocale().words.major}, {formatCents(0)} to {formatCents(DELIVERY_FEE_MAX_CENTS, { showSymbol: false })}. {formatCents(0)} =
           free delivery (no charge on the bill).
         </span>
       </div>
@@ -355,7 +355,7 @@ function ZonesCard({ card }: { card: ShopSettingCard<'delivery.zones'> }) {
             </datalist>
           </label>
           <label>
-            <span className={labelClass}>Fee (Rs)</span>
+            <span className={labelClass}>Fee ({getShopLocale().symbol})</span>
             <input
               inputMode="numeric"
               value={adding.fee}

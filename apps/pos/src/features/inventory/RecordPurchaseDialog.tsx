@@ -172,7 +172,7 @@ export function RecordPurchaseDialog({
               <div>
                 <Dialog.Title className="text-lg font-bold">{payout ? 'Turn this payout into a purchase' : 'Record a purchase'}</Dialog.Title>
                 <Dialog.Description className="mt-0.5 text-xs text-stone-500">
-                  Type what the bill says: how much, and the rupees paid for it. The stock goes up now.
+                  Type what the bill says: how much, and the {getShopLocale().words.major} paid for it. The stock goes up now.
                 </Dialog.Description>
               </div>
             </div>
@@ -230,7 +230,7 @@ export function RecordPurchaseDialog({
               <div className="mb-1 grid grid-cols-[1fr_8rem_8rem_2.5rem] gap-2 px-0.5 text-[11px] uppercase tracking-wider text-stone-500">
                 <span>What</span>
                 <span className="text-right">How much</span>
-                <span className="text-right">Paid (Rs)</span>
+                <span className="text-right">Paid ({getShopLocale().symbol})</span>
                 <span />
               </div>
               {read.map((r) => (
@@ -330,7 +330,7 @@ function PurchaseLineRow({
           inputMode="decimal"
           value={line.bill}
           onChange={(e) => onChange({ bill: e.target.value, answer: null })}
-          placeholder="Rs"
+          placeholder={getShopLocale().symbol}
           aria-label={`Paid in ${getShopLocale().words.major}`}
           className="w-full rounded-lg border border-stone-300 px-2 py-2 text-right font-mono dark:border-stone-700 dark:bg-stone-800"
         />

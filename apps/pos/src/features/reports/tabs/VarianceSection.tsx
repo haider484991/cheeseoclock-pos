@@ -7,6 +7,7 @@
  * food cost when both stock takes were full. Its own channel
  * (reports:variance), asked for when the period is "Between stock takes".
  */
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { cn } from '@cheeseoclock/ui';
 import { formatCents, formatQty, staleLinkText } from '@cheeseoclock/pos-domain';
 import type { ReportVariance } from '@cheeseoclock/shared-types';
@@ -135,7 +136,7 @@ function VarianceBody({ v }: { v: ReportVariance }) {
             { label: 'Went', right: true },
             { label: 'Waste logged', right: true },
             { label: 'Not explained', right: true },
-            { label: 'Rs', right: true },
+            { label: getShopLocale().symbol, right: true },
           ]}
           rows={lines.shown.map((l) => [
             <span key="n">
@@ -206,7 +207,7 @@ function VarianceBody({ v }: { v: ReportVariance }) {
           <div className="space-y-2 text-sm">
             <p className="font-semibold">{actualCogsText(v.actualCogs)}</p>
             <DataTable
-              columns={[{ label: '' }, { label: 'Rs', right: true }]}
+              columns={[{ label: '' }, { label: getShopLocale().symbol, right: true }]}
               rows={[
                 ['Stock held at the first stock take', formatCents(v.actualCogs.openingCents)],
                 ['+ bought in between', formatCents(v.actualCogs.purchasesCents)],

@@ -1,4 +1,5 @@
-import { getShopLocale } from '@cheeseoclock/shared-types';
+import { formatCents } from '@cheeseoclock/pos-domain';
+import { getShopLocale, OFFER_MAX_FLAT_CENTS } from '@cheeseoclock/shared-types';
 /**
  * Settings → Money & discounts → "Automatic offers" ('discounts.offers';
  * the owner, 28 Sep 2026: "the offer discount should have settings … so it
@@ -280,12 +281,12 @@ function OfferFields({
             <div className="flex rounded-lg bg-stone-100 p-0.5 dark:bg-stone-800" role="group" aria-label="Off in">
               {(['percent', 'flat'] as const).map((t) => (
                 <button key={t} type="button" aria-pressed={f.type === t} onClick={() => set({ type: t })} className={chipClass(f.type === t)}>
-                  {t === 'percent' ? '%' : 'Rs'}
+                  {t === 'percent' ? '%' : getShopLocale().symbol}
                 </button>
               ))}
             </div>
           </div>
-          <p className="mt-1 text-xs text-stone-500">A whole % from 1 to {OFFER_MAX_PERCENT}, or whole rupees up to Rs 5,000.</p>
+          <p className="mt-1 text-xs text-stone-500">A whole % from 1 to {OFFER_MAX_PERCENT}, or whole {getShopLocale().words.major} up to {formatCents(OFFER_MAX_FLAT_CENTS)}.</p>
         </div>
       </div>
 
@@ -360,14 +361,14 @@ function OfferFields({
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <div>
           <label className={labelClass} htmlFor={id('min')}>
-            Only from this much food (Rs)
+            Only from this much food ({getShopLocale().symbol})
           </label>
           <input id={id('min')} inputMode="numeric" placeholder="Any order" value={f.minOrder} onChange={(e) => set({ minOrder: e.target.value.replace(/[^\d,]/g, '').slice(0, 7) })} className={inputClass} />
           <p className="mt-1 text-xs text-stone-500">Measured on the food, never the delivery charge.</p>
         </div>
         <div>
           <label className={labelClass} htmlFor={id('max')}>
-            At most this much off one order (Rs)
+            At most this much off one order ({getShopLocale().symbol})
           </label>
           <input id={id('max')} inputMode="numeric" placeholder="No limit" value={f.maxOff} onChange={(e) => set({ maxOff: e.target.value.replace(/[^\d,]/g, '').slice(0, 7) })} className={inputClass} />
         </div>

@@ -7,11 +7,11 @@ import { describe, expect, it } from 'vitest';
 import {
   CASH_IN_EXAMPLE,
   CASH_IN_HINT,
-  NOTE_CHANGE_TEXT,
-  NOTE_CHANGE_TITLE,
-  OPEN_DRAWER_CASH_BUTTON,
-  OPEN_DRAWER_NOTE_TEXT,
-  OPEN_DRAWER_NOTE_TITLE,
+  noteChangeText,
+  noteChangeTitle,
+  openDrawerCashButton,
+  openDrawerNoteText,
+  openDrawerNoteTitle,
   looksLikeNoteChange,
   noteChangeQuestion,
   showsNoteChangeNote,
@@ -69,11 +69,11 @@ describe('the note under the form', () => {
   });
 
   it('says it in Roman Urdu: breaking a note changes nothing, so no entry; Cash in is new money, Cash out is money spent', () => {
-    expect(NOTE_CHANGE_TITLE).toBe('Note khulwana Cash in ya Cash out nahi hai');
-    expect(NOTE_CHANGE_TEXT).toContain('drawer mein paisa utna hi rehta hai');
-    expect(NOTE_CHANGE_TEXT).toContain('Is ki koi entry na karein');
-    expect(NOTE_CHANGE_TEXT).toContain('Cash in sirf tab karein jab bahar se naya paisa drawer mein daala jaye');
-    expect(NOTE_CHANGE_TEXT).toContain('Cash out sirf tab karein jab paisa drawer se nikal kar kharch ho');
+    expect(noteChangeTitle()).toBe('Note khulwana Cash in ya Cash out nahi hai');
+    expect(noteChangeText()).toContain('drawer mein paisa utna hi rehta hai');
+    expect(noteChangeText()).toContain('Is ki koi entry na karein');
+    expect(noteChangeText()).toContain('Cash in sirf tab karein jab bahar se naya paisa drawer mein daala jaye');
+    expect(noteChangeText()).toContain('Cash out sirf tab karein jab paisa drawer se nikal kar kharch ho');
   });
 
   it('the Cash in button and its example no longer suggest change', () => {
@@ -107,10 +107,10 @@ describe('the question before Record', () => {
 
 describe('Open drawer (the owner, 8 Oct 2026: "there is 2 ways to cash out ... confusing for cashier")', () => {
   it('says in Roman Urdu that it records no money, and sends money in or out to Cash out / Cash in', () => {
-    expect(OPEN_DRAWER_NOTE_TITLE).toBe('Open drawer se paisa record nahi hota');
-    expect(OPEN_DRAWER_NOTE_TEXT).toContain('galle ka paisa utna hi rehta hai');
-    expect(OPEN_DRAWER_NOTE_TEXT).toContain('to yahan se nahi, "Cash out" karein');
-    expect(OPEN_DRAWER_NOTE_TEXT).toContain('Naya paisa daalna hai to "Cash in" karein');
-    expect(OPEN_DRAWER_CASH_BUTTON).toBe('Cash out / Cash in karein');
+    expect(openDrawerNoteTitle()).toBe('Open drawer se paisa record nahi hota');
+    expect(openDrawerNoteText()).toContain('galle ka paisa utna hi rehta hai');
+    expect(openDrawerNoteText()).toContain('to yahan se nahi, "Cash out" karein');
+    expect(openDrawerNoteText()).toContain('Naya paisa daalna hai to "Cash in" karein');
+    expect(openDrawerCashButton()).toBe('Cash out / Cash in karein');
   });
 });

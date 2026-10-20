@@ -10,6 +10,7 @@
  * amounts (never the price: that is Menu → Items). A deal's links to other
  * items' recipes (0.7.47) are rows too: try 3 burgers instead of 2.
  */
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { useEffect, useMemo, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -251,12 +252,12 @@ export function RecipeWhatIfDialog({ item, onClose }: { item: MenuItem; onClose:
                     <td className="py-2 text-right font-mono text-stone-500">{formatCents(item.basePriceCents)}</td>
                     <td className="py-2">
                       <div className="flex items-center justify-center gap-1">
-                        <span className="text-xs text-stone-500">Rs</span>
+                        <span className="text-xs text-stone-500">{getShopLocale().symbol}</span>
                         <input
                           inputMode="decimal"
                           value={priceText}
                           onChange={(e) => setPriceText(e.target.value)}
-                          aria-label="Try a price before tax (Rs)"
+                          aria-label={`Try a price before tax (${getShopLocale().symbol})`}
                           className="w-28 rounded-lg border border-stone-300 px-2 py-1.5 text-right font-mono dark:border-stone-700 dark:bg-stone-800"
                         />
                       </div>

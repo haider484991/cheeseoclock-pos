@@ -1,5 +1,5 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
-import { shopTakes } from '@cheeseoclock/shared-types';
+import { shopTakes, getShopLocale } from '@cheeseoclock/shared-types';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn, NumberPad } from '@cheeseoclock/ui';
 import { formatCents, settleLegs } from '@cheeseoclock/pos-domain';
@@ -554,7 +554,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                       </label>
                       <label className="block text-sm">
                         <span className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
-                          Total on the tablet (Rs) {checks.tabletTotal === 'required' ? '(required)' : '(if you have it)'}
+                          Total on the tablet ({getShopLocale().symbol}) {checks.tabletTotal === 'required' ? '(required)' : '(if you have it)'}
                         </span>
                         <input
                           value={fpTablet}

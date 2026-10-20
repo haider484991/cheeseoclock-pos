@@ -591,7 +591,7 @@ function CreatePoDialog({ onClose }: { onClose: () => void }) {
               <div className="mb-1 grid grid-cols-[1fr_7rem_6.5rem_7rem_6.5rem_2.5rem] gap-2 px-0.5 text-[11px] uppercase tracking-wider text-stone-500">
                 <span>Ingredient</span>
                 <span className="text-right">How much</span>
-                <span className="text-right">Price (Rs)</span>
+                <span className="text-right">Price ({getShopLocale().symbol})</span>
                 <span>Per</span>
                 <span className="text-right">Line total</span>
                 <span />
@@ -620,7 +620,7 @@ function CreatePoDialog({ onClose }: { onClose: () => void }) {
                       inputMode="decimal"
                       value={line.rupees}
                       onChange={(e) => updateLine(i, { rupees: e.target.value })}
-                      placeholder="Rs"
+                      placeholder={getShopLocale().symbol}
                       aria-label={`Price in ${getShopLocale().words.major}`}
                       className="w-full rounded-lg border border-stone-300 px-2 py-2 text-right font-mono dark:border-stone-700 dark:bg-stone-800"
                     />
@@ -877,7 +877,7 @@ function OpenPoDialog({ poId, onClose }: { poId: string; onClose: () => void }) 
                   <th className="pb-2 text-right">Price</th>
                   <th className="pb-2 text-right">{quick ? 'Paid' : 'Billed'}</th>
                   {canReceive && <th className="pb-2 text-right">Came in now</th>}
-                  {canReceive && <th className="pb-2 text-right">Bill (Rs)</th>}
+                  {canReceive && <th className="pb-2 text-right">Bill ({getShopLocale().symbol})</th>}
                 </tr>
               </thead>
               <tbody>
@@ -952,7 +952,7 @@ function OpenPoDialog({ poId, onClose }: { poId: string; onClose: () => void }) 
                                 const { [item.id]: _drop, ...rest } = answers;
                                 setAnswers(rest);
                               }}
-                              placeholder={l.qty !== null ? String(orderedValueCents(l.qty, item) / 100) : 'Rs'}
+                              placeholder={l.qty !== null ? String(orderedValueCents(l.qty, item) / 100) : getShopLocale().symbol}
                               aria-label={`What the bill says for ${ing?.name ?? 'it'}, in ${getShopLocale().words.major}`}
                               className="w-28 rounded border border-stone-300 px-2 py-1 text-right font-mono text-sm dark:border-stone-700 dark:bg-stone-800"
                             />

@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { useCallback, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -559,7 +560,7 @@ function ModDialog({
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label htmlFor="mod-price" className="mb-1 block text-xs uppercase tracking-wider text-stone-500">Extra charge (Rs)</label>
+                <label htmlFor="mod-price" className="mb-1 block text-xs uppercase tracking-wider text-stone-500">Extra charge ({getShopLocale().symbol})</label>
                 <input
                   id="mod-price"
                   type="number"

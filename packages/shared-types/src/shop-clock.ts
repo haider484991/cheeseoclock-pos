@@ -107,6 +107,20 @@ const ymdOf = (utcMidnightMs: number): string => new Date(utcMidnightMs).toISOSt
  * hour (05:00) an instant belongs to the night before: a 2 a.m. order is
  * yesterday's. Pakistan: its UTC date, exactly as the till always did.
  */
+/**
+ * What the shop's clock is called in its words: "Pakistan time" on a Pakistani
+ * till, as its screens always said ("Karachi time" where they named the city);
+ * "local time" ("Local time" to start a sentence) anywhere else, where the
+ * shop's own zone is the only clock.
+ */
+export function shopTimeName(
+  opts: { capital?: boolean; city?: boolean } = {},
+  locale: ShopLocale = getShopLocale(),
+): string {
+  if (onPakistanTime(locale)) return opts.city ? 'Karachi time' : 'Pakistan time';
+  return opts.capital ? 'Local time' : 'local time';
+}
+
 export function shopTradingDay(ms: number, locale: ShopLocale = getShopLocale()): string {
   if (onPakistanTime(locale)) return new Date(ms).toISOString().slice(0, 10);
   const w = wallAt(ms, locale.timeZone);

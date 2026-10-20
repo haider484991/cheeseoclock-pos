@@ -228,7 +228,7 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
                   )}
                   <div className="flex justify-between font-semibold">
                     <span>Food total (with tax)</span>
-                    <span>Rs {formatCents(bill.foodTotalCents, { showSymbol: false })}</span>
+                    <span>{formatCents(bill.foodTotalCents)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Delivery charge</span>
@@ -236,7 +236,7 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
                   </div>
                   <div className="flex justify-between border-t border-stone-300 pt-1 text-base font-bold dark:border-stone-700">
                     <span>Customer pays</span>
-                    <span>Rs {formatCents(bill.customerPaysCents, { showSymbol: false })}</span>
+                    <span>{formatCents(bill.customerPaysCents)}</span>
                   </div>
                 </>
               ) : (
@@ -252,7 +252,7 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
                   </div>
                   <div className="flex justify-between border-t border-stone-300 pt-1 text-base font-bold dark:border-stone-700">
                     <span>Total</span>
-                    <span>Rs {formatCents(order.totalCents, { showSymbol: false })}</span>
+                    <span>{formatCents(order.totalCents)}</span>
                   </div>
                 </>
               )}

@@ -875,7 +875,7 @@ function CostHeadline({ calc, costs }: { calc: RecipeCalc; costs: RecipeCalcCost
           All together: <b className="font-mono text-base">{atLeast(costs.totalCostCents, !costs.complete)}</b>
         </div>
       )}
-      {!costs.complete && <p className="text-xs text-red-700 dark:text-red-400">{noPriceText(costs.unpriced)}: counted as Rs 0.</p>}
+      {!costs.complete && <p className="text-xs text-red-700 dark:text-red-400">{noPriceText(costs.unpriced)}: counted as {formatCents(0)}.</p>}
       {costs.estimates.length > 0 && <p className="text-xs text-amber-800 dark:text-amber-300">Guessed price: {costs.estimates.join(', ')}.</p>}
       <p className="text-[11px] text-stone-500">At today&apos;s prices; a batch at the price worked out from its recipe.</p>
     </div>

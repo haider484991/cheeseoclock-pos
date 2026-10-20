@@ -17,6 +17,7 @@ import {
   type MenuItem,
   type PrepStation,
   type WebAvailability,
+  getShopLocale,
 } from '@cheeseoclock/shared-types';
 import { Plus, Edit, Trash2, X, Eye, EyeOff, ChevronRight, Lock, Globe, ImageOff } from 'lucide-react';
 import {
@@ -589,7 +590,7 @@ function ItemDialog({
               </Field>
             </div>
             <div className="grid grid-cols-3 gap-3">
-              <Field label="Price (Rs)">
+              <Field label={`Price (${getShopLocale().symbol})`}>
                 <input
                   type="number"
                   step="any"

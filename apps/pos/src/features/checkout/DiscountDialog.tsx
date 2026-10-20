@@ -466,7 +466,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                             : 'text-stone-500',
                         )}
                       >
-                        {k === 'percent' ? '%' : 'Rs'}
+                        {k === 'percent' ? '%' : getShopLocale().symbol}
                       </button>
                     ))}
                   </div>

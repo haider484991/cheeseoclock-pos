@@ -8,6 +8,7 @@
  * sheet says now. Pure, so what goes in the file is tested (with made-up
  * prices only: the repo is public).
  */
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { effectivePack, thousandSize, unitCostMc } from '@cheeseoclock/pos-domain';
 import type { Ingredient } from '@cheeseoclock/shared-types';
 import { toCsv, type CsvCell } from '../reports/exporters';
@@ -54,22 +55,25 @@ function differenceText(till: number | null, sheet: number | null): string {
   return `${pct}% ${bps > 0 ? 'dearer' : 'cheaper'}`;
 }
 
-export const COSTING_FILE_HEADER = [
-  'Ingredient',
-  'Till price (Rs)',
-  'Per',
-  'Bought as (units)',
-  'Pack price (Rs)',
-  'Price is',
-  'Where it came from',
-  'Since',
-  "Sheet's price (Rs)",
-  'Till against the sheet',
-] as const;
+/** The CSV's column heads, the prices in the shop's money. */
+export function costingFileHeader(): string[] {
+  return [
+    'Ingredient',
+    `Till price (${getShopLocale().symbol})`,
+    'Per',
+    'Bought as (units)',
+    `Pack price (${getShopLocale().symbol})`,
+    'Price is',
+    'Where it came from',
+    'Since',
+    `Sheet's price (${getShopLocale().symbol})`,
+    'Till against the sheet',
+  ];
+}
 
 /** The CSV's rows, header first, by ingredient name. */
 export function costingFileRows(ingredients: readonly Ingredient[]): CsvCell[][] {
-  const rows: CsvCell[][] = [[...COSTING_FILE_HEADER]];
+  const rows: CsvCell[][] = [costingFileHeader()];
   const sorted = [...ingredients].filter((i) => i.isActive).sort((a, b) => a.name.localeCompare(b.name));
   for (const i of sorted) {
     const till = tillUnitMc(i);

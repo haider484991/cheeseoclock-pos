@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { Globe, Send, RefreshCw, CheckCircle2, AlertTriangle, XCircle, PauseCircle, UploadCloud, Megaphone } from 'lucide-react';
-import { ANNOUNCEMENT_MAX, CLOSED_NOTICE_MAX, type ShopSettingCard } from '@cheeseoclock/shared-types';
+import { ANNOUNCEMENT_MAX, CLOSED_NOTICE_MAX, type ShopSettingCard, getShopLocale } from '@cheeseoclock/shared-types';
 import { EDITION } from '../../edition';
 import { ipc, onAlertWatchChanged } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
@@ -530,7 +530,7 @@ function WebsiteMessagesFields({ s }: { s: ReturnType<typeof useShopSetting<'onl
         <h3 className="text-sm font-semibold">Smallest website delivery order</h3>
         <p className="mb-2 text-xs text-stone-500">{WEBSITE_MESSAGES_RULES.minimum}</p>
         <label className={labelClass} htmlFor="web-min-order">
-          Rs (empty = no smallest order)
+          {getShopLocale().symbol} (empty = no smallest order)
         </label>
         <input
           id="web-min-order"

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { shopTakes } from '@cheeseoclock/shared-types';
+import { shopTakes, getShopLocale } from '@cheeseoclock/shared-types';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
@@ -387,7 +387,7 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly: ride
                   <div className="text-sm">
                     <label className="block">
                       <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
-                        {outside ? 'Cash from the rider (Rs)' : 'Cash given (Rs)'}
+                        {outside ? `Cash from the rider (${getShopLocale().symbol})` : `Cash given (${getShopLocale().symbol})`}
                       </span>
                       <input
                         inputMode="decimal"

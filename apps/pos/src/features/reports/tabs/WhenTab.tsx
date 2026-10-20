@@ -5,6 +5,7 @@
  * Phase 7 adds the weekday × hour heatmap, the parts of the day and notes on
  * days (WhenExtras.tsx).
  */
+import { shopTimeName } from '@cheeseoclock/shared-types';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportWhenTab } from '@cheeseoclock/shared-types';
 import { Clock } from 'lucide-react';
@@ -52,7 +53,7 @@ export function WhenSection({ report, period, now }: { report: Pick<ReportWhenTa
   const hasSales = report.kpis.orderCount > 0;
 
   return (
-    <Section id="when" icon={Clock} title="When you sell" subtitle="Pakistan time. The trading day runs 5 am to 5 am, so a 1 am sale is part of the night before.">
+    <Section id="when" icon={Clock} title="When you sell" subtitle={`${shopTimeName({ capital: true })}. The trading day runs 5 am to 5 am, so a 1 am sale is part of the night before.`}>
       {!hasSales ? (
         <Panel>
           <p className="py-4 text-center text-sm text-stone-500">No sales in this period yet.</p>

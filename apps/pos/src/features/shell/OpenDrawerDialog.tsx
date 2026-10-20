@@ -7,7 +7,7 @@ import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { DRAWER_REASONS, drawerReason, drawerResultToast, type DrawerReasonChip } from './drawerToast';
-import { OPEN_DRAWER_CASH_BUTTON, OPEN_DRAWER_NOTE_TEXT, OPEN_DRAWER_NOTE_TITLE } from './noteChangeWords';
+import { noteWordsLang, openDrawerCashButton, openDrawerNoteText, openDrawerNoteTitle } from './noteChangeWords';
 
 /**
  * Open the cash drawer with no sale — for change, to check a note. A manager
@@ -89,9 +89,9 @@ export function OpenDrawerDialog({
               </button>
             </header>
 
-            <div role="note" lang="ur-Latn" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
-              <p className="font-semibold text-amber-900 dark:text-amber-100">{OPEN_DRAWER_NOTE_TITLE}</p>
-              <p className="mt-1 text-amber-900 dark:text-amber-100">{OPEN_DRAWER_NOTE_TEXT}</p>
+            <div role="note" lang={noteWordsLang()} className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
+              <p className="font-semibold text-amber-900 dark:text-amber-100">{openDrawerNoteTitle()}</p>
+              <p className="mt-1 text-amber-900 dark:text-amber-100">{openDrawerNoteText()}</p>
               {onCashInOut && shiftQ.data && (
                 <button
                   type="button"
@@ -100,7 +100,7 @@ export function OpenDrawerDialog({
                   className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-sm font-semibold text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:bg-stone-900 dark:text-amber-100"
                 >
                   <ArrowUpFromLine className="h-4 w-4" />
-                  {OPEN_DRAWER_CASH_BUTTON}
+                  {openDrawerCashButton()}
                 </button>
               )}
             </div>

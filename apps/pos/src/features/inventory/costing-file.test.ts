@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Ingredient, UUID } from '@cheeseoclock/shared-types';
-import { COSTING_FILE_HEADER, costingFileCsv, costingFileName, costingFileRows } from './costing-file';
+import { costingFileCsv, costingFileHeader, costingFileName, costingFileRows } from './costing-file';
 
 const ing = (p: Partial<Ingredient> & Pick<Ingredient, 'name' | 'unit'>): Ingredient => ({
   id: `id-${p.name}` as UUID,
@@ -58,7 +58,7 @@ const FIXTURE: Ingredient[] = [
 describe('Prices for the costing file', () => {
   it('one row per active ingredient, by name: the till price per kg / piece, where from, since, and the sheet\'s', () => {
     const rows = costingFileRows(FIXTURE);
-    expect(rows[0]).toEqual([...COSTING_FILE_HEADER]);
+    expect(rows[0]).toEqual(costingFileHeader());
     expect(rows.slice(1)).toEqual([
       ['Test bottle', null, 'pcs', null, null, 'no price yet', '', '', null, ''],
       ['Test box', { cents: 4_000 }, 'pcs', null, null, 'known', 'Starting price', '', { cents: 4_000 }, 'same'],

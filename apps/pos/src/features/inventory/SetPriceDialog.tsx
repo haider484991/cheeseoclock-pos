@@ -1,4 +1,4 @@
-import { formatCents } from '@cheeseoclock/shared-types';
+import { formatCents, getShopLocale, shopIsInPakistan } from '@cheeseoclock/shared-types';
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -82,11 +82,11 @@ export function PriceFields({
           </div>
         )}
         <div>
-          <label htmlFor={`${idPrefix}-rupees`} className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
-            Price (Rs) {perLabel(entry.per, unit)}
+          <label htmlFor={`${idPrefix}-amount`} className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
+            Price ({getShopLocale().symbol}) {perLabel(entry.per, unit)}
           </label>
           <input
-            id={`${idPrefix}-rupees`}
+            id={`${idPrefix}-amount`}
             type="text"
             inputMode="decimal"
             value={entry.free ? '0' : entry.rupees}
@@ -201,7 +201,8 @@ export function SetPriceDialog({ ingredient, onClose }: { ingredient: Ingredient
                 ? priceText(current)
                 : priceText({ unitCostMc: unitCostMc(effectivePack(ingredient)), unit: ingredient.unit, priceKind: ingredient.priceKind })}
             </strong>
-            . Type it as you buy it — the till keeps it exactly (Rs 2,250 for 6 kg stays Rs 375 a kilo).
+            . Type it as you buy it — the till keeps it exactly ({formatCents(shopIsInPakistan() ? 225_000 : 2_250)} for 6 kg stays{' '}
+            {formatCents(shopIsInPakistan() ? 37_500 : 375)} a kilo).
           </Dialog.Description>
           {fromRecipe ? (
             <>

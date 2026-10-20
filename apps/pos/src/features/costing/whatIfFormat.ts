@@ -5,6 +5,7 @@
  * printed menu and the website (menu changes go everywhere); nothing on the
  * till changes.
  */
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { WhatIfResult, WhatIfRow } from '@cheeseoclock/shared-types';
 import { escapeHtml, toCsv, type CsvCell } from '../reports/exporters';
@@ -59,7 +60,7 @@ export function buildPriceChangeCsv(result: WhatIfResult, madeAt: Date = new Dat
     ['Made', fmtWhen(madeAt.toISOString())],
     ['Nothing on the till has changed. Change these in the costing sheet, the printed menu and the website.'],
     [],
-    ['Dish', 'Category', 'Price now Rs', 'New price Rs', 'Change Rs', 'Food cost now', 'Food cost after', 'Per week at the same sales Rs', 'Break-even'],
+    ['Dish', 'Category', `Price now ${getShopLocale().symbol}`, `New price ${getShopLocale().symbol}`, `Change ${getShopLocale().symbol}`, 'Food cost now', 'Food cost after', `Per week at the same sales ${getShopLocale().symbol}`, 'Break-even'],
     ...priceChangeRows(result).map((r) => [
       r.name,
       r.categoryName,
@@ -74,7 +75,7 @@ export function buildPriceChangeCsv(result: WhatIfResult, madeAt: Date = new Dat
   ];
   const moves = costMoveRows(result);
   if (moves.length > 0) {
-    rows.push([], ['Dishes whose cost moves (menu price not changed)', 'Category', 'Cost to make now Rs', 'Cost to make after Rs', 'Food cost now', 'Food cost after', 'Per week at the same sales Rs']);
+    rows.push([], ['Dishes whose cost moves (menu price not changed)', 'Category', `Cost to make now ${getShopLocale().symbol}`, `Cost to make after ${getShopLocale().symbol}`, 'Food cost now', 'Food cost after', `Per week at the same sales ${getShopLocale().symbol}`]);
     for (const r of moves) {
       rows.push([
         r.name,

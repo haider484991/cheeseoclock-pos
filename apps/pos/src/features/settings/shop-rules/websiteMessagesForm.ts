@@ -1,4 +1,4 @@
-import { getShopLocale } from '@cheeseoclock/shared-types';
+import { getShopLocale, shopIsInPakistan, shopTimeName, shopWallClock } from '@cheeseoclock/shared-types';
 /**
  * Settings → Online orders' two cards on the ONE key 'online.options'
  * (format 2, v0.7.30): "Publish the menu to the website by itself" and
@@ -213,7 +213,7 @@ export function closedNoticeStatus(notice: OnlineOptions['closedNotice'], nowMs:
   if (notice.text.trim() === '') return 'No closed notice: while the website is closed it says what it always has.';
   if (notice.until === null) return 'No end date: it shows every night the website is closed (the website closes by itself when the last shift closes).';
   return closedNoticeInForce(notice, nowMs) !== null
-    ? `Shows while the website is closed, up to and including ${dayWords(notice.until)} (Karachi time). After that the website’s own words come back by themselves.`
+    ? `Shows while the website is closed, up to and including ${dayWords(notice.until)} (${shopTimeName({ city: true })}). After that the website’s own words come back by themselves.`
     : `Ended on ${dayWords(notice.until)}: the website says what it always has. Clear it, or give it a new last day.`;
 }
 
@@ -251,8 +251,9 @@ export function minimumExample(cents: number): string {
 /** The card's rules in the owner's words (every limit from its constant). */
 export const WEBSITE_MESSAGES_RULES = {
   notice: `The website’s words while it is closed: one line, up to ${CLOSED_NOTICE_MAX} letters (for example “Closed for Eid — back on Monday”). The WhatsApp and call buttons stay. Empty = the website’s own words.`,
-  noticeUntil:
-    'The last day it shows (Karachi time). With no end date the notice shows every night the website is closed — the website closes by itself when the last shift closes.',
+  get noticeUntil() {
+    return `The last day it shows (${shopTimeName({ city: true })}). With no end date the notice shows every night the website is closed — the website closes by itself when the last shift closes.`;
+  },
   announcement: `A line on the website’s home page and menu page while it is on, up to ${ANNOUNCEMENT_MAX} letters (for example a new item or a holiday). It never goes into the page titles, descriptions or the data written for search engines — but it is words on the home page, so Google may show them in its results, and for a while after you switch it off.`,
   get minimum() {
     return `The smallest website DELIVERY order, in whole ${getShopLocale().words.major}: the food, before tax and the delivery charge. Pick-up is never refused, and orders rung up at the till (phone, WhatsApp, walk-in) are not checked.`;
@@ -261,7 +262,9 @@ export const WEBSITE_MESSAGES_RULES = {
     'A Save reaches the website by itself in a few seconds — only these words and the delivery areas, never menu changes you have not published.',
 } as const;
 
-/** Today's Karachi date (the date box's earliest day). */
+/** Today's date on the shop's clock (the date box's earliest day): Karachi's on a Pakistani till, as ever. */
 export function todayInKarachi(nowMs: number = Date.now()): string {
-  return karachiDateOf(nowMs);
+  if (shopIsInPakistan()) return karachiDateOf(nowMs);
+  const w = shopWallClock(nowMs);
+  return `${w.y}-${String(w.m).padStart(2, '0')}-${String(w.d).padStart(2, '0')}`;
 }

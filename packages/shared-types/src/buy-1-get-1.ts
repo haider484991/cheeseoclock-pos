@@ -14,8 +14,11 @@
  *    `asksSocial` is on; it goes first in the order's notes, so the cashier sees whose post to check. At the
  *    counter the cashier just looks.
  *
- * Like the value deals, they never take a % off (categoryNeverDiscounted). Pure: no clock of its own.
+ * Like the value deals, they never take a % off (categoryNeverDiscounted). Pure: no clock of its own — the hours
+ * are read on the shop's (Karachi's on a Pakistani till, the shop's own zone elsewhere).
  */
+import { getShopLocale } from './shop-locale.js';
+import { shopWallClock } from './shop-clock.js';
 
 /** A category of Buy 1 Get 1 deals, by its name: "Buy 1 Get 1", "Buy One Get One Free", "Buy 1 Get 1 Deals". */
 export const BUY_1_GET_1_NAME_RE = /\bbuy\s*(?:1|one)\s*get\s*(?:1|one)\b/i;
@@ -55,6 +58,17 @@ export function karachiMinuteOfDay(ms: number): number {
 }
 
 /**
+ * The minute of the shop's day (0–1439) at a moment: Karachi's fixed UTC+5 on a Pakistani till (the maths above, as
+ * ever); the shop's own wall clock anywhere else — its zone, daylight saving followed — so a US shop's "1 PM–7 PM"
+ * is 1 PM–7 PM where it stands, not in Karachi.
+ */
+export function shopMinuteOfDay(ms: number): number {
+  if (getShopLocale().country === 'PK') return karachiMinuteOfDay(ms);
+  const w = shopWallClock(ms);
+  return w.h * 60 + w.mi;
+}
+
+/**
  * Why these hours can't be saved, in the owner's words, or null: a start from 12 AM to 11:59 PM (0–1439), an end
  * from 12:01 AM to midnight (1–1440), not the same minute. An end before the start runs past midnight ("10 PM–1 AM").
  */
@@ -72,7 +86,7 @@ const allDay = (rules: Pick<Buy1Get1Rules, 'opensMinute' | 'closesMinute'>) => r
 /** Whether Buy 1 Get 1 deals are on sale at a moment: switched on, and inside the hours. */
 export function buy1Get1OpenAt(ms: number, rules: Buy1Get1Rules = DEFAULT_BUY_1_GET_1_RULES): boolean {
   if (!rules.on) return false;
-  const m = karachiMinuteOfDay(ms);
+  const m = shopMinuteOfDay(ms);
   // Hours past midnight ("10 PM–1 AM"): from the start to the day's end, and from midnight to the end.
   return rules.opensMinute < rules.closesMinute
     ? m >= rules.opensMinute && m < rules.closesMinute

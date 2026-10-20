@@ -216,7 +216,7 @@ function ChannelFeesForm({ view, canEdit }: { view: ChannelFeesView; canEdit: bo
           ))}
           {riderMode === 'fixed' && (
             <label className="flex items-center gap-2 pl-6">
-              Rs
+              {getShopLocale().symbol}
               <input className={inputCls} value={riderFixed} disabled={!canEdit} inputMode="decimal" onChange={(e) => setRiderFixed(e.target.value)} aria-label={`Rider cost per trip, ${getShopLocale().words.major}`} />
               a trip
             </label>

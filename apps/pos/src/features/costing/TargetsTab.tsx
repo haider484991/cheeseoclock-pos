@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { shopDateFormat } from '@cheeseoclock/shared-types';
 import { useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -141,7 +142,7 @@ function AlertSettingsForm({ view, canEdit }: { view: CostAlertSettingsView; can
           </span>
         </label>
         <label className="flex flex-wrap items-center gap-2 text-sm">
-          Any price change costs the menu more than Rs
+          Any price change costs the menu more than {getShopLocale().symbol}
           <input type="text" inputMode="decimal" value={impact} disabled={!canEdit} onChange={(e) => setImpact(e.target.value)} className={cn(inputCls, impactBad && 'border-red-500')} />
           a week
           {impactCents !== null && !impactBad && <span className="text-stone-500">({formatCents(impactCents)}, at this till&apos;s sales)</span>}
@@ -399,7 +400,7 @@ function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boo
           points over the target
         </label>
         <label className="flex flex-wrap items-center gap-2 text-sm">
-          Suggest prices in steps of Rs
+          Suggest prices in steps of {getShopLocale().symbol}
           <input type="text" inputMode="decimal" value={step} disabled={!canEdit} onChange={(e) => setStep(e.target.value)} className={cn(inputCls, stepBad && 'border-red-500')} />
           {stepCents !== null && !stepBad && <span className="text-stone-500">({formatCents(stepCents)})</span>}
         </label>

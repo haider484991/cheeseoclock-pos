@@ -500,7 +500,7 @@ export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
             )}
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
-                Opening cash (Rs)
+                Opening cash ({getShopLocale().symbol})
               </span>
               {startNote && <span className="mb-1 block text-xs text-stone-500">{startNote}</span>}
               <input

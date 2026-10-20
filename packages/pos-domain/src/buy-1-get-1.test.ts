@@ -4,10 +4,11 @@
  * 1 PM up to 7 PM until changed — and the website's name question), an order started inside the hours, the words,
  * and that the deals never take a % off.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_BUY_1_GET_1_DEALS,
   DEFAULT_BUY_1_GET_1_RULES,
+  US_SHOP_LOCALE,
   SHOP_SETTING_DEFAULTS,
   SHOP_SETTING_FORMAT,
   buy1Get1AllowedOn,
@@ -20,6 +21,9 @@ import {
   categoryNeverDiscounted,
   isBuy1Get1Category,
   karachiMinuteOfDay,
+  resetShopLocale,
+  setShopLocale,
+  shopMinuteOfDay,
   type Buy1Get1Rules,
 } from '@cheeseoclock/shared-types';
 
@@ -160,5 +164,31 @@ describe('Buy 1 Get 1: the words', () => {
   it('put whose post to check in the order notes, or to ask for it when no name was given', () => {
     expect(buy1Get1NoteLine('@ahmed_k')).toBe('Buy 1 Get 1: check the post by @ahmed_k');
     expect(buy1Get1NoteLine(null)).toBe('Buy 1 Get 1: ask to see the post');
+  });
+});
+
+describe('Buy 1 Get 1: a US shop keeps its hours on its own clock (0.9.1)', () => {
+  afterEach(resetShopLocale);
+  const ny = (y: number, mo: number, d: number, utcH: number, mi = 0) => Date.UTC(y, mo - 1, d, utcH, mi);
+
+  it('a Pakistani till still reads the Karachi minute', () => {
+    expect(shopMinuteOfDay(karachi(13, 0))).toBe(13 * 60);
+    expect(shopMinuteOfDay(-60_000)).toBe(karachiMinuteOfDay(-60_000));
+  });
+
+  it('1 PM-7 PM is 1 PM-7 PM in New York, summer and winter, not in Karachi', () => {
+    setShopLocale(US_SHOP_LOCALE);
+    const deals = rules({ on: true, opensMinute: 13 * 60, closesMinute: 19 * 60 });
+    // 20 Oct 2026, EDT (UTC-4): 1 PM = 17:00 UTC, 7 PM = 23:00 UTC.
+    expect(buy1Get1OpenAt(ny(2026, 10, 20, 16, 59), deals)).toBe(false);
+    expect(buy1Get1OpenAt(ny(2026, 10, 20, 17, 0), deals)).toBe(true);
+    expect(buy1Get1OpenAt(ny(2026, 10, 20, 22, 59), deals)).toBe(true);
+    expect(buy1Get1OpenAt(ny(2026, 10, 20, 23, 0), deals)).toBe(false);
+    // 1 PM in Karachi (08:00 UTC) is 4 AM in New York: shut.
+    expect(buy1Get1OpenAt(ny(2026, 10, 20, 8, 0), deals)).toBe(false);
+    // 15 Jan 2026, EST (UTC-5): 1 PM = 18:00 UTC.
+    expect(buy1Get1OpenAt(ny(2026, 1, 15, 17, 59), deals)).toBe(false);
+    expect(buy1Get1OpenAt(ny(2026, 1, 15, 18, 0), deals)).toBe(true);
+    expect(shopMinuteOfDay(ny(2026, 1, 15, 18, 30))).toBe(13 * 60 + 30);
   });
 });

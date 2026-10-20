@@ -8,6 +8,7 @@ import {
   buy1Get1HoursProblem,
   buy1Get1WindowWords,
   type Buy1Get1Deals,
+  shopTimeName,
 } from '@cheeseoclock/shared-types';
 
 /** The form: the value without its format. Every field is a pick, so it always reads. */
@@ -47,14 +48,17 @@ export function hourOptions(kind: 'from' | 'to', saved: number): Array<{ minute:
   return minutes.sort((a, b) => a - b).map((minute) => ({ minute, label: minuteLabel(minute) }));
 }
 
+/** The deals' clock in the owner's words: Karachi's on a Pakistani till, the shop's own elsewhere. */
+const clockName = (): string => shopTimeName({ city: true });
+
 /** Under the hours: what they mean, past midnight included. */
 export function hoursNote(f: Pick<Buy1Get1Form, 'opensMinute' | 'closesMinute'>): string {
-  if (buy1Get1HoursProblem(f)) return 'Every day, Karachi time.';
+  if (buy1Get1HoursProblem(f)) return `Every day, ${clockName()}.`;
   const words = buy1Get1WindowWords(f);
   if (words === 'all day') return 'Every day, all day.';
   return f.closesMinute < f.opensMinute
     ? `Every day ${words}: past midnight, into the next morning.`
-    : `Every day ${words}, Karachi time.`;
+    : `Every day ${words}, ${clockName()}.`;
 }
 
 /** The worked example under the card. */

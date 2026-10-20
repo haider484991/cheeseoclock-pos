@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { DrawerLogCounts, DrawerLogGroup, ReportDrawerLogLine, ReportShiftLine } from '@cheeseoclock/shared-types';
 import { fmtWhen } from './reportFormat';
@@ -161,7 +162,10 @@ export function shiftTestDeletedNote(s: Pick<ReportShiftLine, 'testDeletedCashCe
 }
 
 /** The log as rows for a file: the same columns everywhere (Excel, CSV, a shift's download). */
-export const DRAWER_LOG_COLUMNS = ['When', 'Till', 'Why', 'Order', 'Cash Rs', 'By', 'Approved by', 'Result', 'Note'] as const;
+/** The drawer log's column heads, the cash one in the shop's money. */
+export function drawerLogColumns(): string[] {
+  return ['When', 'Till', 'Why', 'Order', `Cash ${getShopLocale().symbol}`, 'By', 'Approved by', 'Result', 'Note'];
+}
 
 export function drawerLogRow(
   l: ReportDrawerLogLine,
@@ -188,6 +192,6 @@ export function drawerLogCsv(lines: readonly ReportDrawerLogLine[], nowMs: numbe
     const safe = /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
     return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
   };
-  const rows = [DRAWER_LOG_COLUMNS.map(cell).join(','), ...lines.map((l) => drawerLogRow(l, nowMs).map(cell).join(','))];
+  const rows = [drawerLogColumns().map(cell).join(','), ...lines.map((l) => drawerLogRow(l, nowMs).map(cell).join(','))];
   return String.fromCharCode(0xfeff) + rows.join('\r\n') + '\r\n';
 }

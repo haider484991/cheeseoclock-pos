@@ -99,6 +99,12 @@ const inputClass =
   'w-full rounded-lg border border-stone-300 px-3 py-2 text-sm dark:border-stone-700 dark:bg-stone-800 disabled:opacity-60';
 const labelClass = 'mb-1 block text-xs uppercase tracking-wider text-stone-500';
 
+/** The shop's money, one of it, capitalised: "Rupee" in Pakistan, "Dollar" in the US. */
+function majorOneTitle(): string {
+  const w = getShopLocale().words.majorOne;
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+
 export function MoneySettings() {
   useShopSettingsLive();
   const approvalS = useShopSetting('discounts.approval');
@@ -192,18 +198,18 @@ function MoneyCards({
             </p>
           </div>
           <div>
-            <label className={labelClass} htmlFor="ap-rupees">
-              Up to this much off in rupees without a manager (Rs)
+            <label className={labelClass} htmlFor="ap-amount">
+              Up to this much off in {getShopLocale().words.major} without a manager ({getShopLocale().symbol})
             </label>
             <input
-              id="ap-rupees"
+              id="ap-amount"
               inputMode="numeric"
               value={approvalD.form.rupees}
               onChange={(e) => approvalD.set({ ...approvalD.form, rupees: e.target.value.replace(/[^\d,]/g, '').slice(0, 7) })}
               className={inputClass}
             />
             <p className="mt-1 text-xs text-stone-500">
-              Whole rupees, Rs 0 to {formatCents(APPROVAL_MAX_FLAT_CENTS, { showSymbol: false })}. A rupee amount is also held to the
+              Whole {getShopLocale().words.major}, {formatCents(0)} to {formatCents(APPROVAL_MAX_FLAT_CENTS, { showSymbol: false })}. A {getShopLocale().words.majorOne} amount is also held to the
               % above: see the example below.
             </p>
           </div>
@@ -290,12 +296,12 @@ function MoneyCards({
           <p className="mt-1 text-xs text-stone-500">Whole % from 1 to 100. Leave a box empty to drop that button.</p>
         </div>
         <div>
-          <span className={labelClass}>Rupee buttons (up to {presetsD.form.rupees.length})</span>
+          <span className={labelClass}>{majorOneTitle()} buttons (up to {presetsD.form.rupees.length})</span>
           <div className="grid grid-cols-3 gap-2 md:w-3/5">
             {presetsD.form.rupees.map((t, i) => (
               <input
                 key={`f${i}`}
-                aria-label={`${getShopLocale().words.majorOne.charAt(0).toUpperCase()}${getShopLocale().words.majorOne.slice(1)} button ${i + 1}`}
+                aria-label={`${majorOneTitle()} button ${i + 1}`}
                 inputMode="numeric"
                 placeholder="—"
                 value={t}
@@ -304,7 +310,7 @@ function MoneyCards({
               />
             ))}
           </div>
-          <p className="mt-1 text-xs text-stone-500">Whole rupees, Rs 1 to {formatCents(PRESET_FLAT_MAX_CENTS)}.</p>
+          <p className="mt-1 text-xs text-stone-500">Whole {getShopLocale().words.major}, {formatCents(100)} to {formatCents(PRESET_FLAT_MAX_CENTS)}.</p>
         </div>
         <div>
           <span className={labelClass}>Reason buttons (up to {presetsD.form.reasons.length})</span>

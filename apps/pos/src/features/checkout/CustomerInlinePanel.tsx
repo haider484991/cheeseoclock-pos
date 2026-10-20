@@ -829,7 +829,7 @@ export function CustomChargeControl({
       }}
     >
       <label className="inline-flex items-center gap-1 font-semibold">
-        Rs
+        {getShopLocale().symbol}
         <input
           autoFocus
           aria-label={`Custom delivery charge in ${getShopLocale().words.major}`}

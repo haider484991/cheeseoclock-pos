@@ -1,4 +1,4 @@
-import { getShopLocale } from '@cheeseoclock/shared-types';
+import { getShopLocale, shopTimeName } from '@cheeseoclock/shared-types';
 /**
  * Getting a report off the screen, a tab at a time (costing spec Phase 3):
  * a CSV the owner can open in Excel and a printout, each with that tab's
@@ -82,7 +82,7 @@ import {
   varianceWindowText,
 } from './varianceFormat';
 import {
-  DRAWER_LOG_COLUMNS,
+  drawerLogColumns,
   drawerCash,
   drawerLogChips,
   drawerLogRow,
@@ -145,7 +145,7 @@ function menuHasProfit(r: ReportTabData['menu']): boolean {
 
 function channelProfitRows(channels: readonly ReportChannelProfit[]): CsvCell[][] {
   return [
-    ['Order type', 'Orders', `Sales before tax ${getShopLocale().symbol}`, `Of it delivery charges ${getShopLocale().symbol}`, `Food cost ${getShopLocale().symbol}`, `Sales with unknown cost ${getShopLocale().symbol}`, `foodpanda kept ${getShopLocale().symbol}`, `Price uplift ${getShopLocale().symbol}`, `Card and wallet fees ${getShopLocale().symbol}`, `Rider ${getShopLocale().symbol}`, `Earns ${getShopLocale().symbol} (known costs)`, `Per order ${getShopLocale().symbol} (known costs)`],
+    ['Order type', 'Orders', `Sales before tax ${sym()}`, `Of it delivery charges ${sym()}`, `Food cost ${sym()}`, `Sales with unknown cost ${sym()}`, `foodpanda kept ${sym()}`, `Price uplift ${sym()}`, `Card and wallet fees ${sym()}`, `Rider ${sym()}`, `Earns ${sym()} (known costs)`, `Per order ${sym()} (known costs)`],
     ...channels.map((c) => [
       CHANNEL_LABEL[c.channel],
       c.orderCount,
@@ -171,6 +171,8 @@ export interface Money {
 }
 export type CsvCell = string | number | Money | null;
 
+/** The shop's money sign for the column heads: "Sales Rs" in Pakistan, "Sales $" in the US. */
+const sym = (): string => getShopLocale().symbol;
 const rs = (cents: number): Money => ({ cents });
 
 function csvCell(v: CsvCell): string {
@@ -196,23 +198,23 @@ function kpiRows(k: ReportKpis, p: ReportKpis | null): CsvCell[][] {
     p ? (money ? rs(pick(p)) : pick(p)) : null,
   ];
   return [
-    row('Sales (after discounts and refunds, tax included) Rs', (x) => x.netSalesCents, true),
+    row(`Sales (after discounts and refunds, tax included) ${sym()}`, (x) => x.netSalesCents, true),
     row('Orders', (x) => x.orderCount, false),
-    row('Average order Rs', (x) => x.avgOrderCents, true),
+    row(`Average order ${sym()}`, (x) => x.avgOrderCents, true),
     row('Items sold', (x) => x.itemCount, false),
-    row('Items at menu price Rs', (x) => x.menuSalesCents, true),
-    row('Discounts given Rs', (x) => x.discountCents, true),
+    row(`Items at menu price ${sym()}`, (x) => x.menuSalesCents, true),
+    row(`Discounts given ${sym()}`, (x) => x.discountCents, true),
     row('Orders with a discount', (x) => x.discountedOrderCount, false),
-    row('Tax collected Rs', (x) => x.taxCents, true),
-    row('Refunds on kept orders Rs', (x) => x.partialRefundCents, true),
+    row(`Tax collected ${sym()}`, (x) => x.taxCents, true),
+    row(`Refunds on kept orders ${sym()}`, (x) => x.partialRefundCents, true),
     row('Orders refunded in full', (x) => x.fullRefundCount, false),
-    row('Refunded in full Rs', (x) => x.fullRefundCents, true),
+    row(`Refunded in full ${sym()}`, (x) => x.fullRefundCents, true),
     row('Cancelled before payment (orders)', (x) => x.voidCount, false),
-    row('Cancelled before payment Rs', (x) => x.voidCents, true),
+    row(`Cancelled before payment ${sym()}`, (x) => x.voidCents, true),
     row('Not paid yet (orders)', (x) => x.unpaidCount, false),
-    row('Not paid yet Rs', (x) => x.unpaidCents, true),
-    ...PAYMENT_ORDER.map((g) => row(`Paid by ${PAYMENT_LABEL[g]} Rs`, (x) => x.payments[g], true)),
-    row('No payment method recorded Rs', (x) => x.unrecordedPaymentCents, true),
+    row(`Not paid yet ${sym()}`, (x) => x.unpaidCents, true),
+    ...PAYMENT_ORDER.map((g) => row(`Paid by ${PAYMENT_LABEL[g]} ${sym()}`, (x) => x.payments[g], true)),
+    row(`No payment method recorded ${sym()}`, (x) => x.unrecordedPaymentCents, true),
   ];
 }
 
@@ -237,7 +239,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     sheet.push(...kpiRows(r.kpis, r.previous));
     const split = websiteVsTill(r.channels);
     sheet.heading('Website vs till');
-    sheet.push(['Taken on', 'Orders', 'Sales Rs']);
+    sheet.push(['Taken on', 'Orders', `Sales ${sym()}`]);
     sheet.push(['Website (pick-up and delivery)', split.website.orderCount, rs(split.website.netSalesCents)]);
     sheet.push(['Till (counter, phone, Foodpanda)', split.till.orderCount, rs(split.till.netSalesCents)]);
   },
@@ -245,21 +247,21 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
   when: (sheet, r, period, madeAt) => {
     const days = daySeries(r.byDay, period, madeAt);
     sheet.heading(days.unit === 'day' ? 'Sales by day' : 'Sales by month');
-    sheet.push([days.unit === 'day' ? 'Day' : 'Month', 'Orders', 'Sales Rs']);
+    sheet.push([days.unit === 'day' ? 'Day' : 'Month', 'Orders', `Sales ${sym()}`]);
     for (const d of days.bars) sheet.push([d.title, d.orderCount, rs(d.netSalesCents)]);
-    sheet.heading('Sales by hour (Pakistan time)');
-    sheet.push(['Hour', 'Orders', 'Sales Rs']);
+    sheet.heading(`Sales by hour (${shopTimeName()})`);
+    sheet.push(['Hour', 'Orders', `Sales ${sym()}`]);
     for (const h of hourSeries(r.byHour)) sheet.push([hourLabel(h.hour), h.orderCount, rs(h.netSalesCents)]);
 
     sheet.heading('Parts of the day');
-    sheet.push(['Part', 'Hours', 'Orders', 'Sales Rs', 'Average order Rs']);
+    sheet.push(['Part', 'Hours', 'Orders', `Sales ${sym()}`, `Average order ${sym()}`]);
     for (const l of [...r.dayparts.lines, ...(r.dayparts.other ? [r.dayparts.other] : [])]) {
       sheet.push([l.name, daypartHoursText(l.fromHour, l.toHour), l.orderCount, rs(l.netSalesCents), l.orderCount > 0 ? rs(l.avgOrderCents) : null]);
     }
 
     const hm = r.heatmap;
     if (heatmapShown(hm)) {
-      sheet.heading('An average day by weekday and hour (sales Rs; closed days left out)');
+      sheet.heading(`An average day by weekday and hour (sales ${sym()}; closed days left out)`);
       sheet.push(['Day', 'Days counted', ...hm.hours.map(hourLabel)]);
       WEEKDAYS.forEach((day, w) => {
         sheet.push([day, hm.dayCounts[w] ?? 0, ...hm.hours.map((h) => rs(hm.cells.find((c) => c.weekday === w && c.hour === h)?.avgNetSalesCents ?? 0))]);
@@ -275,12 +277,12 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
   menu: (sheet, r) => {
     const costs = r.costs;
     const withProfit = menuHasProfit(r);
-    const costHead = costs ? ['Food cost (known sales)', 'Costs known for', ...(withProfit ? [`Profit ${getShopLocale().symbol} (before channel costs)`, `Profit per sale ${getShopLocale().symbol}`] : [])] : [];
+    const costHead = costs ? ['Food cost (known sales)', 'Costs known for', ...(withProfit ? [`Profit ${sym()} (before channel costs)`, `Profit per sale ${sym()}`] : [])] : [];
     sheet.heading('Items sold (menu price, before order discounts)');
-    sheet.push(['Item', 'Category', 'Quantity', 'Sales Rs', ...costHead]);
+    sheet.push(['Item', 'Category', 'Quantity', `Sales ${sym()}`, ...costHead]);
     for (const i of r.items) sheet.push([i.name, i.categoryName, i.quantity, rs(i.salesCents), ...(costs ? costCells(costs.items[i.key], withProfit) : [])]);
     sheet.heading('Categories (menu price, before order discounts)');
-    sheet.push(['Category', 'Quantity', 'Sales Rs', ...costHead]);
+    sheet.push(['Category', 'Quantity', `Sales ${sym()}`, ...costHead]);
     for (const c of r.categories) {
       sheet.push([c.name, c.quantity, rs(c.salesCents), ...(costs ? costCells(costs.categories[c.categoryId ?? `name:${c.name}`], withProfit) : [])]);
     }
@@ -289,12 +291,12 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
 
   channels: (sheet, r) => {
     sheet.heading('Order types');
-    sheet.push(['Order type', 'Orders', 'Sales Rs']);
+    sheet.push(['Order type', 'Orders', `Sales ${sym()}`]);
     for (const c of r.channels) sheet.push([CHANNEL_LABEL[c.channel], c.orderCount, rs(c.netSalesCents)]);
     if ((r.cameBy?.length ?? 0) > 0) {
       // How the orders came in (orders.came_by, 0044): the counter's buttons, the website, foodpanda, or not asked.
       sheet.heading('How orders came in');
-      sheet.push(['Came in by', 'Orders', 'Sales Rs', 'With an automatic offer', 'Offers took off Rs']);
+      sheet.push(['Came in by', 'Orders', `Sales ${sym()}`, 'With an automatic offer', `Offers took off ${sym()}`]);
       for (const c of r.cameBy ?? []) sheet.push([cameByLabel(c.cameBy), c.orderCount, rs(c.netSalesCents), c.offerCount, rs(c.offerCents)]);
     }
     if (r.profit) {
@@ -304,7 +306,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
       sheet.push([riderText(r.profit.riderCost)]);
     }
     sheet.heading('Deliveries by rider');
-    sheet.push(['Rider', 'Deliveries', 'Sales Rs', 'Average time on the road (minutes)']);
+    sheet.push(['Rider', 'Deliveries', `Sales ${sym()}`, 'Average time on the road (minutes)']);
     for (const d of r.deliveries.byRider) sheet.push([d.name, d.deliveries, rs(d.netSalesCents), d.avgMinutesOut]);
     const withProfit = r.areas.some((a) => a.riderCents !== null);
     sheet.heading('Deliveries by area');
@@ -312,13 +314,13 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
       'Area',
       'Delivery zone',
       'Orders',
-      'Sales Rs',
-      'Average order Rs',
-      'Delivery charges before tax Rs',
+      `Sales ${sym()}`,
+      `Average order ${sym()}`,
+      `Delivery charges before tax ${sym()}`,
       'Average time on the road (minutes)',
       'Customers',
       'Came back (2+ orders in 90 days)',
-      ...(withProfit ? ['Rider Rs', 'Earns per order Rs'] : []),
+      ...(withProfit ? [`Rider ${sym()}`, `Earns per order ${sym()}`] : []),
     ]);
     for (const a of r.areas) {
       sheet.push([
@@ -344,7 +346,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
   foodStock: (sheet, r) => {
     const f = r.foodCost;
     sheet.heading('Food cost (this till; sales before tax, after discounts)');
-    sheet.push(['', 'Orders', 'Rs', 'Share']);
+    sheet.push(['', 'Orders', sym(), 'Share']);
     sheet.push(['Food sales', null, rs(f.foodSalesCents), null]);
     sheet.push(['Cost of food sold', null, rs(f.costOfSalesCents), null]);
     sheet.push(['Food cost (sales with a known cost)', null, null, f.foodCostBps === null ? null : formatBps(f.foodCostBps)]);
@@ -355,7 +357,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     if (f.stillOpen.orderCount > 0) sheet.push(['Still open from earlier days', f.stillOpen.orderCount, rs(f.stillOpen.costCents), null]);
 
     sheet.heading('Waste by reason (at what the stock cost when taken)');
-    sheet.push(['Reason', 'Times', 'Cost Rs']);
+    sheet.push(['Reason', 'Times', `Cost ${sym()}`]);
     for (const w of f.wasteByReason) sheet.push([wasteReasonLabel(w.reason, f.wasteLabels), w.times, rs(w.cents)]);
     sheet.push(['Total', null, rs(f.wasteCents)]);
     if (f.cancelledOrderCount > 0) {
@@ -363,24 +365,24 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     }
 
     sheet.heading('Sales with missing costs');
-    sheet.push(['Item', 'Why', 'Sold', 'Sales Rs']);
+    sheet.push(['Item', 'Why', 'Sold', `Sales ${sym()}`]);
     for (const m of f.missingSales) sheet.push([m.name, MISSING_COST_WHY[m.why], m.quantity, rs(m.salesCents)]);
     sheet.push(['Total', null, null, rs(f.missingSalesCents)]);
 
     sheet.heading('Ingredients wasted');
-    sheet.push(['Ingredient', 'Unit', 'Wasted', 'Cost Rs']);
+    sheet.push(['Ingredient', 'Unit', 'Wasted', `Cost ${sym()}`]);
     for (const i of f.wasteIngredients) sheet.push([i.name, i.unit, i.wastedQty, rs(i.wastedCents)]);
 
     const p = r.purchases;
     sheet.heading('Purchases (this till, at the bills)');
-    sheet.push(['Bought from', 'Bills', 'Spent Rs']);
+    sheet.push(['Bought from', 'Bills', `Spent ${sym()}`]);
     // Stock booked in by hand has no bills: its Bills cell is empty, and it is not in the total's count.
     for (const s of p.bySupplier) sheet.push([s.name, s.from === 'by_hand' ? null : s.bills, rs(s.spendCents)]);
     sheet.push(['Total', p.bills, rs(p.spendCents)]);
     if (p.byHandEntries > 0) sheet.push([`Of it: booked in by hand ${p.byHandEntries} ${p.byHandEntries === 1 ? 'time' : 'times'}, no bill (at the price then)`, null, rs(p.byHandCents)]);
 
     sheet.heading('Purchases by ingredient');
-    sheet.push(['Ingredient', 'Unit', 'Bought', 'Times', 'Spent Rs', 'Latest price Rs', 'Per', 'Change on the purchase before']);
+    sheet.push(['Ingredient', 'Unit', 'Bought', 'Times', `Spent ${sym()}`, `Latest price ${sym()}`, 'Per', 'Change on the purchase before']);
     for (const l of p.byIngredient) {
       // Per kg / litre for something weighed (a gram's price in millicents is paisa per kg), else per unit.
       const big = thousandUnit(l.unit);
@@ -392,14 +394,14 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
   team: (sheet, r) => {
     const hasCosts = r.foodCost?.hasCosts ?? false;
     sheet.heading('Staff');
-    sheet.push(['Taken by', 'Orders', 'Sales Rs', 'Discounts given Rs', 'Cancelled orders', 'Drawer opened with no sale', 'Drawer opens (all)']);
+    sheet.push(['Taken by', 'Orders', `Sales ${sym()}`, `Discounts given ${sym()}`, 'Cancelled orders', 'Drawer opened with no sale', 'Drawer opens (all)']);
     for (const s of r.staff) {
       sheet.push([s.name, s.orderCount, rs(s.netSalesCents), rs(s.discountCents), s.voidCount, s.noSaleOpens, s.drawerOpens ?? null]);
     }
     if (r.offerCheck && r.offerCheck.counterOrders > 0 && (r.offerCheck.phoneOrWhatsapp > 0 || r.offerCheck.offerCents > 0)) {
       // The owner's check on his automatic offers (flags over 1.5 × the shop's).
       sheet.heading('Came by & offers');
-      sheet.push(['Taken by', 'Orders asked', 'Phone or WhatsApp', 'With an offer', 'Offers took off Rs', 'Flag']);
+      sheet.push(['Taken by', 'Orders asked', 'Phone or WhatsApp', 'With an offer', `Offers took off ${sym()}`, 'Flag']);
       for (const s of r.staff.filter((x) => !x.isWebsite && (x.counterOrders ?? 0) > 0)) {
         sheet.push([
           s.name,
@@ -415,7 +417,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     if ((r.offerRepeats?.length ?? 0) > 0) {
       // "Once a customer a day" given twice to one phone on one day (the link between the tills was down).
       sheet.heading('Once a customer a day, given more than once');
-      sheet.push(['Day', 'Offer', 'Phone', 'Orders', 'Took off Rs']);
+      sheet.push(['Day', 'Offer', 'Phone', 'Orders', `Took off ${sym()}`]);
       for (const x of r.offerRepeats ?? []) {
         const l = offerRepeatLine(x);
         sheet.push([x.day, l.offer, l.phone, l.orders, rs(x.amountCents)]);
@@ -424,7 +426,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     }
 
     sheet.heading('Shifts (cash drawer)');
-    sheet.push(['Opened', 'Closed', 'Opened by', 'Closed by', 'Float Rs', 'Cash put in Rs', 'Cash taken out Rs', 'To riders Rs', 'Expected Rs', 'Counted Rs', 'Short (-) / over (+) Rs', 'Cash in/out entries', 'Drawer opened with no sale', 'Opening note', 'Closing note', 'Unpaid orders carried over', 'Carry-over reason', 'Drawer used (all)', 'Test orders deleted after close Rs', 'Carried over, later deleted as tests', COUNTED_BY_NOTE]);
+    sheet.push(['Opened', 'Closed', 'Opened by', 'Closed by', `Float ${sym()}`, `Cash put in ${sym()}`, `Cash taken out ${sym()}`, `To riders ${sym()}`, `Expected ${sym()}`, `Counted ${sym()}`, `Short (-) / over (+) ${sym()}`, 'Cash in/out entries', 'Drawer opened with no sale', 'Opening note', 'Closing note', 'Unpaid orders carried over', 'Carry-over reason', 'Drawer used (all)', `Test orders deleted after close ${sym()}`, 'Carried over, later deleted as tests', COUNTED_BY_NOTE]);
     for (const s of r.shifts) {
       // v0.7.34: what the drawer paid outside riders for an order has its own
       // column, right after the cash taken out, which is now the rest (cash
@@ -458,15 +460,15 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     }
 
     sheet.heading('Discounts by reason');
-    sheet.push(['Reason', 'Times', 'Amount Rs']);
+    sheet.push(['Reason', 'Times', `Amount ${sym()}`]);
     for (const d of r.discounts.byReason) sheet.push([d.reason, d.count, rs(d.amountCents)]);
     sheet.heading('Discounts by person');
-    sheet.push(['Given by', 'Times', 'Amount Rs', 'With manager approval']);
+    sheet.push(['Given by', 'Times', `Amount ${sym()}`, 'With manager approval']);
     for (const d of r.discounts.byPerson) sheet.push([d.name, d.count, rs(d.amountCents), d.approvedCount]);
     if ((r.discounts.standing?.length ?? 0) > 0) {
       // The shop's standing offers (the foodpanda deal, the automatic offers): put on by the till, not by staff.
       sheet.heading('Standing offers');
-      sheet.push(['Offer', 'Orders', 'Amount Rs']);
+      sheet.push(['Offer', 'Orders', `Amount ${sym()}`]);
       for (const d of r.discounts.standing ?? []) sheet.push([d.name, d.count, rs(d.amountCents)]);
     }
     // The staff's discounts: the standing offers are listed above, not per order.
@@ -477,13 +479,13 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
         ? `${eachTitle} (latest ${r.discounts.recent.length} of ${staffCount})`
         : eachTitle,
     );
-    sheet.push(['When', 'Order', 'Amount Rs', 'Entered as', 'Reason', 'Given by', 'Approved by']);
+    sheet.push(['When', 'Order', `Amount ${sym()}`, 'Entered as', 'Reason', 'Given by', 'Approved by']);
     for (const d of r.discounts.recent) {
       sheet.push([fmtWhen(d.createdAt), d.orderNumber, rs(d.amountCents), d.entered, d.reason, d.givenBy, d.approvedBy]);
     }
 
     sheet.heading('Refunds');
-    sheet.push(['Refunded', 'Order', 'Order started', 'Amount Rs', 'Paid back as', 'Whole order', 'Reason', 'Stock', 'Approved by']);
+    sheet.push(['Refunded', 'Order', 'Order started', `Amount ${sym()}`, 'Paid back as', 'Whole order', 'Reason', 'Stock', 'Approved by']);
     for (const x of r.refunds) {
       sheet.push([
         fmtWhen(x.refundedAt),
@@ -499,7 +501,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     }
 
     sheet.heading('Cancelled before payment');
-    sheet.push(['Cancelled', 'Order', 'Value Rs', 'Reason', 'Stock', 'Approved by', 'Taken by']);
+    sheet.push(['Cancelled', 'Order', `Value ${sym()}`, 'Reason', 'Stock', 'Approved by', 'Taken by']);
     for (const v of r.voids) {
       sheet.push([
         fmtWhen(v.voidedAt ?? v.createdAt),
@@ -525,7 +527,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
 
   profit: (sheet, r) => {
     sheet.heading('From sales to profit before overheads (this till)');
-    sheet.push(['', 'Rs']);
+    sheet.push(['', sym()]);
     for (const s of r.steps) sheet.push([stepLabel(s.key, s.cents), rs(s.cents)]);
     sheet.push(['Profit before overheads', rs(r.profitCents)]);
     const unknown = unknownCostNote(r);
@@ -537,13 +539,13 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     sheet.push([riderText(r.riderCost)]);
     if (r.estimatedOrders > 0) sheet.push([estimatedText(r)]);
     sheet.heading('What was thrown away, by reason');
-    sheet.push(['Reason', 'Times', 'Cost Rs']);
+    sheet.push(['Reason', 'Times', `Cost ${sym()}`]);
     for (const w of r.wasteByReason) sheet.push([wasteReasonLabel(w.reason, r.wasteLabels), w.times, rs(w.cents)]);
     sheet.push(['Food sent out, not paid', r.sentNotPaid.orderCount, rs(r.sentNotPaid.costCents)]);
     sheet.heading('What each order type earns (before waste and missing stock)');
     sheet.push(...channelProfitRows(r.channels));
     sheet.heading('Profit by category (food only, fully costed sales, before channel costs)');
-    sheet.push(['Category', 'Sold', 'Sales before tax Rs', 'Costs known for', 'Food cost', 'Profit Rs', 'Profit per sale Rs']);
+    sheet.push(['Category', 'Sold', `Sales before tax ${sym()}`, 'Costs known for', 'Food cost', `Profit ${sym()}`, `Profit per sale ${sym()}`]);
     for (const c of r.categories) {
       sheet.push([
         c.name,
@@ -561,7 +563,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
 /** The menu map in the file (costing spec 4.8). */
 function menuMapCsv(sheet: CsvSheet, m: ReportMenuMap): void {
   sheet.heading(`Menu map (${m.lastDays ? 'the last 28 days' : 'the period'}; what one sale earns at menu price)`);
-  sheet.push(['Category', 'Dish', 'Sold', 'Share of the category', 'Earns a sale Rs', 'Price Rs', 'Cost Rs', 'Where it sits', 'What to do']);
+  sheet.push(['Category', 'Dish', 'Sold', 'Share of the category', `Earns a sale ${sym()}`, `Price ${sym()}`, `Cost ${sym()}`, 'Where it sits', 'What to do']);
   for (const c of m.categories) {
     if (c.state === 'few_sales') sheet.push([c.name, `Not enough sales yet: ${c.units} sold, it needs 200.`]);
     if (c.state === 'few_dishes') sheet.push([c.name, 'Not enough dishes with a known cost sold yet: it needs 3.']);
@@ -583,7 +585,7 @@ export function buildTabCsv<K extends ReportTab>(
   const sheet = new CsvSheet();
   sheet.push(['Sales report', REPORT_TAB_LABEL[tab]]);
   sheet.push(['Period', `${period.title}: ${period.dates}`]);
-  sheet.push(['Trading day', '5 am to 5 am, Pakistan time. Orders count on the day they were started.']);
+  sheet.push(['Trading day', `5 am to 5 am, ${shopTimeName()}. Orders count on the day they were started.`]);
   if (tab === 'overview' && period.compare) sheet.push(['Compared with', period.compare.label]);
   sheet.push(['Made', fmtWhen(madeAt.toISOString())]);
   (CSV_PARTS[tab] as CsvPart<K>)(sheet, data, period, madeAt);
@@ -606,7 +608,7 @@ function teamExtrasCsv(sheet: CsvSheet, extras: ReportExtras): void {
     sheet.push(drawerLogChips(log.counts).map((c) => `${c.label} ${c.n}`));
     const partial = partialListText(log.rows.length, log.counts.total);
     if (partial) sheet.push([partial]);
-    sheet.push([...DRAWER_LOG_COLUMNS]);
+    sheet.push(drawerLogColumns());
     const now = Date.now();
     for (const l of log.rows) {
       const [when, till, why, order, , by, approved, result, note] = drawerLogRow(l, now);
@@ -621,7 +623,7 @@ function teamExtrasCsv(sheet: CsvSheet, extras: ReportExtras): void {
     sheet.heading(`Deleted test orders — ${t.total} (${formatCents(t.totalCents)})`);
     const partial = partialListText(t.rows.length, t.total);
     if (partial) sheet.push([partial]);
-    sheet.push(['Order', 'Items', 'Taken', 'Taken by', 'Deleted', 'Deleted by', 'Why', 'Total Rs', 'Paid', 'Stock']);
+    sheet.push(['Order', 'Items', 'Taken', 'Taken by', 'Deleted', 'Deleted by', 'Why', `Total ${sym()}`, 'Paid', 'Stock']);
     for (const d of t.rows) {
       sheet.push([
         d.orderNumber,
@@ -709,8 +711,8 @@ function varianceCsv(sheet: CsvSheet, v: ReportVariance): void {
   const stale = v.staleSync ? staleLinkText(v.link) : null;
   if (stale) sheet.push([stale]);
   sheet.push([varianceHeadline(v)]);
-  sheet.push(['Not explained Rs', rs(v.totalCents)]);
-  sheet.push(['Food sales Rs', rs(v.foodSalesCents)]);
+  sheet.push([`Not explained ${sym()}`, rs(v.totalCents)]);
+  sheet.push([`Food sales ${sym()}`, rs(v.foodSalesCents)]);
   sheet.push(['Of food sales', v.varianceBps === null ? null : formatBps(Math.abs(v.varianceBps)), v.band ? VARIANCE_BAND_LABEL[v.band] : null]);
   sheet.push([
     'Ingredient',
@@ -725,7 +727,7 @@ function varianceCsv(sheet: CsvSheet, v: ReportVariance): void {
     'Should have used',
     'Waste logged',
     'Not explained',
-    'Not explained Rs',
+    `Not explained ${sym()}`,
     'Fixes typed',
   ]);
   for (const l of v.lines) {
@@ -761,12 +763,12 @@ function varianceCsv(sheet: CsvSheet, v: ReportVariance): void {
   if (v.actualCogs) {
     const a = v.actualCogs;
     sheet.push([actualCogsText(a)]);
-    sheet.push(['Stock held at the first stock take Rs', rs(a.openingCents)]);
-    sheet.push(['Bought in between Rs', rs(a.purchasesCents)]);
-    sheet.push(['Stock held at the second Rs', rs(a.closingCents)]);
-    sheet.push(['Food used Rs', rs(a.costCents)]);
+    sheet.push([`Stock held at the first stock take ${sym()}`, rs(a.openingCents)]);
+    sheet.push([`Bought in between ${sym()}`, rs(a.purchasesCents)]);
+    sheet.push([`Stock held at the second ${sym()}`, rs(a.closingCents)]);
+    sheet.push([`Food used ${sym()}`, rs(a.costCents)]);
     sheet.push(['Includes price changes on stock you held. Only ingredients a recipe or a batch uses.']);
-    if (a.otherPurchasesCents > 0) sheet.push(['Other things bought (left out) Rs', rs(a.otherPurchasesCents)]);
+    if (a.otherPurchasesCents > 0) sheet.push([`Other things bought (left out) ${sym()}`, rs(a.otherPurchasesCents)]);
   } else {
     sheet.push([v.actualCogsWhyNot]);
   }
@@ -776,7 +778,7 @@ function varianceCsv(sheet: CsvSheet, v: ReportVariance): void {
 function trendsCsv(sheet: CsvSheet, t: ReportTrends): void {
   const then = (c: TrendComparison): CsvCell => (c.figures ? rs(c.figures.netSalesCents) : 'no data then');
   sheet.heading('How the shop is trending (so far, to the minute; not tied to the period)');
-  sheet.push(['', 'Sales Rs', 'Orders', 'Average order Rs', 'Compared with', 'Then Rs', 'Change', 'A year ago Rs', 'Change']);
+  sheet.push(['', `Sales ${sym()}`, 'Orders', `Average order ${sym()}`, 'Compared with', `Then ${sym()}`, 'Change', `A year ago ${sym()}`, 'Change']);
   for (const line of t.lines) {
     const label = TREND_LABEL[line.period];
     const f = line.current.figures;
@@ -796,7 +798,7 @@ function trendsCsv(sheet: CsvSheet, t: ReportTrends): void {
   if (t.months.length === 0) return;
   const costs = new Map((t.monthCosts ?? []).map((m) => [m.month, m]));
   sheet.heading('The last 12 months');
-  sheet.push(['Month', 'Sales Rs', 'Orders', 'Average order Rs', ...(t.monthCosts ? ['Food cost', 'Costs known for'] : []), 'Note']);
+  sheet.push(['Month', `Sales ${sym()}`, 'Orders', `Average order ${sym()}`, ...(t.monthCosts ? ['Food cost', 'Costs known for'] : []), 'Note']);
   t.months.forEach((m, i) => {
     const note = monthNote(m, i === t.months.length - 1);
     const none = note === 'no data then';
@@ -960,7 +962,7 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
         [days.unit === 'day' ? 'Day' : 'Month', 'Orders', 'Sales'],
         days.bars.map((d) => [esc(d.title), String(d.orderCount), money(d.netSalesCents)]),
         [1, 2],
-      )}</div><div><h2>Sales by hour (Pakistan time)</h2>${table(
+      )}</div><div><h2>Sales by hour (${shopTimeName()})</h2>${table(
         ['Hour', 'Orders', 'Sales'],
         hours.map((h) => [esc(hourLabel(h.hour)), String(h.orderCount), money(h.netSalesCents)]),
         [1, 2],
@@ -1302,7 +1304,7 @@ function profitPrint(r: ReportTabData['profit']): string[] {
   const gain = stockGainNote(r);
   return [
     `<section><h2>From sales to profit before overheads (this till)</h2><p><b>${esc(profitHeadline(r))}</b></p>${table(
-      ['', 'Rs'],
+      ['', sym()],
       [...r.steps.map((s) => [esc(stepLabel(s.key, s.cents)), esc(stepAmount(s.key, s.cents))]), ['<b>Profit before overheads</b>', `<b>${money(r.profitCents)}</b>`]],
       [1],
     )}${unknown ? `<p class="muted">${esc(unknown)}</p>` : ''}${gain ? `<p class="muted">${esc(gain)}</p>` : ''}${
@@ -1374,7 +1376,7 @@ function variancePrint(v: ReportVariance): string {
     `<p><b>${esc(varianceHeadline(v))}</b>${v.band ? ` Rating: ${esc(VARIANCE_BAND_LABEL[v.band])}.` : ''}</p>` +
     warnings +
     table(
-      ['Ingredient', 'Should have used', 'Went', 'Waste logged', 'Not explained', 'Rs'],
+      ['Ingredient', 'Should have used', 'Went', 'Waste logged', 'Not explained', sym()],
       lines.shown.map((l) => [
         `${esc(l.name)} <span class="muted">${esc(lineVerdict(l))}</span>`,
         esc(formatQty(l.shouldHaveUsed, l.unit)),
@@ -1399,7 +1401,7 @@ function variancePrint(v: ReportVariance): string {
     `</section><section><h2>Real food cost</h2>` +
     (a
       ? `<p><b>${esc(actualCogsText(a))}</b></p>${table(
-          ['', 'Rs'],
+          ['', sym()],
           [
             ['Stock held at the first stock take', money(a.openingCents)],
             ['+ bought in between', money(a.purchasesCents)],

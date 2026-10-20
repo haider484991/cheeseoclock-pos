@@ -12,6 +12,7 @@
  * memory, per login), so a look at Menu costs, another dish's "Try a
  * price" or Targets & fees adds to the list instead of starting it again.
  */
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
@@ -183,7 +184,7 @@ export function WhatIfTab() {
                   <span className="min-w-0 flex-1 truncate font-medium">{d.name}</span>
                   <span className="text-stone-500">now {formatCents(d.basePriceCents)} →</span>
                   <label className="flex items-center gap-1">
-                    Rs
+                    {getShopLocale().symbol}
                     <input
                       className={cn(inputCls, bad && 'border-red-400')}
                       inputMode="decimal"
@@ -312,7 +313,7 @@ function IngredientTryRow({
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-2">
         <label className="flex items-center gap-1">
-          Rs
+          {getShopLocale().symbol}
           <input
             className="w-24 rounded-lg border border-stone-300 px-2 py-1 text-right font-mono dark:border-stone-700 dark:bg-stone-800"
             inputMode="decimal"

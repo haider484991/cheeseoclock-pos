@@ -10,7 +10,7 @@ import { useMemo } from 'react';
 import { Wallet } from 'lucide-react';
 import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import { OPENING_FLOAT_MAX_CENTS, type OpeningFloatSetting, type TillSettingCard } from '@cheeseoclock/shared-types';
+import { OPENING_FLOAT_MAX_CENTS, type OpeningFloatSetting, type TillSettingCard, getShopLocale } from '@cheeseoclock/shared-types';
 import { SettingCard } from './shop-rules/SettingCard';
 import { useDraft } from './shop-rules/useDraft';
 import { useTillSetting } from './shop-rules/useTillSetting';
@@ -87,19 +87,19 @@ function FloatForm({
       </div>
       {d.form.mode === 'fixed' && (
         <div>
-          <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500" htmlFor="opening-float-rupees">
+          <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500" htmlFor="opening-float-amount">
             Fixed float
           </label>
           <div className="flex items-center gap-2">
-            <span className="text-sm text-stone-600 dark:text-stone-300">Rs</span>
+            <span className="text-sm text-stone-600 dark:text-stone-300">{getShopLocale().symbol}</span>
             <input
-              id="opening-float-rupees"
+              id="opening-float-amount"
               inputMode="numeric"
               value={d.form.rupees}
               onChange={(e) => d.set({ ...d.form, rupees: e.target.value.replace(/[^\d,]/g, '').slice(0, 9) })}
               className="w-32 rounded-lg border border-stone-300 px-3 py-2 text-right font-mono text-sm dark:border-stone-700 dark:bg-stone-800 disabled:opacity-60"
             />
-            <span className="text-xs text-stone-400">(whole rupees, Rs 0 to {formatCents(OPENING_FLOAT_MAX_CENTS).replace(/^Rs /, '')})</span>
+            <span className="text-xs text-stone-400">(whole {getShopLocale().words.major}, {formatCents(0)} to {formatCents(OPENING_FLOAT_MAX_CENTS, { showSymbol: false })})</span>
           </div>
         </div>
       )}

@@ -1,4 +1,4 @@
-import { getShopLocale } from '@cheeseoclock/shared-types';
+import { getShopLocale, shopIsInPakistan } from '@cheeseoclock/shared-types';
 import { useMemo, useRef, useState, type ChangeEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -148,8 +148,8 @@ export function VoucherBatchDialog({ batch, onClose, onSaved }: Props) {
             </label>
             <div className="grid grid-cols-2 gap-3">
               <label className="block">
-                <span className="mb-1 block text-sm font-semibold">Covers up to (Rs)</span>
-                <input inputMode="decimal" value={covers} onChange={(e) => setCovers(e.target.value)} placeholder="1899" className={INPUT} />
+                <span className="mb-1 block text-sm font-semibold">Covers up to ({getShopLocale().symbol})</span>
+                <input inputMode="decimal" value={covers} onChange={(e) => setCovers(e.target.value)} placeholder={shopIsInPakistan() ? '1899' : '20'} className={INPUT} />
                 <span className="mt-1 block text-xs text-stone-500">The price of that item. A dearer one: the rest is paid.</span>
               </label>
               <div>

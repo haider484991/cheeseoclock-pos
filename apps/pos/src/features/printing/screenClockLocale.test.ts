@@ -15,7 +15,7 @@ afterEach(resetShopLocale);
 // 00:35 UTC on 21 Oct = 20:35 on 20 Oct in New York (EDT); 05:35 on the 21st in Karachi.
 const AT = '2026-10-21T00:35:00.000Z';
 
-describe('Pakistan keeps Karachi time on these screens', () => {
+describe('Pakistan keeps its clock (Karachi, UTC+5) on these screens', () => {
   it('as before', () => {
     expect(paperTime(AT)).toBe('05:35');
     expect(whenText(new Date(AT))).toBe('21 Oct 2026, 05:35');

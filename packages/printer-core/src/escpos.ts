@@ -106,6 +106,7 @@ const TRANSLITERATIONS: Record<string, string> = {
   ' ': ' ',
   ' ': ' ',
   '×': 'x',
+  // eslint-disable-next-line no-restricted-syntax -- the rupee glyph's ASCII spelling, for printers that lack it
   '₨': 'Rs',
   '™': 'TM',
   '®': '(R)',

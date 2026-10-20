@@ -1,3 +1,4 @@
+import { DEFAULT_SHOP_LOCALE, formatCents } from '@cheeseoclock/shared-types';
 import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
@@ -390,7 +391,9 @@ export function OnboardingPage({ onComplete }: Props) {
                   >
                     <option value="none">None yet — add them in Settings → Delivery areas</option>
                     {country === 'PK' && (
-                      <option value="karachi-dha-clifton">Karachi: DHA Phases 1–8 & Clifton Blocks 1–9 (Rs 200/250)</option>
+                      <option value="karachi-dha-clifton">Karachi: DHA Phases 1–8 & Clifton Blocks 1–9 ({formatCents(20_000, { locale: DEFAULT_SHOP_LOCALE })}/
+                        {formatCents(25_000, { locale: DEFAULT_SHOP_LOCALE, showSymbol: false })})
+                      </option>
                     )}
                   </select>
                 </Field>

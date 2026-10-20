@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { shopTakes } from '@cheeseoclock/shared-types';
+import { shopTakes, getShopLocale } from '@cheeseoclock/shared-types';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
@@ -263,7 +263,7 @@ export function RefundOrderDialog({ snap, onClose, onDone, startOn, startMethod,
               {mode === 'partial' && (
                 <>
                   <label className="block text-sm">
-                    <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">Amount (Rs)</span>
+                    <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">Amount ({getShopLocale().symbol})</span>
                     <input
                       inputMode="decimal"
                       value={partialStr}

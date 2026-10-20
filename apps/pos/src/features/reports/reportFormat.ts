@@ -1,4 +1,4 @@
-import { getShopLocale } from '@cheeseoclock/shared-types';
+import { getShopLocale, shopWallClock } from '@cheeseoclock/shared-types';
 /**
  * Plain-words labels and the small calculations the Reports page shows.
  * Pure (no React, no DOM) so they are unit-tested.
@@ -280,11 +280,20 @@ export function weekdayAverages(
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/** An instant on the Pakistan clock: "26 Sep, 8:30 pm". Fixed UTC+5, whatever the PC's zone. */
+/**
+ * An instant on the shop's clock: "26 Sep, 8:30 pm" on a Pakistani till (fixed UTC+5, whatever the PC's zone, as
+ * ever); "Sep 26, 8:30 pm" on a US one, in its own zone.
+ */
 export function fmtWhen(iso: string | null): string {
   if (!iso) return '—';
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return '—';
+  const l = getShopLocale();
+  if (l.country !== 'PK') {
+    const w = shopWallClock(ms);
+    const clock = `${w.h % 12 === 0 ? 12 : w.h % 12}:${String(w.mi).padStart(2, '0')} ${w.h < 12 ? 'am' : 'pm'}`;
+    return l.dateOrder === 'mdy' ? `${MONTHS[w.m - 1]} ${w.d}, ${clock}` : `${w.d} ${MONTHS[w.m - 1]}, ${clock}`;
+  }
   const d = new Date(ms + 5 * 3_600_000);
   const h = d.getUTCHours();
   const m = String(d.getUTCMinutes()).padStart(2, '0');
