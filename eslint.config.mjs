@@ -4,6 +4,7 @@ import globals from 'globals';
 import jsxA11y from 'eslint-plugin-jsx-a11y';
 import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
+import { PAKISTAN_RESTRICTIONS, PAKISTAN_ALLOWLIST, PAKISTAN_EXEMPT } from './eslint.pakistan-ratchet.mjs';
 
 /**
  * One flat config for the whole monorepo — apps *and* packages — so a rule
@@ -144,6 +145,20 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-unused-vars': 'off',
       'no-console': 'off',
+    },
+  },
+
+  {
+    /**
+     * The Pakistan ratchet (international edition, Phase 0). New spelled-out
+     * rupees, 'en-PK', Asia/Karachi or fixed +5 hour offsets are an error;
+     * the ones already here are listed in the allowlist below, which only
+     * ever shrinks. See eslint.pakistan-ratchet.mjs.
+     */
+    files: ['apps/**/*.{ts,tsx}', 'packages/**/*.{ts,tsx}'],
+    ignores: [...PAKISTAN_EXEMPT, ...PAKISTAN_ALLOWLIST],
+    rules: {
+      'no-restricted-syntax': ['error', ...PAKISTAN_RESTRICTIONS],
     },
   },
 );
