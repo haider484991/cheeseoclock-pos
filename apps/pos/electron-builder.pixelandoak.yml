@@ -1,0 +1,35 @@
+# -----------------------------------------------------------------------------
+# Pixel & Oak POS: the till client shops download (shared-types edition.ts,
+# 'pixelandoak'). Built with COC_EDITION=pixelandoak, which
+# scripts/release-pixelandoak.mjs sets together with this file.
+#
+# Everything not set here is Cheese O'Clock's electron-builder.yml, which this
+# extends. What is set keeps the two installs apart on every PC: its own app
+# id (Windows' notices and the start-up entry), name, data folder
+# (extraMetadata.name: %APPDATA%\pixelandoak-pos, and the updater's own cache
+# folder), icon and update feed. Cheese O'Clock's tills never see a release
+# made from this file, and these tills never see theirs.
+# -----------------------------------------------------------------------------
+extends: ./electron-builder.yml
+appId: com.pixelandoak.pos
+productName: Pixel & Oak POS
+extraMetadata:
+  name: pixelandoak-pos
+directories:
+  # The icon (icon.ico, made from icon.svg by scripts/generate-icon.mjs).
+  buildResources: brand/pixelandoak
+  output: release/pixelandoak
+win:
+  # One name for every version, so one link always gives the newest installer:
+  # https://github.com/haider484991/pixelandoak-pos/releases/latest/download/PixelAndOak-POS-Setup.exe
+  # (the tills update from latest.yml, which names the file in its release).
+  artifactName: PixelAndOak-POS-Setup.${ext}
+nsis:
+  shortcutName: Pixel & Oak POS
+  uninstallDisplayName: Pixel & Oak POS
+  include: installer/remove-startup-entry-pixelandoak.nsh
+publish:
+  provider: github
+  owner: haider484991
+  repo: pixelandoak-pos
+  releaseType: release

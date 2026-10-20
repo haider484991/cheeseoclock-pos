@@ -7,6 +7,7 @@ import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { confirmAndRestore } from '../settings/applyRestore';
 import { copyReasonLabel, fmtWhen } from '../settings/backupStatus';
+import { EDITION } from '../../edition';
 
 const FILE_CONFIRM =
   'Restore this computer from a file?\nYou pick the file next (a USB copy or a copy from the old computer). The app then restarts on it. Anything already on this computer is kept aside first, so this can be undone.';
@@ -30,7 +31,7 @@ function errorMessage(e: unknown): string {
  */
 export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
   const { toast } = useToast();
-  const [siteUrl, setSiteUrl] = useState('https://www.cheeseoclock.net');
+  const [siteUrl, setSiteUrl] = useState(EDITION.restoreSiteUrl);
   const [secret, setSecret] = useState('');
   const [copies, setCopies] = useState<CloudBackupEntry[] | null>(null);
 
@@ -105,7 +106,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
           <input
             value={siteUrl}
             onChange={(e) => setSiteUrl(e.target.value)}
-            placeholder="https://www.cheeseoclock.net"
+            placeholder={EDITION.exampleSiteUrl}
             aria-label="Website URL"
             className={inputClass}
           />

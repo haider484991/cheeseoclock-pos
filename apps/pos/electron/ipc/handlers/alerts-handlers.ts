@@ -5,6 +5,7 @@ import { getCurrentSession } from '../../services/auth-service.js';
 import { getAlertSoundSettings, setAlertSoundSettings } from '../../services/alert-sounds-config.js';
 import { readAlertWatch } from '../../services/alert-watch.js';
 import { attachOrderAlertsDb, orderAlerts, showAttention } from '../../services/order-alerts-hub.js';
+import { EDITION } from '../../edition.js';
 
 /**
  * Settings → Sounds and the till's pending order alerts.
@@ -60,7 +61,7 @@ export function registerAlertsHandlers(ctx: HandlerContext): void {
     const shown = showAttention(
       {
         kind: 'test',
-        title: 'CheeseOclock POS — test notice',
+        title: `${EDITION.appName} — test notice`,
         body: 'A new online order shows up here when the till is behind another window. Click to bring the till back.',
       },
       { force: true },

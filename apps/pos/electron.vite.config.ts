@@ -4,6 +4,37 @@ import { build as viteBuild, type Plugin } from 'vite';
 import { builtinModules } from 'node:module';
 import { resolve } from 'node:path';
 import { WORKER_FILE } from './electron/services/analytics/worker-protocol';
+/**
+ * Which product this build is (shared-types edition.ts): COC_EDITION, unset =
+ * Cheese O'Clock's till exactly as released. Baked into the main process and
+ * the screens; never read at run time. An id this list does not know stops
+ * the build, so a typo never ships Cheese O'Clock's names under another
+ * product's installer (electron-builder.pixelandoak.yml).
+ *
+ * Each edition's app name, as edition.ts has it (electron/edition.test.ts
+ * checks the two agree): this file is loaded before anything is bundled, so
+ * it cannot import the workspace packages.
+ */
+const EDITION_APP_NAMES: Readonly<Record<string, string>> = {
+  cheeseoclock: 'CheeseOclock POS',
+  pixelandoak: 'Pixel & Oak POS',
+};
+const EDITION_ID = process.env['COC_EDITION'] || 'cheeseoclock';
+const EDITION_APP_NAME = EDITION_APP_NAMES[EDITION_ID];
+if (EDITION_APP_NAME === undefined) {
+  throw new Error(`COC_EDITION must be one of ${Object.keys(EDITION_APP_NAMES).join(', ')}, not "${EDITION_ID}"`);
+}
+
+/** The window's first title (index.html), before any script runs: this edition's name. */
+function editionTitlePlugin(): Plugin {
+  const html = EDITION_APP_NAME!.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  return {
+    name: 'coc-edition-title',
+    transformIndexHtml(page) {
+      return page.replace('<title>CheeseOclock POS</title>', `<title>${html}</title>`);
+    },
+  };
+}
 
 /**
  * Workspace packages export raw .ts files (no build step). Node cannot load .ts
@@ -106,6 +137,7 @@ export default defineConfig({
     // update would stall (services/auto-updater.ts).
     define: {
       __SIGNED_BUILD__: JSON.stringify(Boolean(process.env['WIN_CSC_LINK'] || process.env['CSC_LINK'])),
+      __EDITION__: JSON.stringify(EDITION_ID),
     },
     build: {
       outDir: 'out/main',
@@ -145,7 +177,10 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname),
-    plugins: [react()],
+    plugins: [react(), editionTitlePlugin()],
+    define: {
+      __EDITION__: JSON.stringify(EDITION_ID),
+    },
     build: {
       outDir: 'out/renderer',
       rollupOptions: {

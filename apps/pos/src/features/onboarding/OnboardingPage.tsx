@@ -14,6 +14,7 @@ import { WebsiteStep } from './WebsiteStep';
 import { startingWebsiteForm, websiteAnswers, withBusinessDetails, type WebsiteForm } from './websiteStepForm';
 import { LogoPicker } from '../settings/LogoPicker';
 import { startingTaxRows } from '../menu-mgmt/taxForm';
+import { APP_NAME } from '../../edition';
 import {
   Store,
   Globe,
@@ -160,7 +161,7 @@ export function OnboardingPage({ onComplete }: Props) {
           <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lift">
             <Pizza className="h-8 w-8" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">Welcome to CheeseOclock POS</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Welcome to {APP_NAME}</h1>
           <p className="text-sm text-stone-500 dark:text-stone-400">
             A 2-minute setup — then you're ready to take orders.
           </p>

@@ -33,6 +33,7 @@ export * from './website-category-discount.js';
 export * from './website-messages.js';
 export * from './website-shop.js';
 export * from './new-shop.js';
+export * from './edition.js';
 export * from './phone.js';
 export * from './delivery-areas.js';
 export * from './delivery-charge-tax.js';

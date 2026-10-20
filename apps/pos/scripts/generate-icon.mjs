@@ -8,6 +8,10 @@
  *
  * For a per-customer build, swap apps/pos/build/icon.svg before running this
  * script — every install of THAT build will then carry the customer's logo.
+ *
+ * Another folder as the argument makes that folder's icon instead (relative
+ * to apps/pos): `node scripts/generate-icon.mjs brand/pixelandoak` for
+ * Pixel & Oak POS (electron-builder.pixelandoak.yml buildResources).
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -16,8 +20,8 @@ import { Resvg } from '@resvg/resvg-js';
 import pngToIco from 'png-to-ico';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SVG_PATH = resolve(__dirname, '..', 'build', 'icon.svg');
-const OUT_DIR = resolve(__dirname, '..', 'build');
+const OUT_DIR = process.argv[2] ? resolve(__dirname, '..', process.argv[2]) : resolve(__dirname, '..', 'build');
+const SVG_PATH = resolve(OUT_DIR, 'icon.svg');
 const ICO_PATH = resolve(OUT_DIR, 'icon.ico');
 const PNG_PATH = resolve(OUT_DIR, 'icon.png');
 

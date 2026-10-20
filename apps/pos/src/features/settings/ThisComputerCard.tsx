@@ -18,6 +18,7 @@ import { SettingCard } from './shop-rules/SettingCard';
 import { useDraft } from './shop-rules/useDraft';
 import { useTillSetting } from './shop-rules/useTillSetting';
 import { sameValue } from './shop-rules/foodpandaForm';
+import { APP_NAME } from '../../edition';
 import {
   KEEP_AWAKE_HELP,
   KEEP_AWAKE_LABEL,
@@ -100,7 +101,7 @@ function PowerForm({ s, card }: { s: ReturnType<typeof useTillSetting<'pc.power'
       ])}
       {choices('startWithWindows', 'Start the till with Windows', null, [
         { on: true, label: 'Yes — by itself', hint: 'The till opens each time this computer starts, once someone is signed in to Windows.' },
-        { on: false, label: 'No — someone opens it', hint: 'Someone opens CheeseOclock POS from the desktop each time the computer is switched on.' },
+        { on: false, label: 'No — someone opens it', hint: `Someone opens ${APP_NAME} from the desktop each time the computer is switched on.` },
       ])}
     </SettingCard>
   );

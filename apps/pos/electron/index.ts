@@ -28,6 +28,7 @@ import { sealAllStoredSecrets } from './services/secrets-bootstrap.js';
 import { auditChainService } from './services/audit-chain-service.js';
 import { clearAttention } from './services/order-alerts-hub.js';
 import { APP_USER_MODEL_ID, initTillPower } from './services/till-power-hub.js';
+import { EDITION } from './edition.js';
 import { allowTillToClose, attachTillWindow } from './services/till-close-hub.js';
 import { startAnalyticsWorker, stopAnalyticsWorker } from './services/analytics/worker-host.js';
 
@@ -65,7 +66,7 @@ async function createMainWindow() {
     minWidth: 1024,
     minHeight: 700,
     show: false,
-    title: 'CheeseOclock POS',
+    title: EDITION.appName,
     backgroundColor: '#0c0a09',
     autoHideMenuBar: true,
     webPreferences: {
@@ -139,7 +140,7 @@ async function bootstrap() {
   // over the WAL and the print/FBR queues. The second launch just fronts the
   // first. (Called after setPath so the lock lives in the right userData.)
   if (!app.requestSingleInstanceLock()) {
-    log.info('Another CheeseOclock POS instance is already running — quitting');
+    log.info(`Another ${EDITION.appName} instance is already running — quitting`);
     app.quit();
     return;
   }
@@ -155,7 +156,7 @@ async function bootstrap() {
   // names the till's start-up entry (initTillPower, below).
   if (process.platform === 'win32') app.setAppUserModelId(isDev ? process.execPath : APP_USER_MODEL_ID);
 
-  log.info('Bootstrapping CheeseOclock POS', { version: app.getVersion(), isDev });
+  log.info(`Bootstrapping ${EDITION.appName}`, { version: app.getVersion(), isDev });
 
   // Optional error reporting + auto-update. Both no-op gracefully when their
   // dependencies / config are not present (see service files for details).
@@ -249,7 +250,7 @@ app.whenReady().then(bootstrap).catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);
   const copy = err instanceof MigrationFailedError ? err.preMigrateCopyPath : null;
   dialog.showErrorBox(
-    'CheeseOclock POS could not start',
+    `${EDITION.appName} could not start`,
     copy
       ? `${message}\n\nA copy of the database taken before the update is at:\n${copy}\n\nDetails are in the log file.`
       : `${message}\n\nDetails are in the log file.`,

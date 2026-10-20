@@ -29,6 +29,7 @@ import { ALERT_SOUNDS_QUERY_KEY } from './useAlertSoundSettings';
 import { waitingRuleText } from './waitingReminders';
 import { printerProblemRuleText } from './eventTones';
 import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
+import { APP_NAME } from '../../edition';
 
 function sameSettings(a: AlertSoundSettings, b: AlertSoundSettings): boolean {
   return (
@@ -86,14 +87,14 @@ export function SoundSettings() {
           ? {
               title: 'Windows notice sent',
               description:
-                'Look at the bottom-right of the screen. Nothing there? Turn on notifications for CheeseOclock POS in Windows Settings → System → Notifications, and switch off Do not disturb.',
+                `Look at the bottom-right of the screen. Nothing there? Turn on notifications for ${APP_NAME} in Windows Settings → System → Notifications, and switch off Do not disturb.`,
               variant: 'info',
               duration: 15_000,
             }
           : {
               title: 'Windows would not show a notice',
               description:
-                'Turn on notifications for CheeseOclock POS in Windows Settings → System → Notifications, and switch off Do not disturb.',
+                `Turn on notifications for ${APP_NAME} in Windows Settings → System → Notifications, and switch off Do not disturb.`,
               variant: 'warning',
               duration: 15_000,
             },

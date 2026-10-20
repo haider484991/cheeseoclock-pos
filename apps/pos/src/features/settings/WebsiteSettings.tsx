@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { Globe, Send, RefreshCw, CheckCircle2, AlertTriangle, XCircle, PauseCircle, UploadCloud, Megaphone } from 'lucide-react';
 import { ANNOUNCEMENT_MAX, CLOSED_NOTICE_MAX, type ShopSettingCard } from '@cheeseoclock/shared-types';
+import { EDITION } from '../../edition';
 import { ipc, onAlertWatchChanged } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { SettingCard } from './shop-rules/SettingCard';
@@ -183,7 +184,7 @@ function ConnectionCard() {
           <input
             value={siteUrl}
             onChange={(e) => setSiteUrl(e.target.value)}
-            placeholder="https://www.cheeseoclock.net"
+            placeholder={EDITION.exampleSiteUrl}
             className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
           />
           <span className="mt-1 block text-xs text-stone-500">

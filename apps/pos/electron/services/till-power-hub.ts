@@ -9,6 +9,7 @@ import { onAlertWatchChanged } from './alert-watch-events.js';
 import { onTillPowerSettingsChanged } from './till-power-events.js';
 import { canStartWithWindows, TillPower } from './till-power.js';
 import { readTillSetting } from './till-settings.js';
+import { EDITION } from '../edition.js';
 import { getWebBridgeConfig, getWebOrdersShiftPause, takingWebOrders } from './web-bridge-config.js';
 
 /**
@@ -31,13 +32,13 @@ import { getWebBridgeConfig, getWebOrdersShiftPause, takingWebOrders } from './w
  * appId), Windows' notices, and the name of the start-up entry. Electron
  * reads the entry by this name, so it is never written under another.
  */
-export const APP_USER_MODEL_ID = 'pk.cheeseoclock.pos';
+export const APP_USER_MODEL_ID = EDITION.appUserModelId;
 
 /** The last time this computer slept: the till's own bookkeeping (no audit). */
 export const LAST_SLEEP_KEY = 'pc.lastSleep';
 
 /** NSIS's uninstaller (`Uninstall ${PRODUCT_FILENAME}.exe`): only an installed till has one next to it. */
-const UNINSTALLER = 'Uninstall CheeseOclock POS.exe';
+const UNINSTALLER = EDITION.uninstallerName;
 
 /** After waking, the network needs a moment before the website bridge tries. */
 const WAKE_NUDGE_DELAY_MS = 5_000;

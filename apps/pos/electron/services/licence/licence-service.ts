@@ -26,6 +26,7 @@ import type { AppDatabase } from '../../db/connection.js';
 import { getSettingRaw, setSetting } from '../../db/repositories/settings-repo.js';
 import { checkLicenceToken, evaluateLicence } from './licence-core.js';
 import { LICENCE_PUBLIC_KEY } from './public-key.js';
+import { EDITION } from '../../edition.js';
 
 export const LICENCE_SETTING_TOKEN = 'licence.token';
 export const LICENCE_SETTING_TRIAL_STARTED = 'licence.trialStartedAt';
@@ -46,7 +47,7 @@ function isoMs(iso: string | null): number | null {
 /** Where the machine-wide marker lives by default. */
 export function defaultMachineMarkerPath(): string {
   const base = process.platform === 'win32' ? process.env['ProgramData'] || 'C:\\ProgramData' : path.join(os.homedir(), '.local', 'share');
-  return path.join(base, 'CheeseOclock POS', 'licence-marker.json');
+  return path.join(base, EDITION.machineFolderName, 'licence-marker.json');
 }
 
 interface MachineMarker {

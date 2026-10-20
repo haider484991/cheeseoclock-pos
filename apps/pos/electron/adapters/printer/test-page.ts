@@ -1,5 +1,6 @@
 import { paperDateTime, type PrinterWidth } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, appendLogo, type TestPageOptions } from '@cheeseoclock/printer-core';
+import { EDITION } from '../../edition.js';
 
 /**
  * A short page to prove the cable, the paper and the ESC/POS path. It names
@@ -29,7 +30,7 @@ export function renderTestPage(
     .newline()
     .doubleHeight(false)
     .bold(false)
-    .text('CheeseOclock POS')
+    .text(EDITION.appName)
     .newline()
     .newline();
 
