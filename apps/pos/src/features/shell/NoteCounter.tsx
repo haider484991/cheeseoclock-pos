@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { cn } from '@cheeseoclock/ui';
 import { cashCountTotalCents, formatCents } from '@cheeseoclock/pos-domain';
-import { CASH_NOTE_FACE_CENTS } from '@cheeseoclock/shared-types';
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import {
-  NOTE_COUNTER_OTHER_ROW,
+  noteCounterOtherRow,
   noteCounterStarted,
   noteCounterToCount,
   type NoteCounterState,
@@ -30,22 +30,34 @@ export interface NoteCounterRowLabel {
   sub: string | null;
 }
 
-/** The eight rows, in order: 'Rs 5,000' … 'Rs 10', then 'Coins and other'. */
-export const NOTE_COUNTER_ROWS: readonly NoteCounterRowLabel[] = [
-  ...CASH_NOTE_FACE_CENTS.map((faceCents) => ({
-    key: String(faceCents / 100),
-    label: formatCents(faceCents),
-    // The Rs 10 row counts the notes and the coins together.
-    sub: faceCents === 1_000 ? 'note or coin' : null,
-  })),
-  { key: 'other', label: 'Coins and other', sub: 'Rs 5, 2, 1 coins, in rupees' },
-];
+/**
+ * The rows, in order: the shop's notes largest first ('Rs 5,000' … 'Rs 10' in
+ * Pakistan), then 'Coins and other'. Built when asked, not held in a const: a
+ * const is fixed when the screens load, before the till knows its shop, and
+ * formatCents would have written "Rs" onto a US drawer.
+ */
+export function noteCounterRows(): readonly NoteCounterRowLabel[] {
+  const locale = getShopLocale();
+  const faces = locale.cashFacesCents;
+  const smallest = faces[faces.length - 1];
+  return [
+    ...faces.map((faceCents) => ({
+      key: String(faceCents / 100),
+      label: formatCents(faceCents),
+      // The smallest note's row counts its notes and coins together (Rs 10).
+      sub: faceCents === smallest ? 'note or coin' : null,
+    })),
+    { key: 'other', label: 'Coins and other', sub: `${locale.coinsLabel}, in ${locale.words.major}` },
+  ];
+}
 
 /** The question 'Clear all' asks first (never the browser's own confirm()). */
 export const CLEAR_ALL_QUESTION = 'Clear every row of this count?';
 
-/** The CSS selector of the first row (Rs 5,000): where the box puts the keyboard when it opens. */
-export const NOTE_COUNTER_FIRST_ROW = `[data-note-row="${NOTE_COUNTER_ROWS[0]?.key ?? '5000'}"]`;
+/** The CSS selector of the first row (Rs 5,000 in Pakistan): where the box puts the keyboard when it opens. */
+export function noteCounterFirstRow(): string {
+  return `[data-note-row="${noteCounterRows()[0]?.key ?? ''}"]`;
+}
 
 /** The CSS selector of the chosen row: the one being typed into. */
 export const NOTE_COUNTER_CHOSEN_ROW = '[data-note-row][aria-pressed="true"]';
@@ -134,11 +146,11 @@ export function NoteCounter({
   return (
     <div>
       <div ref={rowsRef} className="flex flex-col gap-1">
-        {NOTE_COUNTER_ROWS.map((r, i) => {
+        {noteCounterRows().map((r, i) => {
           const cell = state.cells[i] ?? '';
-          const other = i === NOTE_COUNTER_OTHER_ROW;
+          const other = i === noteCounterOtherRow();
           const active = i === state.active;
-          const faceCents = other ? 100 : (CASH_NOTE_FACE_CENTS[i] ?? 0);
+          const faceCents = other ? 100 : (getShopLocale().cashFacesCents[i] ?? 0);
           const lineCents = faceCents * cellNumber(cell);
           return (
             <button

@@ -83,6 +83,11 @@ export interface ShopLocale {
   readonly phoneCountry: string;
   /** The note rows of the Close shift count, largest first, in cents. */
   readonly cashFacesCents: readonly number[];
+  /**
+   * The coins counted together in the drawer's 'Coins and other' row, as the
+   * screen names them under that row: "Rs 5, 2, 1 coins" in Pakistan.
+   */
+  readonly coinsLabel: string;
   /** The notes a customer is likely to hand over, for the one-tap cash buttons. */
   readonly quickCashFacesCents: readonly number[];
   /** The ways this shop can be paid. Never includes platform-settled methods. */
@@ -118,6 +123,7 @@ export const DEFAULT_SHOP_LOCALE: ShopLocale = Object.freeze({
   tradingDayStartHour: 5,
   phoneCountry: 'PK',
   cashFacesCents: Object.freeze([500_000, 100_000, 50_000, 10_000, 5_000, 2_000, 1_000]),
+  coinsLabel: 'Rs 5, 2, 1 coins',
   quickCashFacesCents: Object.freeze([10_000, 50_000, 100_000, 500_000]),
   tenders: Object.freeze<PaymentMethod[]>(['cash', 'card', 'easypaisa', 'jazzcash', 'bank_transfer']),
   words: Object.freeze({ major: 'rupees', minor: 'paisa' }),
@@ -153,6 +159,7 @@ export const US_SHOP_LOCALE: ShopLocale = Object.freeze({
   phoneCountry: 'US',
   // $100, $50, $20, $10, $5, $1 — no cent rows: a drawer is counted in notes.
   cashFacesCents: Object.freeze([10_000, 5_000, 2_000, 1_000, 500, 100]),
+  coinsLabel: 'Quarters, dimes, nickels and pennies',
   quickCashFacesCents: Object.freeze([1_000, 2_000, 5_000, 10_000]),
   tenders: Object.freeze<PaymentMethod[]>(['cash', 'card']),
   words: Object.freeze({ major: 'dollars', minor: 'cents' }),

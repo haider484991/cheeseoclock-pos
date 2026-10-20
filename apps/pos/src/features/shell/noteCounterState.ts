@@ -1,4 +1,4 @@
-import { CASH_NOTE_FACE_CENTS, type CashCount } from '@cheeseoclock/shared-types';
+import { getShopLocale, type CashCount } from '@cheeseoclock/shared-types';
 
 /**
  * The note count in the Close shift box (owner, 2 Oct 2026: "when closing
@@ -14,11 +14,25 @@ import { CASH_NOTE_FACE_CENTS, type CashCount } from '@cheeseoclock/shared-types
  * in yet, and it counts as 0.
  */
 
-/** The seven note rows, then 'Coins and other'. */
-export const NOTE_COUNTER_ROW_COUNT = CASH_NOTE_FACE_CENTS.length + 1;
+/**
+ * The shop's notes, largest first: Pakistan's are the owner's seven. Read on
+ * every call rather than held in a const, because a const here is fixed when
+ * the screens load — before the till has read its settings and knows its
+ * shop — and a US drawer has six rows, not seven.
+ */
+function faces(): readonly number[] {
+  return getShopLocale().cashFacesCents;
+}
 
-/** The 'Coins and other' row: the last one. */
-export const NOTE_COUNTER_OTHER_ROW = CASH_NOTE_FACE_CENTS.length;
+/** The note rows, then 'Coins and other' (Pakistan: 8). */
+export function noteCounterRowCount(): number {
+  return faces().length + 1;
+}
+
+/** The 'Coins and other' row: the last one (Pakistan: 7). */
+export function noteCounterOtherRow(): number {
+  return faces().length;
+}
 
 /** A note row takes up to 4 digits (9,999 notes, CASH_NOTE_COUNT_MAX). */
 export const NOTE_COUNTER_NOTE_DIGITS = 4;
@@ -33,20 +47,20 @@ export const NOTE_COUNTER_OTHER_DIGITS = 5;
 export const NOTE_COUNTER_OTHER_LARGE_CENTS = 100_000;
 
 export interface NoteCounterState {
-  /** One entry per row, NOTE_COUNTER_ROW_COUNT long: the digits typed, '' when none. */
+  /** One entry per row, noteCounterRowCount() long: the digits typed, '' when none. */
   readonly cells: readonly string[];
-  /** The row being typed into, 0 (Rs 5,000) to NOTE_COUNTER_OTHER_ROW. */
+  /** The row being typed into, 0 (the largest note) to noteCounterOtherRow(). */
   readonly active: number;
 }
 
 /** A fresh count: every row blank, the Rs 5,000 row chosen. */
 export function noteCounterInitial(): NoteCounterState {
-  return { cells: Array.from({ length: NOTE_COUNTER_ROW_COUNT }, () => ''), active: 0 };
+  return { cells: Array.from({ length: noteCounterRowCount() }, () => ''), active: 0 };
 }
 
 /** How many digits a row takes: 4 on a note row, 5 on 'Coins and other'. */
 export function noteCounterMaxDigits(row: number): number {
-  return row === NOTE_COUNTER_OTHER_ROW ? NOTE_COUNTER_OTHER_DIGITS : NOTE_COUNTER_NOTE_DIGITS;
+  return row === noteCounterOtherRow() ? NOTE_COUNTER_OTHER_DIGITS : NOTE_COUNTER_NOTE_DIGITS;
 }
 
 /** What the chosen row holds (the on-screen pad's value). */
@@ -92,7 +106,7 @@ export function noteCounterKey(state: NoteCounterState, key: string): NoteCounte
       return withCell(state, '');
     case 'Enter':
     case 'ArrowDown':
-      return withActive(state, Math.min(state.active + 1, NOTE_COUNTER_OTHER_ROW));
+      return withActive(state, Math.min(state.active + 1, noteCounterOtherRow()));
     case 'ArrowUp':
       return withActive(state, Math.max(state.active - 1, 0));
     default:
@@ -115,7 +129,7 @@ export function noteCounterPad(state: NoteCounterState, next: string): NoteCount
 
 /** Choose a row (a tap, or Tab onto it). A row that does not exist changes nothing. */
 export function noteCounterSelect(state: NoteCounterState, row: number): NoteCounterState {
-  if (!Number.isInteger(row) || row < 0 || row > NOTE_COUNTER_OTHER_ROW) return state;
+  if (!Number.isInteger(row) || row < 0 || row > noteCounterOtherRow()) return state;
   return withActive(state, row);
 }
 
@@ -130,13 +144,13 @@ function cellNumber(cell: string | undefined): number {
 
 /**
  * The count to send with Close shift: a blank row is 0; each note row is
- * {faceCents, count} in CASH_NOTE_FACE_CENTS order; 'Coins and other' is
- * typed in rupees and sent in cents.
+ * {faceCents, count} in the shop's note order; 'Coins and other' is typed in
+ * whole units (rupees, dollars) and sent in cents.
  */
 export function noteCounterToCount(state: NoteCounterState): CashCount {
   return {
-    notes: CASH_NOTE_FACE_CENTS.map((faceCents, row) => ({ faceCents, count: cellNumber(state.cells[row]) })),
-    otherCents: cellNumber(state.cells[NOTE_COUNTER_OTHER_ROW]) * 100,
+    notes: faces().map((faceCents, row) => ({ faceCents, count: cellNumber(state.cells[row]) })),
+    otherCents: cellNumber(state.cells[noteCounterOtherRow()]) * 100,
   };
 }
 
@@ -147,5 +161,5 @@ export function noteCounterStarted(state: NoteCounterState): boolean {
 
 /** 'Coins and other' is Rs 1,000 or more (the reminder, never a block). */
 export function noteCounterOtherIsLarge(state: NoteCounterState): boolean {
-  return cellNumber(state.cells[NOTE_COUNTER_OTHER_ROW]) * 100 >= NOTE_COUNTER_OTHER_LARGE_CENTS;
+  return cellNumber(state.cells[noteCounterOtherRow()]) * 100 >= NOTE_COUNTER_OTHER_LARGE_CENTS;
 }

@@ -8,8 +8,8 @@ import { describe, expect, it } from 'vitest';
 import { CASH_NOTE_FACE_CENTS } from '@cheeseoclock/shared-types';
 import { cashCountTotalCents } from '@cheeseoclock/pos-domain';
 import {
-  NOTE_COUNTER_OTHER_ROW,
-  NOTE_COUNTER_ROW_COUNT,
+  noteCounterOtherRow,
+  noteCounterRowCount,
   noteCounterCell,
   noteCounterClear,
   noteCounterInitial,
@@ -37,16 +37,16 @@ function counted(cells: Partial<Record<number, string>>, active = 0): NoteCounte
 describe('a fresh count', () => {
   it('has eight blank rows (seven notes, then coins and other) and starts on Rs 5,000', () => {
     const s = noteCounterInitial();
-    expect(NOTE_COUNTER_ROW_COUNT).toBe(8);
-    expect(NOTE_COUNTER_OTHER_ROW).toBe(7);
+    expect(noteCounterRowCount()).toBe(8);
+    expect(noteCounterOtherRow()).toBe(7);
     expect(s.cells).toEqual(['', '', '', '', '', '', '', '']);
     expect(s.active).toBe(0);
     expect(noteCounterStarted(s)).toBe(false);
   });
 
   it('takes 4 digits on a note row and 5 on coins and other', () => {
-    for (let row = 0; row < NOTE_COUNTER_OTHER_ROW; row++) expect(noteCounterMaxDigits(row)).toBe(4);
-    expect(noteCounterMaxDigits(NOTE_COUNTER_OTHER_ROW)).toBe(5);
+    for (let row = 0; row < noteCounterOtherRow(); row++) expect(noteCounterMaxDigits(row)).toBe(4);
+    expect(noteCounterMaxDigits(noteCounterOtherRow())).toBe(5);
   });
 });
 
@@ -70,7 +70,7 @@ describe('typing digits', () => {
     expect(noteCounterCell(note)).toBe('9999');
     expect(noteCounterKey(note, '9')).toBe(note);
 
-    const other = press(noteCounterSelect(noteCounterInitial(), NOTE_COUNTER_OTHER_ROW), '9', '9', '9', '9', '9');
+    const other = press(noteCounterSelect(noteCounterInitial(), noteCounterOtherRow()), '9', '9', '9', '9', '9');
     expect(noteCounterCell(other)).toBe('99999');
     expect(noteCounterKey(other, '1')).toBe(other);
   });
@@ -106,7 +106,7 @@ describe('Backspace and Delete', () => {
 describe('moving between rows', () => {
   it('Enter and ArrowDown go to the next row and stop on coins and other', () => {
     let s = noteCounterInitial();
-    for (let row = 1; row <= NOTE_COUNTER_OTHER_ROW; row++) {
+    for (let row = 1; row <= noteCounterOtherRow(); row++) {
       s = noteCounterKey(s, row % 2 === 0 ? 'Enter' : 'ArrowDown');
       expect(s.active).toBe(row);
     }
@@ -115,8 +115,8 @@ describe('moving between rows', () => {
   });
 
   it('ArrowUp goes to the previous row and stops on Rs 5,000', () => {
-    let s = noteCounterSelect(noteCounterInitial(), NOTE_COUNTER_OTHER_ROW);
-    for (let row = NOTE_COUNTER_OTHER_ROW - 1; row >= 0; row--) {
+    let s = noteCounterSelect(noteCounterInitial(), noteCounterOtherRow());
+    for (let row = noteCounterOtherRow() - 1; row >= 0; row--) {
       s = noteCounterKey(s, 'ArrowUp');
       expect(s.active).toBe(row);
     }
@@ -146,7 +146,7 @@ describe('the on-screen pad goes through the same rules', () => {
   it('a 5th pad digit on a note row is ignored, a 6th on coins and other too', () => {
     const note = counted({ 0: '1234' });
     expect(noteCounterPad(note, '12345')).toBe(note);
-    const other = counted({ [NOTE_COUNTER_OTHER_ROW]: '12345' }, NOTE_COUNTER_OTHER_ROW);
+    const other = counted({ [noteCounterOtherRow()]: '12345' }, noteCounterOtherRow());
     expect(noteCounterPad(other, '123456')).toBe(other);
   });
 
@@ -211,7 +211,7 @@ describe('the count that is sent', () => {
   });
 
   it("coins and other is typed in rupees: '35' is 3,500 cents", () => {
-    expect(noteCounterToCount(counted({ [NOTE_COUNTER_OTHER_ROW]: '35' })).otherCents).toBe(3_500);
+    expect(noteCounterToCount(counted({ [noteCounterOtherRow()]: '35' })).otherCents).toBe(3_500);
   });
 
   it('a lone 0 row is a count of 0', () => {
@@ -223,14 +223,14 @@ describe('started', () => {
   it('false while every row is blank, true once any row has something, a single 0 included', () => {
     expect(noteCounterStarted(noteCounterInitial())).toBe(false);
     expect(noteCounterStarted(counted({ 4: '0' }))).toBe(true);
-    expect(noteCounterStarted(counted({ [NOTE_COUNTER_OTHER_ROW]: '5' }))).toBe(true);
+    expect(noteCounterStarted(counted({ [noteCounterOtherRow()]: '5' }))).toBe(true);
   });
 });
 
 describe('coins and other is large', () => {
   it('Rs 999 is not, Rs 1,000 is', () => {
-    expect(noteCounterOtherIsLarge(counted({ [NOTE_COUNTER_OTHER_ROW]: '999' }))).toBe(false);
-    expect(noteCounterOtherIsLarge(counted({ [NOTE_COUNTER_OTHER_ROW]: '1000' }))).toBe(true);
+    expect(noteCounterOtherIsLarge(counted({ [noteCounterOtherRow()]: '999' }))).toBe(false);
+    expect(noteCounterOtherIsLarge(counted({ [noteCounterOtherRow()]: '1000' }))).toBe(true);
     expect(noteCounterOtherIsLarge(noteCounterInitial())).toBe(false);
   });
 

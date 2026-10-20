@@ -394,4 +394,7 @@ export const PAKISTAN_EXEMPT = [
   // Pins the drawer rows a shift is closed with, so it must spell out both
   // 'Rs 5,000, 1,000 ...' and the US rows to prove the two differ.
   '**/cashCountLocale.test.ts',
+  // Pins the drawer screen Cheese O'Clock's cashiers see ('Rs 5,000' … 'Rs 10')
+  // beside the US one, so it has to spell both out.
+  '**/drawerLocale.test.ts',
 ];

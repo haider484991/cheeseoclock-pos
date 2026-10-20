@@ -79,7 +79,7 @@ import {
 import {
   CLEAR_ALL_QUESTION,
   NOTE_COUNTER_CHOSEN_ROW,
-  NOTE_COUNTER_FIRST_ROW,
+  noteCounterFirstRow,
   NOTE_COUNTER_PAD,
   NoteCounter,
   noteCounterKeyAction,
@@ -748,7 +748,7 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
     expect(buttonWith(render(<NoteCounter state={noteCounterInitial()} onSelect={() => {}} onClear={() => {}} />), 'Clear all')).toMatch(
       DISABLED,
     );
-    expect(NOTE_COUNTER_FIRST_ROW).toBe('[data-note-row="5000"]');
+    expect(noteCounterFirstRow()).toBe('[data-note-row="5000"]');
   });
 
   it('Clear all asks first, in the window, with "Keep counting" as the safe answer', async () => {

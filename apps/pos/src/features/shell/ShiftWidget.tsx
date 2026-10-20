@@ -50,7 +50,7 @@ import { ALERT_WATCH_KEY, useWebOrdersPause } from '../notifications/useAlertWat
 import {
   CLEAR_ALL_QUESTION,
   NOTE_COUNTER_CHOSEN_ROW,
-  NOTE_COUNTER_FIRST_ROW,
+  noteCounterFirstRow,
   NOTE_COUNTER_PAD,
   NoteCounter,
   noteCounterKeyAction,
@@ -851,7 +851,7 @@ export function CloseShiftDialog({
     const clear = (await confirmClearAll(() => keyboardToRow(row))) && !saving;
     if (clear) {
       changeCount(noteCounterClear);
-      row = NOTE_COUNTER_FIRST_ROW;
+      row = noteCounterFirstRow();
     }
     keyboardToRow(row);
   };
@@ -894,7 +894,7 @@ export function CloseShiftDialog({
           // The keyboard starts on the Rs 5,000 row, not on the X.
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            (e.currentTarget as HTMLElement | null)?.querySelector<HTMLElement>(NOTE_COUNTER_FIRST_ROW)?.focus();
+            (e.currentTarget as HTMLElement | null)?.querySelector<HTMLElement>(noteCounterFirstRow())?.focus();
           }}
           // Escape and a tap outside go the same way as Cancel: asked first once counting started.
           onEscapeKeyDown={(e) => {
