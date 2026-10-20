@@ -1,3 +1,4 @@
+import { formatCents } from '@cheeseoclock/shared-types';
 import { z } from 'zod';
 import {
   VOUCHER_BATCH_MAX,
@@ -46,8 +47,9 @@ const batchFields = {
   coversCents: z
     .number({ invalid_type_error: 'Say the most one voucher takes off' })
     .int()
-    .min(100, { message: 'A voucher covers at least Rs 1' })
-    .max(10_000_000, { message: 'That is more than a voucher can cover' }),
+    .max(10_000_000, { message: 'That is more than a voucher can cover' })
+    // Written when checked, in the shop's money (money-field.ts says why).
+    .refine((c) => c >= 100, () => ({ message: `A voucher covers at least ${formatCents(100)}` })),
   goodUntil: lastDay.nullable(),
 };
 

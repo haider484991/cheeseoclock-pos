@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { v5 as uuidv5 } from 'uuid';
 import log from 'electron-log/main';
 import type { AppDatabase } from '../connection.js';
@@ -112,7 +113,7 @@ function alertExists(db: AppDatabase, id: string): boolean {
  * its sync entry and its audit row in one transaction. True when written.
  */
 export function writeCostAlert(db: AppDatabase, a: NewCostAlert, actor: Actor): boolean {
-  if (!Number.isSafeInteger(a.impactWeekCents)) throw new Error('An alert costs a whole number of paisa a week');
+  if (!Number.isSafeInteger(a.impactWeekCents)) throw new Error(`An alert costs a whole number of ${getShopLocale().words.minor} a week`);
   return db.transaction((): boolean => {
     if (alertExists(db, a.id)) return false;
     const now = nowIso();

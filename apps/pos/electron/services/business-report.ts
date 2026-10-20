@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import type {
   BusinessReport,
   BusinessReportRequest,
@@ -237,7 +238,7 @@ export function rollUpCategories(items: ReportItemLine[]): ReportCategoryLine[] 
 function discountEntered(type: string | null, value: number | null): string | null {
   if (type === null || value === null) return null;
   if (type === 'percent') return `${Number.isInteger(value) ? value : value.toFixed(1)}%`;
-  return `Rs ${formatNumber(value / 100, { maxFractionDigits: 2 })}`;
+  return `${getShopLocale().symbol}${getShopLocale().symbolSeparator}${formatNumber(value / 100, { maxFractionDigits: 2 })}`;
 }
 
 /** What a standing offer is called on Team & leakage, by its source. */

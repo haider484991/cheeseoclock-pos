@@ -1,3 +1,4 @@
+import { getShopLocale } from '@cheeseoclock/shared-types';
 import { v7 as uuidv7 } from 'uuid';
 import log from 'electron-log/main';
 import type { AppDatabase } from '../connection.js';
@@ -157,7 +158,7 @@ export function recordDrawerOpen(
   if (!KINDS.has(input.kind)) throw new Error('Unknown drawer open');
   const amount = input.amountCents ?? null;
   if (amount !== null && (!Number.isInteger(amount) || !Number.isFinite(amount))) {
-    throw new Error('A drawer amount is whole paisa');
+    throw new Error(`A drawer amount is whole ${getShopLocale().words.minor}`);
   }
   const shiftId = currentShiftId(db, actor.deviceId);
   let kind: DrawerOpenKind = input.kind;

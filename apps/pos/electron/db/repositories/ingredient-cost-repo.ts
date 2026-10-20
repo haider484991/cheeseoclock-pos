@@ -1,3 +1,4 @@
+import { getShopLocale, formatCents } from '@cheeseoclock/shared-types';
 import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
 import type { AppDatabase } from '../connection.js';
 import { nowIso, type Actor } from './base.js';
@@ -318,7 +319,7 @@ function writePrice(db: AppDatabase, w: PriceWrite, actor: Actor, opts: PriceWri
   // The history row: the bill exactly as paid (a delivery, a purchase), else the new pack.
   const pack = w.historyPack && next.priceKind !== 'free' && next.priceKind !== 'unset' ? w.historyPack : effectivePack(next);
   if (!Number.isSafeInteger(pack.size) || pack.size < 1 || !Number.isSafeInteger(pack.priceCents) || pack.priceCents < 0) {
-    throw new Error('A price must be for at least 1 whole unit, at Rs 0 or more in whole paisa');
+    throw new Error(`A price must be for at least 1 whole unit, at ${formatCents(0)} or more in whole ${getShopLocale().words.minor}`);
   }
   // The price before, for the ▲ / ▼: the newest line of its history — what
   // the owner sees as the price before (a batch's starting price is its
@@ -525,7 +526,7 @@ export function setSheetPrice(
   } = {},
 ): boolean {
   if (!Number.isSafeInteger(sheet.packSize) || sheet.packSize < 1 || !Number.isSafeInteger(sheet.packPriceCents) || sheet.packPriceCents < 0) {
-    throw new Error("The sheet's price must be for at least 1 whole unit, at Rs 0 or more in whole paisa");
+    throw new Error(`The sheet's price must be for at least 1 whole unit, at ${formatCents(0)} or more in whole ${getShopLocale().words.minor}`);
   }
   return db.transaction((): boolean => {
     const cur = readSheetCols(db, ingredientId);
@@ -605,7 +606,7 @@ export function useSheetPrice(db: AppDatabase, ingredientId: string, actor: Acto
     throw new Error(`The costing sheet has no price for ${cur.name} yet. Import the menu file first.`);
   }
   const kind = toPriceKind(cur.sheet_price_kind);
-  if (kind === 'unset') throw new Error(`The costing sheet has no price for ${cur.name} (it says Rs 0).`);
+  if (kind === 'unset') throw new Error(`The costing sheet has no price for ${cur.name} (it says ${formatCents(0)}).`);
   if (loadPriceBook(db).prices.get(ingredientId)?.batch?.complete) {
     throw new Error(
       `${cur.name} is made here, so its price is worked out from its batch recipe. ` +

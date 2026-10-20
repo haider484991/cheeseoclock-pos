@@ -1,3 +1,4 @@
+import { getShopLocale, formatCents } from '@cheeseoclock/shared-types';
 import { v7 as uuidv7 } from 'uuid';
 import type { AppDatabase } from '../connection.js';
 import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
@@ -732,7 +733,7 @@ export function receiveDelivery(
       const item = po.items.find((i) => i.id === receipt.purchaseOrderItemId);
       if (!item) continue;
       const bill = receipt.billCents ?? orderedValueCents(receipt.qtyReceivedNow, item);
-      if (!Number.isSafeInteger(bill) || bill < 0) throw new Error('A bill must be Rs 0 or more, in whole paisa');
+      if (!Number.isSafeInteger(bill) || bill < 0) throw new Error(`A bill must be ${formatCents(0)} or more, in whole ${getShopLocale().words.minor}`);
 
       const newReceived = item.qtyReceived + receipt.qtyReceivedNow;
       const newValue = item.receivedValueCents + bill;
@@ -861,7 +862,7 @@ function writeQuickPurchase(
     if (seen.has(l.ingredientId)) throw new Error('Each ingredient once per purchase: add the amounts together');
     seen.add(l.ingredientId);
     if (!Number.isSafeInteger(l.qty) || l.qty < 1) throw new Error('Say how much was bought, at least 1 whole unit');
-    if (!Number.isSafeInteger(l.billCents) || l.billCents < 0) throw new Error('Say what was paid, Rs 0 or more');
+    if (!Number.isSafeInteger(l.billCents) || l.billCents < 0) throw new Error(`Say what was paid, ${formatCents(0)} or more`);
   }
   const supplierId = input.supplierId ?? null;
   const supplierName = supplierId ? readSupplierName(db, supplierId) : null;
@@ -962,7 +963,7 @@ export function recordPurchase(
     const fromDrawer = input.paidFromDrawer === true;
     if (fromDrawer) {
       const total = input.lines.reduce((s, l) => s + l.billCents, 0);
-      if (!(total > 0)) throw new Error('Nothing to pay from the drawer: the bill comes to Rs 0');
+      if (!(total > 0)) throw new Error(`Nothing to pay from the drawer: the bill comes to ${formatCents(0)}`);
       if (!getCurrentShift(db, actor.deviceId)) throw new Error('No shift is open on this till — open a shift first, or untick "Paid from the drawer"');
     }
     const q = writeQuickPurchase(db, input, actor, { fromDrawer, payoutReason: null });

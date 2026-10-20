@@ -81,13 +81,7 @@ export const PAKISTAN_ALLOWLIST = [
   'apps/pos/electron/db/price-history.db.test.ts',
   'apps/pos/electron/db/purchases.db.test.ts',
   'apps/pos/electron/db/refused-item-owed.db.test.ts',
-  'apps/pos/electron/db/repositories/cost-alert-repo.ts',
-  'apps/pos/electron/db/repositories/drawer-open-repo.ts',
-  'apps/pos/electron/db/repositories/ingredient-cost-repo.ts',
-  'apps/pos/electron/db/repositories/order-repo.ts',
-  'apps/pos/electron/db/repositories/procurement-repo.ts',
   'apps/pos/electron/db/repositories/shift-repo.ts',
-  'apps/pos/electron/db/repositories/typed-delivery-charge-repo.ts',
   'apps/pos/electron/db/rider-keeps-charge.db.test.ts',
   'apps/pos/electron/db/sale-costs.db.test.ts',
   'apps/pos/electron/db/send-out-clock-skew.db.test.ts',
@@ -135,7 +129,6 @@ export const PAKISTAN_ALLOWLIST = [
   'apps/pos/electron/services/analytics/stock-rules.db.test.ts',
   'apps/pos/electron/services/bench-reports.db.test.ts',
   'apps/pos/electron/services/business-report.test.ts',
-  'apps/pos/electron/services/business-report.ts',
   'apps/pos/electron/services/dashboard-docs.db.test.ts',
   'apps/pos/electron/services/dashboard-push.ts',
   'apps/pos/electron/services/fbr-mapper.test.ts',
@@ -341,8 +334,6 @@ export const PAKISTAN_ALLOWLIST = [
   'packages/printer-core/src/receipt-renderer.test.ts',
   'packages/printer-core/src/shift-report.test.ts',
   'packages/shared-schemas/src/business-settings.ts',
-  'packages/shared-schemas/src/vouchers.ts',
-  'packages/shared-schemas/src/web-settings.ts',
   'packages/shared-types/src/paper-time.ts',
   'packages/shared-types/src/shift.ts',
   'packages/shared-types/src/web-bridge.ts',
@@ -387,4 +378,6 @@ export const PAKISTAN_EXEMPT = [
   '**/shop-locale.db.test.ts',
   // Pins the fee item's Pakistani name, 'Delivery Charge (Rs 200)', in full.
   '**/delivery-charge-name-locale.test.ts',
+  // Pins the rupee buttons' refusals word for word ('Rs 1', 'rupee button').
+  '**/presetMessages.test.ts',
 ];

@@ -23,7 +23,7 @@ import {
   REFUSED_ITEM_REFUND_OWED_SQL,
 } from '../order-history-query.js';
 import { kitchenHearsOfClose } from '@cheeseoclock/pos-domain';
-import { shopIsInPakistan, shopTakes, shopTradingDay } from '@cheeseoclock/shared-types';
+import { getShopLocale, shopIsInPakistan, shopTakes, shopTradingDay } from '@cheeseoclock/shared-types';
 import {
   activeFoodpandaDeal,
   computeDiscountCents,
@@ -546,6 +546,12 @@ function enqueuePaymentSyncAndAudit(
  * recorded as the dialog's default Cash it inflated the drawer's expected
  * cash every night (audit 2026-09-25).
  */
+/** The shop's money sign in an error: "Rs " in Pakistan, as these always read; "$" in the US. */
+function sym(): string {
+  const l = getShopLocale();
+  return `${l.symbol}${l.symbolSeparator}`;
+}
+
 function assertMethodFitsOrder(mode: OrderMode, method: PaymentMethod, what: 'pay' | 'refund' = 'pay'): void {
   // Only the ways this shop is paid (its locale's tenders). The screens never
   // offer anything else; a stray ask — a stale screen, a bug — is refused here
@@ -3676,18 +3682,18 @@ function cardRateSettlement(
   const cash = sum - digital;
   if (cash !== split.cashDueCents) {
     const rs = (cents: number) => formatNumber(cents / 100, { maxFractionDigits: 2 });
-    if (digital === 0) throw new Error(`Payments (Rs ${sum / 100}) must equal the order total (Rs ${order.totalCents / 100})`);
+    if (digital === 0) throw new Error(`Payments (${sym()}${sum / 100}) must equal the order total (${sym()}${order.totalCents / 100})`);
     // The way paid other than cash, as the cashier reads it: "on the card", "by JazzCash".
     const ways = [...new Set(rated.map((p) => p.method))].filter(isRatedPaymentMethod);
     const one = ways.length === 1 ? ways[0]! : null;
     const on = one === null || one === 'card' ? 'on the card' : `by ${methodWords(one)}`;
     if (cash === 0) {
       throw new Error(
-        `Rs ${rs(digital)} ${on} leaves Rs ${rs(split.cashDueCents)} to pay in cash` +
-          (one ? ` (the bill by ${methodWords(one)} is Rs ${rs(billByMethod(quote, one))})` : ''),
+        `${sym()}${rs(digital)} ${on} leaves ${sym()}${rs(split.cashDueCents)} to pay in cash` +
+          (one ? ` (the bill by ${methodWords(one)} is ${sym()}${rs(billByMethod(quote, one))})` : ''),
       );
     }
-    throw new Error(`With Rs ${rs(digital)} ${on} the cash part is Rs ${rs(split.cashDueCents)}, not Rs ${rs(cash)}`);
+    throw new Error(`With ${sym()}${rs(digital)} ${on} the cash part is ${sym()}${rs(split.cashDueCents)}, not ${sym()}${rs(cash)}`);
   }
   return { totalCents: split.totalCents, taxCents: split.taxCents, digitalNetCents: split.digitalNetCents, digitalTaxCents: split.digitalTaxCents };
 }
@@ -3778,7 +3784,7 @@ export function tenderOrder(
       const sum = input.payments.reduce((s, p) => s + p.amountCents, 0);
       if (sum !== order.totalCents) {
         throw new Error(
-          `Payments (Rs ${sum / 100}) must equal the order total (Rs ${order.totalCents / 100})`,
+          `Payments (${sym()}${sum / 100}) must equal the order total (${sym()}${order.totalCents / 100})`,
         );
       }
     }
@@ -4348,7 +4354,7 @@ export function refundOrder(
       if (requested <= 0) throw new Error('Refund amount must be positive');
       if (requested > netPaidCents) {
         throw new Error(
-          `Refund (Rs ${requested / 100}) exceeds remaining balance (Rs ${
+          `Refund (${sym()}${requested / 100}) exceeds remaining balance (${sym()}${
             netPaidCents / 100
           })`,
         );
@@ -5449,7 +5455,7 @@ export function markOrderServed(
       const settled = nothingToPay ? null : cardRateSettlement(order, [p]);
       if (settled === null && p.amountCents !== order.totalCents) {
         throw new Error(
-          `Payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${
+          `Payment (${sym()}${p.amountCents / 100}) must equal the total (${sym()}${
             order.totalCents / 100
           })`,
         );
@@ -5569,7 +5575,7 @@ export function payBeforePickup(
     // The one leg settles the bill at its way's rate (0052, 0.7.45); else it must be the stored total.
     const settled = cardRateSettlement(order, [p]);
     if (settled === null && p.amountCents !== order.totalCents) {
-      throw new Error(`Payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${order.totalCents / 100})`);
+      throw new Error(`Payment (${sym()}${p.amountCents / 100}) must equal the total (${sym()}${order.totalCents / 100})`);
     }
     if (p.method === 'cash' && p.tenderedCents != null && p.tenderedCents < p.amountCents) {
       throw new Error('Cash tendered cannot be less than the cash amount');
@@ -6122,7 +6128,7 @@ export function markOrderDelivered(
       if (p.amountCents < 0 || (p.amountCents === 0 && order.totalCents !== 0)) throw new Error('Payment amount must be positive');
       if (p.amountCents !== order.totalCents) {
         throw new Error(
-          `COD payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${
+          `COD payment (${sym()}${p.amountCents / 100}) must equal the total (${sym()}${
             order.totalCents / 100
           })`,
         );
@@ -6140,7 +6146,7 @@ export function markOrderDelivered(
       const settled = nothingToPay ? null : cardRateSettlement(order, [p]);
       if (settled === null && p.amountCents !== order.totalCents) {
         throw new Error(
-          `COD payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${
+          `COD payment (${sym()}${p.amountCents / 100}) must equal the total (${sym()}${
             order.totalCents / 100
           })`,
         );

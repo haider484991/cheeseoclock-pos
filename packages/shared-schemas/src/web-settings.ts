@@ -94,7 +94,7 @@ export const publishedZoneSchema = z.object({
     .int()
     .min(0)
     .max(DELIVERY_FEE_MAX_CENTS)
-    .refine((c) => c % 100 === 0, { message: 'A delivery fee is whole rupees' }),
+    .refine((c) => c % 100 === 0, () => ({ message: `A delivery fee is whole ${getShopLocale().words.major}` })),
   feeItemId: z.string().min(1).max(64).nullable(),
   active: z.boolean(),
   sort: z.number().int().min(0).max(10_000),

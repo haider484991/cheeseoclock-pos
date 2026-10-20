@@ -1,3 +1,4 @@
+import { getShopLocale, formatCents } from '@cheeseoclock/shared-types';
 import { z } from 'zod';
 import {
   buy1Get1Fields,
@@ -116,7 +117,7 @@ import type {
   ShopSettingKey,
   WhatIfRequest,
 } from '@cheeseoclock/shared-types';
-import { formatNumber, US_TIME_ZONES } from '@cheeseoclock/shared-types';
+import { US_TIME_ZONES } from '@cheeseoclock/shared-types';
 import { moneyField } from './money-field.js';
 
 /**
@@ -286,7 +287,7 @@ const writesFormat = (key: ShopSettingKey) =>
 const readsFormat = z.number().int().min(1);
 
 /** Whole rupees in paisa, from Rs 0 up to `maxRupees`. */
-const wholeRupees = (maxRupees: number, what: string) =>
+const wholeRupees = (maxRupees: number, what: string | (() => string)) =>
   moneyField({
     what,
     minCents: 0,
@@ -315,7 +316,7 @@ const foodpandaDealShape = {
   shopPercent: wholePercent('Your part of the deal'),
   minOrderCents: wholeRupees(50_000, 'The smallest order').nullable(),
   maxOffCents: wholeRupees(50_000, 'The most off one order')
-    .refine((c) => c > 0, { message: 'The most off one order must be more than Rs 0 — or leave it empty' })
+    .refine((c) => c > 0, () => ({ message: `The most off one order must be more than ${formatCents(0)} — or leave it empty` }))
     .nullable(),
   startsOn: tradingDay.nullable(),
   endsOn: tradingDay.nullable(),
@@ -391,7 +392,7 @@ const discountApprovalShape = {
     .int({ message: 'The % limit is a whole %' })
     .min(0, { message: "The % limit can't be below 0%" })
     .max(APPROVAL_MAX_PERCENT, { message: `The % limit is at most ${APPROVAL_MAX_PERCENT}%` }),
-  flatOverCents: wholeRupees(APPROVAL_MAX_FLAT_CENTS / 100, 'The rupee limit'),
+  flatOverCents: wholeRupees(APPROVAL_MAX_FLAT_CENTS / 100, () => `The ${getShopLocale().words.majorOne} limit`),
   // Format 2: a discount given by hand needs a reason.
   reasonRequired: z.boolean({ errorMap: () => ({ message: 'A discount needs a reason: Yes or No' }) }),
 };
@@ -420,11 +421,23 @@ const discountPresetsShape = {
     .refine(allDifferent, { message: 'Two % buttons are the same' }),
   flatCents: z
     .array(
-      wholeRupees(PRESET_FLAT_MAX_CENTS / 100, 'A rupee button').refine((c) => c > 0, { message: 'A rupee button is at least Rs 1' }),
+      wholeRupees(PRESET_FLAT_MAX_CENTS / 100, () => `A ${getShopLocale().words.majorOne} button`).refine(
+        (c) => c > 0,
+        () => ({ message: `A ${getShopLocale().words.majorOne} button is at least ${formatCents(100)}` }),
+      ),
+      {
+        // The count's words, written when checked (money-field.ts says why); same order as .min / .max gave.
+        errorMap: (issue, ctx) => {
+          const one = getShopLocale().words.majorOne;
+          if (issue.code === z.ZodIssueCode.too_small) return { message: `Keep at least one ${one} button` };
+          if (issue.code === z.ZodIssueCode.too_big) return { message: `At most ${PRESET_FLATS_MAX} ${one} buttons` };
+          return { message: ctx.defaultError };
+        },
+      },
     )
-    .min(1, { message: 'Keep at least one rupee button' })
-    .max(PRESET_FLATS_MAX, { message: `At most ${PRESET_FLATS_MAX} rupee buttons` })
-    .refine(allDifferent, { message: 'Two rupee buttons are the same' }),
+    .min(1)
+    .max(PRESET_FLATS_MAX)
+    .refine(allDifferent, () => ({ message: `Two ${getShopLocale().words.majorOne} buttons are the same` })),
   reasons: z
     .array(presetReason)
     .min(1, { message: 'Keep at least one reason button' })
@@ -642,7 +655,7 @@ const offerShape = {
     .min(1, { message: 'Pick takeaway, delivery or both' })
     .max(2)
     .refine(allDifferent, { message: 'Pick takeaway and delivery once each' }),
-  type: z.enum(['percent', 'flat'], { errorMap: () => ({ message: 'A % off, or rupees off' }) }),
+  type: z.enum(['percent', 'flat'], { errorMap: () => ({ message: `A % off, or ${getShopLocale().words.major} off` }) }),
   value: z.number().int({ message: 'The amount off is a whole number' }),
   // v0.7.44: the categories it comes off; absent or null = the whole menu. A till older than 0.7.44
   // reads an offer with them as a newer till's (storedFormatIsNewer) and puts no offer on.
@@ -655,7 +668,7 @@ const offerShape = {
     .optional(),
   minOrderCents: wholeRupees(OFFER_MAX_ORDER_CENTS / 100, 'The smallest order').nullable(),
   maxOffCents: wholeRupees(OFFER_MAX_ORDER_CENTS / 100, 'The most off one order')
-    .refine((c) => c > 0, { message: 'The most off one order must be more than Rs 0 — or leave it empty' })
+    .refine((c) => c > 0, () => ({ message: `The most off one order must be more than ${formatCents(0)} — or leave it empty` }))
     .nullable(),
   days: z
     .array(wholeIn(0, 6, 'A day'))
@@ -678,7 +691,7 @@ const offerRules = (
   if (o.type === 'flat' && !(o.value >= 100 && o.value <= OFFER_MAX_FLAT_CENTS && o.value % 100 === 0)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: `${which}whole rupees from Rs 1 to Rs ${formatNumber((OFFER_MAX_FLAT_CENTS / 100))}`,
+      message: `${which}whole ${getShopLocale().words.major} from ${formatCents(100)} to ${formatCents(OFFER_MAX_FLAT_CENTS)}`,
     });
   }
   if (o.startsOn && o.endsOn && o.endsOn < o.startsOn) {
@@ -1166,13 +1179,9 @@ const feeBps = (what: string) =>
     .min(0, { message: `${what} cannot be below 0%` })
     .max(10_000, { message: `${what} cannot be above 100%` });
 
-/** Paisa, Rs 0 to Rs 100,000. */
+/** Paisa, Rs 0 to Rs 100,000 (the words written when checked: money-field.ts). */
 const feeCents = (what: string) =>
-  z
-    .number()
-    .int({ message: `${what} is in whole paisa` })
-    .min(0, { message: `${what} cannot be below Rs 0` })
-    .max(10_000_000, { message: `${what} is at most Rs 100,000` });
+  moneyField({ what, minCents: 0, maxCents: 10_000_000, belowWording: 'cannot be below' });
 
 /** What each way of paying costs the shop (costing spec 4.7). */
 const paymentFeeBpsSchema = z
@@ -1530,11 +1539,7 @@ export const whatIfInputSchema = z
               .int({ message: 'A pack size is a whole number' })
               .min(1, { message: 'A pack is at least 1' })
               .max(100_000_000, { message: 'That pack is too big' }),
-            packPriceCents: z
-              .number()
-              .int({ message: 'A price is in whole paisa' })
-              .min(0, { message: 'A price cannot be below Rs 0' })
-              .max(100_000_000, { message: 'A price is at most Rs 1,000,000' }),
+            packPriceCents: moneyField({ what: 'A price', minCents: 0, maxCents: 100_000_000, belowWording: 'cannot be below' }),
           })
           .strict(),
       )
@@ -1544,11 +1549,7 @@ export const whatIfInputSchema = z
         z
           .object({
             menuItemId: anId,
-            priceCents: z
-              .number()
-              .int({ message: 'A price is in whole paisa' })
-              .min(0, { message: 'A price cannot be below Rs 0' })
-              .max(100_000_000, { message: 'A price is at most Rs 1,000,000' }),
+            priceCents: moneyField({ what: 'A price', minCents: 0, maxCents: 100_000_000, belowWording: 'cannot be below' }),
           })
           .strict(),
       )

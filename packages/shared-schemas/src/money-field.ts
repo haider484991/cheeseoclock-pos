@@ -23,8 +23,11 @@ import { z } from 'zod';
 import { formatCents, getShopLocale } from '@cheeseoclock/shared-types';
 
 export interface MoneyFieldRules {
-  /** How the message names this value, e.g. "The price step". */
-  what: string;
+  /**
+   * How the message names this value, e.g. "The price step" — or a function,
+   * when the name itself has the money in it ("The rupee limit").
+   */
+  what: string | (() => string);
   /** Smallest allowed, in minor units. */
   minCents?: number;
   /** Largest allowed, in minor units. */
@@ -69,16 +72,18 @@ export function moneyField(rules: MoneyFieldRules) {
     minSuffix,
     invalidTypeWording,
   } = rules;
+  const named = (): string => (typeof what === 'function' ? what() : what);
   const base = invalidTypeWording
     ? z.number({
         errorMap: (issue, ctx) =>
           issue.code === z.ZodIssueCode.invalid_type
-            ? { message: `${what} ${invalidTypeWording} ${getShopLocale().words.major}` }
+            ? { message: `${named()} ${invalidTypeWording} ${getShopLocale().words.major}` }
             : { message: ctx.defaultError },
       })
     : z.number();
   return base.superRefine((value, ctx) => {
     const locale = getShopLocale();
+    const what = named();
     const fail = (message: string): void => {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message });
     };
