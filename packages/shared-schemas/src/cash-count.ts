@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { CASH_COUNT_OTHER_MAX_CENTS, CASH_NOTE_COUNT_MAX, CASH_NOTE_FACE_CENTS } from '@cheeseoclock/shared-types';
+import {
+  CASH_COUNT_OTHER_MAX_CENTS,
+  CASH_NOTE_COUNT_MAX,
+  formatCents,
+  getShopLocale,
+} from '@cheeseoclock/shared-types';
 import type { CashCount } from '@cheeseoclock/shared-types';
 
 /**
@@ -21,10 +26,28 @@ const COUNT_WHOLE = 'A count is a whole number of notes';
 const COUNT_BELOW_ZERO = "A count can't be below 0";
 // The words name the limits CASH_NOTE_COUNT_MAX and CASH_COUNT_OTHER_MAX_CENTS.
 const COUNT_TOO_MANY = 'At most 9,999 notes in one row';
-const OTHER_WHOLE = 'Coins and other is in whole rupees';
-const OTHER_BELOW_ZERO = "Coins and other can't be below Rs 0";
-const OTHER_TOO_MUCH = 'Coins and other is at most Rs 99,999';
-const NOTE_ROWS = 'The note rows are Rs 5,000, 1,000, 500, 100, 50, 20 and 10';
+/**
+ * These read the shop's locale, so they are functions rather than consts: a
+ * const here would be built when this module is first imported, which in the
+ * till is startup — before the settings are read and the shop is known.
+ */
+const otherWhole = (): string => `Coins and other is in whole ${getShopLocale().words.major}`;
+const otherBelowZero = (): string => `Coins and other can't be below ${formatCents(0)}`;
+const otherTooMuch = (): string =>
+  `Coins and other is at most ${formatCents(CASH_COUNT_OTHER_MAX_CENTS)}`;
+
+/**
+ * "The note rows are Rs 5,000, 1,000, 500, 100, 50, 20 and 10" — the shop's
+ * own notes, largest first, with the symbol on the first one only. A US
+ * drawer reads "$100, 50, 20, 10, 5 and 1".
+ */
+const noteRows = (): string => {
+  const faces = getShopLocale().cashFacesCents;
+  const bare = faces.slice(1).map((c) => formatCents(c, { showSymbol: false }));
+  const last = bare.pop();
+  const head = [formatCents(faces[0] ?? 0), ...bare].join(', ');
+  return `The note rows are ${last === undefined ? head : `${head} and ${last}`}`;
+};
 
 /** The read side's limits: wide, so a newer till's count still reads. */
 const READ_MAX_ROWS = 20;
@@ -35,14 +58,19 @@ const READ_MAX_OTHER_CENTS = 1_000_000_000;
 
 const noteCountInputSchema = z
   .object({
-    faceCents: z.number({ required_error: NOTE_ROWS, invalid_type_error: NOTE_ROWS }).int({ message: NOTE_ROWS }),
+    faceCents: z
+      .number({
+        errorMap: (issue, ctx) =>
+          issue.code === z.ZodIssueCode.invalid_type ? { message: noteRows() } : { message: ctx.defaultError },
+      })
+      .int({ message: 'A note value is a whole number' }),
     count: z
       .number({ required_error: COUNT_WHOLE, invalid_type_error: COUNT_WHOLE })
       .int({ message: COUNT_WHOLE })
       .min(0, { message: COUNT_BELOW_ZERO })
       .max(CASH_NOTE_COUNT_MAX, { message: COUNT_TOO_MANY }),
   })
-  .strict(NOTE_ROWS);
+  .strict(noteRows());
 
 /**
  * What a close may save: exactly the rows Rs 5,000, 1,000, 500, 100, 50, 20
@@ -53,20 +81,33 @@ const noteCountInputSchema = z
 export const cashCountInputSchema = z
   .object({
     notes: z
-      .array(noteCountInputSchema, { required_error: NOTE_ROWS, invalid_type_error: NOTE_ROWS })
+      .array(noteCountInputSchema, {
+        errorMap: (issue, ctx) =>
+          issue.code === z.ZodIssueCode.invalid_type ? { message: noteRows() } : { message: ctx.defaultError },
+      })
       .superRefine((notes, ctx) => {
-        const same =
-          notes.length === CASH_NOTE_FACE_CENTS.length && notes.every((n, i) => n.faceCents === CASH_NOTE_FACE_CENTS[i]);
-        if (!same) ctx.addIssue({ code: z.ZodIssueCode.custom, message: NOTE_ROWS });
+        // The shop's own notes, not Pakistan's: a US drawer is counted in
+        // $100 down to $1, and must be saveable.
+        const faces = getShopLocale().cashFacesCents;
+        const same = notes.length === faces.length && notes.every((n, i) => n.faceCents === faces[i]);
+        if (!same) ctx.addIssue({ code: z.ZodIssueCode.custom, message: noteRows() });
       }),
     otherCents: z
-      .number({ required_error: OTHER_WHOLE, invalid_type_error: OTHER_WHOLE })
-      .int({ message: OTHER_WHOLE })
-      .min(0, { message: OTHER_BELOW_ZERO })
-      .max(CASH_COUNT_OTHER_MAX_CENTS, { message: OTHER_TOO_MUCH })
-      .refine((c) => c % 100 === 0, { message: OTHER_WHOLE }),
+      .number({
+        errorMap: (issue, ctx) =>
+          issue.code === z.ZodIssueCode.invalid_type ? { message: otherWhole() } : { message: ctx.defaultError },
+      })
+      .superRefine((value, ctx) => {
+        const fail = (message: string): void => {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+        };
+        if (!Number.isInteger(value)) fail(otherWhole());
+        else if (value < 0) fail(otherBelowZero());
+        else if (value > CASH_COUNT_OTHER_MAX_CENTS) fail(otherTooMuch());
+        else if (value % 100 !== 0) fail(otherWhole());
+      }),
   })
-  .strict(NOTE_ROWS);
+  .strict(noteRows());
 
 // ----------------------------------------------------------------- read side
 

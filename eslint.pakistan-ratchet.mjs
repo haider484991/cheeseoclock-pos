@@ -354,7 +354,6 @@ export const PAKISTAN_ALLOWLIST = [
   'packages/printer-core/src/shift-report.test.ts',
   'packages/printer-core/src/shift-report.ts',
   'packages/shared-schemas/src/business-settings.ts',
-  'packages/shared-schemas/src/cash-count.ts',
   'packages/shared-schemas/src/vouchers.ts',
   'packages/shared-schemas/src/web-settings.ts',
   'packages/shared-types/src/delivery-areas.ts',
@@ -392,4 +391,7 @@ export const PAKISTAN_EXEMPT = [
   // Pins the exact words a cashier reads when a value is refused, so it has
   // to spell out both "Rs 1" and "$1" to prove the two differ.
   '**/schemaMessages.test.ts',
+  // Pins the drawer rows a shift is closed with, so it must spell out both
+  // 'Rs 5,000, 1,000 ...' and the US rows to prove the two differ.
+  '**/cashCountLocale.test.ts',
 ];
