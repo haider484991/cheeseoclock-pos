@@ -1,3 +1,4 @@
+import { shopSettingDefault } from '@cheeseoclock/shared-types';
 /**
  * The owner's rules as the counter uses them (checkout:getRules, any login):
  * the F3 screen's approval limit and buttons, the Live Orders timings,
@@ -45,6 +46,22 @@ export const DEFAULT_COUNTER_DISCOUNTS: CounterDiscountRules = {
   reasonRequired: DEFAULT_DISCOUNT_APPROVAL.reasonRequired,
 };
 
+/**
+ * The rules the counter uses while the shop's own are not in yet: the
+ * released ones in Pakistan (DEFAULT_COUNTER_DISCOUNTS), US-sized money
+ * abroad ($1 / $2 / $5 buttons, $5 without a manager). Worked out when asked.
+ */
+export function counterDiscountsFallback(): CounterDiscountRules {
+  const approval = shopSettingDefault('discounts.approval');
+  const presets = shopSettingDefault('discounts.presets');
+  if (approval === DEFAULT_DISCOUNT_APPROVAL && presets === DEFAULT_DISCOUNT_PRESETS) return DEFAULT_COUNTER_DISCOUNTS;
+  return {
+    ...DEFAULT_COUNTER_DISCOUNTS,
+    approval: { percentOver: approval.percentOver, flatOverCents: approval.flatOverCents },
+    presets: { percents: [...presets.percents], flatCents: [...presets.flatCents], reasons: [...presets.reasons] },
+  };
+}
+
 /** The released Live Orders timings: amber 15, red 30; reminders at 10 (not started) and 30 (not done). */
 export const DEFAULT_COUNTER_KITCHEN: CounterKitchenTiming = {
   amberMin: DEFAULT_KITCHEN_TIMING.amberMin,
@@ -55,7 +72,7 @@ export const DEFAULT_COUNTER_KITCHEN: CounterKitchenTiming = {
 
 /** The F3 rules from checkout:getRules, or the released ones until it has answered. */
 export function discountRulesOf(rules: Pick<CheckoutRules, 'discounts'> | null | undefined): CounterDiscountRules {
-  return rules?.discounts ?? DEFAULT_COUNTER_DISCOUNTS;
+  return rules?.discounts ?? counterDiscountsFallback();
 }
 
 /** The Live Orders timings from checkout:getRules, or the released ones until it has answered. */

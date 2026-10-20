@@ -23,6 +23,7 @@ import {
   type TillLinkState,
 } from '@cheeseoclock/shared-types';
 import { BUSINESS_SETTING_READ_SCHEMAS } from '@cheeseoclock/shared-schemas';
+import { shopSettingDefault } from '@cheeseoclock/shared-types';
 import {
   activeFoodpandaDeal,
   atFoodpandaPrices,
@@ -239,7 +240,7 @@ export function itemFoodpandaLine(
 export function putBackOf<K extends ShopSettingKey>(
   key: K,
   current: ShopSettingValues[K],
-  base: Readonly<ShopSettingValues[K]> = SHOP_SETTING_DEFAULTS[key],
+  base: Readonly<ShopSettingValues[K]> = shopSettingDefault(key),
 ): ShopSettingValues[K] {
   if (key === 'stock.rules') return stockRulesPutBack(current as ShopSettingValues['stock.rules']) as ShopSettingValues[K];
   // The areas: today's 21 and fees; one the owner added stays, switched off (never removed); each keeps its fee item while its fee stays.

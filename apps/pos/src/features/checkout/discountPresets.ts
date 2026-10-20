@@ -24,6 +24,7 @@ import {
   type DiscountPresets,
 } from '@cheeseoclock/shared-types';
 import { approvalProblem, secretReady } from '../../components/secret/secretRules';
+import { shopSettingDefault } from '@cheeseoclock/shared-types';
 
 /**
  * The discount screen's one-tap choices and the live "what will the bill be"
@@ -382,6 +383,18 @@ export const RELEASED_SCREEN_RULES: DiscountScreenRules = {
 };
 
 /**
+ * The rules the dialog falls back on while the shop's own are not in yet:
+ * the released ones in Pakistan (RELEASED_SCREEN_RULES), and the same rules
+ * with a US-sized approval limit abroad ($5, not $500). Worked out when
+ * asked, not at import, because the till learns its shop after loading.
+ */
+export function screenRulesFallback(): DiscountScreenRules {
+  const approval = shopSettingDefault('discounts.approval');
+  if (approval.flatOverCents === DEFAULT_DISCOUNT_APPROVAL.flatOverCents) return RELEASED_SCREEN_RULES;
+  return { ...RELEASED_SCREEN_RULES, approval: { percentOver: approval.percentOver, flatOverCents: approval.flatOverCents } };
+}
+
+/**
  * What a discount given now may come off, exactly as orders:applyDiscount
  * works it: the delivery charge only with the owner's switch on; the value
  * deals never, except on a foodpanda order (a manager matching the tablet,
@@ -427,7 +440,7 @@ export function previewDiscount(
   lines: ReadonlyArray<TaxedDiscountLine>,
   subtotalCents: number,
   choice: DiscountChoice | null,
-  rules: DiscountScreenRules = RELEASED_SCREEN_RULES,
+  rules: DiscountScreenRules = screenRulesFallback(),
   mode?: string | null,
 ): DiscountPreview {
   const { baseCents } = discountBaseNow(lines, subtotalCents, rules, mode);
@@ -452,7 +465,7 @@ export function previewDiscount(
 export function discountBaseNow(
   lines: ReadonlyArray<TaxedDiscountLine>,
   subtotalCents: number,
-  rules: Pick<DiscountScreenRules, 'alsoOffDeliveryCharge'> = RELEASED_SCREEN_RULES,
+  rules: Pick<DiscountScreenRules, 'alsoOffDeliveryCharge'> = screenRulesFallback(),
   mode?: string | null,
 ): DiscountBaseNow {
   const scope = discountScopeNow(rules, mode);

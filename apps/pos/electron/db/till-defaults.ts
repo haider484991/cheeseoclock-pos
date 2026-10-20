@@ -17,6 +17,7 @@
  * Read-only. Not loaded by the Reports worker (it never puts anything back).
  */
 import { BUSINESS_SETTING_READ_SCHEMAS } from '@cheeseoclock/shared-schemas';
+import { shopSettingDefault } from '@cheeseoclock/shared-types';
 import {
   NEW_SHOP_KEYS,
   SHOP_SETTING_DEFAULTS,
@@ -70,8 +71,8 @@ export function setupValueOf<K extends ShopSettingKey>(db: AppDatabase, key: K):
  * made before any row exists.
  */
 export function tillDefaultOf<K extends ShopSettingKey>(db: AppDatabase, key: K): Readonly<ShopSettingValues[K]> {
-  if (EDITION.id === 'cheeseoclock' || !SETUP_KEYS.has(key)) return SHOP_SETTING_DEFAULTS[key];
+  if (EDITION.id === 'cheeseoclock' || !SETUP_KEYS.has(key)) return shopSettingDefault(key);
   const setup = setupValueOf(db, key);
   if (setup) return setup;
-  return key === 'delivery.zones' ? SHOP_SETTING_DEFAULTS[key] : readShopSetting(db, key).value;
+  return key === 'delivery.zones' ? shopSettingDefault(key) : readShopSetting(db, key).value;
 }

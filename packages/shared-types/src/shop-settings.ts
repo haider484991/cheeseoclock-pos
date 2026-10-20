@@ -36,6 +36,7 @@
  */
 
 import { DEFAULT_BUY_1_GET_1_RULES, type Buy1Get1Rules } from './buy-1-get-1.js';
+import { getShopLocale } from './shop-locale.js';
 import { WASTE_REASONS, WASTE_REASON_DEFAULT_LABEL, type WasteReasonId } from './inventory.js';
 import { DELIVERY_ZONES, type DeliveryZoneSetting } from './delivery-areas.js';
 import { PICKUP_DISCOUNT_PERCENT } from './web-bridge.js';
@@ -1095,6 +1096,27 @@ export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<S
   'menu.autoUpdate': DEFAULT_MENU_AUTO_UPDATE,
   'deals.buy1Get1': DEFAULT_BUY_1_GET_1_DEALS,
 });
+
+/**
+ * The shop rules whose built-in values are amounts of money, sized for a US
+ * shop. The released ones are rupee-sized: Rs 100 / 200 / 500 buttons and up
+ * to Rs 500 off without a manager would be $100 / $200 / $500 buttons and
+ * $500 off — numbers no US counter would choose. Everything else, and every
+ * Pakistani till, is SHOP_SETTING_DEFAULTS itself.
+ */
+const US_SHOP_SETTING_DEFAULTS: Readonly<Partial<{ [K in ShopSettingKey]: Readonly<ShopSettingValues[K]> }>> = Object.freeze({
+  'discounts.approval': Object.freeze({ ...DEFAULT_DISCOUNT_APPROVAL, flatOverCents: 500 }),
+  'discounts.presets': Object.freeze({ ...DEFAULT_DISCOUNT_PRESETS, flatCents: Object.freeze([100, 200, 500]) as number[] }),
+});
+
+/** A shop rule's built-in value for this shop: SHOP_SETTING_DEFAULTS, money sized to its currency. */
+export function shopSettingDefault<K extends ShopSettingKey>(key: K): Readonly<ShopSettingValues[K]> {
+  if (getShopLocale().country === 'US') {
+    const us = US_SHOP_SETTING_DEFAULTS[key];
+    if (us) return us as Readonly<ShopSettingValues[K]>;
+  }
+  return SHOP_SETTING_DEFAULTS[key];
+}
 
 /** The longest foodpanda order number kept (payments.reference_no). */
 export const FOODPANDA_ORDER_CODE_MAX = 40;

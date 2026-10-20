@@ -54,6 +54,7 @@ import {
   type StockRules,
 } from '@cheeseoclock/shared-types';
 import { foodpandaFeesFromChannelFees } from '@cheeseoclock/pos-domain';
+import { shopSettingDefault } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from './connection.js';
 
 export interface StoredBusinessSetting<K extends BusinessSettingKey> {
@@ -138,7 +139,7 @@ export function readShopSetting<K extends ShopSettingKey>(db: AppDatabase, key: 
       if (carried) return carried as ShopSettingInUse<K>;
     }
     return {
-      value: { ...SHOP_SETTING_DEFAULTS[key] } as ShopSettingValues[K],
+      value: { ...shopSettingDefault(key) } as ShopSettingValues[K],
       isDefault: true,
       savedAt: null,
       savedByUserId: null,
