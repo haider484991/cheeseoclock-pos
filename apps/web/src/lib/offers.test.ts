@@ -5,6 +5,7 @@ import {
   OFFER_FINE_PRINT,
   OFFER_RULES,
   cardOffer,
+  discountOnEveryOrder,
   offerSectionOf,
   offerWindow,
   regularPizzaPrices,
@@ -182,6 +183,26 @@ describe('cardOffer', () => {
       label: '10% off pick-up · 5% off delivery',
       prices: null,
     });
+  });
+});
+
+describe('discountOnEveryOrder: the card may show the price after the % as THE price (20 Oct 2026, the cleaner menu)', () => {
+  it('pick-up and delivery at the same %: yes — the live shop (10%, and Pizza 20% both ways)', () => {
+    expect(discountOnEveryOrder({ pickupPct: 10, deliveryPct: 10, canPickup: true })).toBe(true);
+    expect(discountOnEveryOrder({ pickupPct: 20, deliveryPct: 20, canPickup: true })).toBe(true);
+  });
+
+  it('pick-up off the till: a delivery % reaches every order; a pick-up % reaches none', () => {
+    expect(discountOnEveryOrder({ pickupPct: 10, deliveryPct: 10, canPickup: false })).toBe(true);
+    expect(discountOnEveryOrder({ pickupPct: 10, deliveryPct: 0, canPickup: false })).toBe(false);
+  });
+
+  it('a % one way of two, or two different %s, or none: no — the card says the % in words beside the menu prices', () => {
+    expect(discountOnEveryOrder(PICKUP_10)).toBe(false);
+    expect(discountOnEveryOrder({ pickupPct: 0, deliveryPct: 10, canPickup: true })).toBe(false);
+    expect(discountOnEveryOrder({ pickupPct: 10, deliveryPct: 5, canPickup: true })).toBe(false);
+    expect(discountOnEveryOrder({ pickupPct: 0, deliveryPct: 0, canPickup: true })).toBe(false);
+    expect(discountOnEveryOrder({ pickupPct: 0, deliveryPct: 0, canPickup: false })).toBe(false);
   });
 });
 

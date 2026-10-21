@@ -30,11 +30,11 @@ export function goldenMenuDealsMarked(): PublishedMenu {
   };
 }
 
-/** /menu while pick-up is on: the chip (once). */
+/** /menu while pick-up is on: the chip (once; its plainer look since 20 Oct 2026, the cleaner menu). */
 const MENU_OPEN: readonly Swap[] = [
   [
-    '<li class="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">10% off when you order online &amp; pick up</li>',
-    '<li class="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">10% off online pick-up · not on value deals</li>',
+    '<li class="rounded-full bg-cheese px-3 py-1 text-ink">10% off when you order online &amp; pick up</li>',
+    '<li class="rounded-full bg-cheese px-3 py-1 text-ink">10% off online pick-up · not on value deals</li>',
     1,
   ],
 ];

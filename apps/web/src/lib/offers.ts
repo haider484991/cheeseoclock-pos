@@ -103,6 +103,16 @@ export interface OfferPercents {
   canPickup: boolean;
 }
 
+/**
+ * The % off reaches every online order the customer can place now: pick-up and delivery at the same %, or the one
+ * way of ordering on offer (pick-up off the till: a delivery %). The card's price buttons then show the price after
+ * it, the old one struck out (20 Oct 2026, the cleaner menu). A % for one way of two stays words beside the buttons.
+ */
+export function discountOnEveryOrder(p: OfferPercents): boolean {
+  if (!p.canPickup) return p.deliveryPct > 0;
+  return p.pickupPct > 0 && p.pickupPct === p.deliveryPct;
+}
+
 /** The % line for a card whose items take a discount: its words, and the one percent its prices are worked at (null = ambiguous). */
 function discountWords(p: OfferPercents): { label: string; pct: number | null } | null {
   const pick = p.canPickup ? p.pickupPct : 0;

@@ -58,7 +58,7 @@ import {
   type LastOrder,
 } from '@/lib/device-memory';
 import { menuImageSrcSet } from '@/lib/images';
-import { cardOffer, regularPizzaPrices, type CardOffer } from '@/lib/offers';
+import { OFFER_FINE_PRINT, cardOffer, discountOnEveryOrder, offerSectionOf, regularPizzaPrices, type OfferPrice } from '@/lib/offers';
 import { pixel, type PixelLine } from '@/lib/meta-pixel';
 import { trackPath } from '@/lib/order-display';
 import {
@@ -75,7 +75,7 @@ import type { PublicMenu } from '@/lib/public-menu';
 import { CartPanel, type CartProps } from './ordering/cart-ui';
 import { CheckoutSheet, type PlacedOrder } from './ordering/CheckoutSheet';
 import { ItemSheet } from './ordering/ItemSheet';
-import { OfferBanner, OfferStrip } from './ordering/Offers';
+import { OfferStrip, OfferTeaser, type ShownOffer } from './ordering/Offers';
 import { sheetOnTopOfHistory } from './ordering/Sheet';
 import { ShopFactsContext, useShopFacts } from './ordering/ShopContext';
 
@@ -280,10 +280,10 @@ export function OrderingApp({
   const dealRules = deliveryFacts.buy1Get1;
   const dealWindow = buy1Get1WindowWords(dealRules);
   // The offers each card shows (lib/offers, display only): Buy 1 Get 1 (in the owner's hours, none while switched
-  // off) and the % off with what each size comes to. Kept per card key so the memoised cards re-render only when the
-  // percents or the menu change.
+  // off) and the % off with what each size comes to — on the price buttons themselves when every online order takes
+  // it. Kept per card key so the memoised cards re-render only when the percents or the menu change.
   const offersByCard = useMemo(() => {
-    const m = new Map<string, CardOffer>();
+    const m = new Map<string, ShownOffer>();
     const dealsOnMenu = sections.some((s) => isBuy1Get1Category(s.name));
     for (const s of sections) {
       // A category with its own % (v0.7.50): its cards show that % instead.
@@ -292,11 +292,22 @@ export function OrderingApp({
         deliveryPct: deliveryCats.find((x) => x.categoryId === s.id)?.percent ?? deliveryPct,
         canPickup,
       };
-      for (const c of s.cards) m.set(c.key, cardOffer(s.name, c, own, { dealsOnMenu, buy1Get1: dealRules }));
+      const onPrice = discountOnEveryOrder(own);
+      const pct = onPrice ? (canPickup ? own.pickupPct : own.deliveryPct) : null;
+      // With the deals on the menu their cards say each rule, so a regular pizza's card shows only the offer's tag.
+      const brief = dealsOnMenu && offerSectionOf(s.name) === 'pizza';
+      for (const c of s.cards) {
+        m.set(c.key, { offer: cardOffer(s.name, c, own, { dealsOnMenu, buy1Get1: dealRules }), onPrice, pct, brief });
+      }
     }
     return m;
   }, [sections, pickupPct, deliveryPct, pickupCats, deliveryCats, canPickup, dealRules]);
   const offerPrices = useMemo(() => regularPizzaPrices(sections), [sections]);
+  // The sections of little things (the dips), set two to a row on a phone.
+  const smallSections = useMemo(
+    () => new Set(sections.filter((s) => !isDealSection(s.name) && isSmallSection(s.cards)).map((s) => s.id)),
+    [sections],
+  );
   // The Buy 1 Get 1 deals' own section, once the till has published one: the banner's button jumps there, and the
   // cards' strips say the free item comes in a deal.
   const buy1Get1Anchor = useMemo(() => sections.find((s) => isBuy1Get1Category(s.name))?.anchor ?? null, [sections]);
@@ -541,7 +552,6 @@ export function OrderingApp({
         deliveryChip={deliveryChip(deliveryFacts)}
         hoursChip={copyText(MENU_HEADER_HOURS, { ...deliveryFacts, shop })}
         announcement={deliveryFacts.announcement}
-        shop={shop}
         offerPrices={offerPrices}
         offerWhere={copyText(MENU_OFFER_WHERE, { ...deliveryFacts, shop })}
         offerDealsAnchor={buy1Get1Anchor}
@@ -566,8 +576,13 @@ export function OrderingApp({
         <div>
           {sections.map((s) => (
             <section key={s.id} id={s.anchor} className="scroll-mt-36 pt-8" aria-labelledby={`${s.anchor}-title`}>
-              <SectionTitle id={`${s.anchor}-title`} name={s.name} note={sectionNote(s.name, dealWindow)} />
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <SectionTitle
+                id={`${s.anchor}-title`}
+                name={s.name}
+                note={sectionNote(s.name, dealWindow)}
+                fine={isBuy1Get1Category(s.name) ? OFFER_FINE_PRINT : null}
+              />
+              <div className={`mt-4 grid gap-3 ${smallSections.has(s.id) ? 'grid-cols-2 sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
                 {s.cards.map((card, i) =>
                   isDealSection(s.name) ? (
                     <DealCard
@@ -590,6 +605,7 @@ export function OrderingApp({
                       canPickup={canPickup}
                       onPick={pickVariant}
                       offer={offersByCard.get(card.key)}
+                      dealsAnchor={buy1Get1Anchor}
                     />
                   ) : (
                     <ItemCard
@@ -599,13 +615,17 @@ export function OrderingApp({
                       canPickup={canPickup}
                       onPick={pickVariant}
                       offer={offersByCard.get(card.key)}
+                      dealsAnchor={buy1Get1Anchor}
+                      small={smallSections.has(s.id)}
                     />
                   ),
                 )}
               </div>
             </section>
           ))}
-          <p className="mt-10 text-center font-cond text-sm font-semibold uppercase tracking-wider text-ink-muted">
+          {/* The allergy words close the menu (20 Oct 2026: off the header); each item's sheet and the checkout say them too. */}
+          <p className="mx-auto mt-10 max-w-2xl text-center text-sm leading-snug text-ink-muted">{shop.website.allergyNotice}</p>
+          <p className="mt-3 text-center font-cond text-sm font-semibold uppercase tracking-wider text-ink-muted">
             {footLine}
           </p>
         </div>
@@ -699,6 +719,16 @@ function isSignature(sectionName: string): boolean {
 }
 
 /**
+ * A section of little things (the dips): every card one size with no photo, nearly all with no words either — set
+ * two to a row on a phone (20 Oct 2026), so nine dips are not nine screen-wide cards. A card there with words (the
+ * house dip) takes the whole row.
+ */
+function isSmallSection(cards: readonly MenuCard[]): boolean {
+  if (cards.length < 4 || !cards.every((c) => c.variants.length === 1 && !c.image)) return false;
+  return cards.filter((c) => !c.description).length / cards.length >= 0.75;
+}
+
+/**
  * `dealWindow`: the Buy 1 Get 1 deals' hours in words, as the owner set them ("1–7 PM", "all day"). Never "every
  * day": the shop's days are the owner's (the banner's where-and-when line is the claimed copy that may say it).
  */
@@ -742,6 +772,13 @@ export function ownPercentChips(
   return chips;
 }
 
+/**
+ * The menu's header, kept short so the food starts on the first screen of a phone (20 Oct 2026: "too much
+ * information" in it): the title, one line of facts (hours, cash on delivery, where we deliver and what it costs),
+ * the money off as gold chips, and Buy 1 Get 1 as one line that jumps to its deals. The offer's rules sit with the
+ * deals, and the allergy words close the menu (each item's sheet and the checkout say them too); the shop's tagline
+ * stays on the home page and in the footer.
+ */
 function MenuHeader({
   canPickup,
   pickupPct,
@@ -750,7 +787,6 @@ function MenuHeader({
   deliveryChip,
   hoursChip,
   announcement,
-  shop,
   offerPrices,
   offerWhere,
   offerDealsAnchor = null,
@@ -759,86 +795,126 @@ function MenuHeader({
 }: {
   canPickup: boolean;
   pickupPct: number;
-  /** The % off a delivery's food (v0.7.37); 0 = none, and the header is exactly as before. */
+  /** The % off a delivery's food (v0.7.37); 0 = none. */
   deliveryPct?: number;
-  /** The menu marks value deals (lib/menu-view menuHasNoDiscountItems): the pick-up chip says they are left out. */
+  /** The menu marks value deals (lib/menu-view menuHasNoDiscountItems): the % chip says they are left out. */
   notOnDeals: boolean;
   deliveryChip: string;
-  /** The hours chip (page-copy MENU_HEADER_HOURS): with the days unless the shop opens every day. */
+  /** The hours (page-copy MENU_HEADER_HOURS): with the days unless the shop opens every day. */
   hoursChip: string;
   /** The owner's announcement while it is on (plain text, never markup), else null: nothing shows. */
   announcement: string | null;
-  /** The shop's tagline and allergy notice (the owner's). */
-  shop: ShopFacts;
-  /** The regular pizzas' Medium and Large prices, for the Buy 1 Get 1 banner (lib/offers). */
+  /** The regular pizzas' Medium and Large prices, for the Buy 1 Get 1 rules (lib/offers). */
   offerPrices: { mediumCents: number | null; largeCents: number | null };
-  /** The banner's where-and-when line (page-copy MENU_OFFER_WHERE). */
+  /** The offer's where-and-when line (page-copy MENU_OFFER_WHERE). */
   offerWhere: string;
-  /** The Buy 1 Get 1 deals' section anchor, once the menu has them; null = no button (the banner as before). */
+  /** The Buy 1 Get 1 deals' section anchor, once the menu has them; null = the line opens to the rules. */
   offerDealsAnchor?: string | null;
-  /** The offer's hours in words (the owner's rules); null = the owner switched it off: no banner. */
+  /** The offer's hours in words (the owner's rules); null = the owner switched it off: no line. */
   offerWindow: string | null;
-  /** v0.7.50: one chip per category with its own % ("20% off Pizza online"); none = the header as before. */
+  /** v0.7.50: one chip per category with its own % ("20% off Pizza online"). */
   ownPercentChips?: string[];
 }) {
+  const chip = 'rounded-full bg-cheese px-3 py-1 text-ink';
+  const chips: string[] = [];
+  // The same % off a delivery's food as off a pick-up (v0.7.37): one chip for every online order.
+  if (deliveryPct > 0 && (!canPickup || deliveryPct === pickupPct)) {
+    chips.push(notOnDeals ? `${deliveryPct}% off online orders · ${NOT_ON_VALUE_DEALS}` : `${deliveryPct}% off every online order`);
+  } else {
+    // With value deals marked: shorter words, so the chip stays one line on a 375 px phone.
+    if (canPickup) chips.push(notOnDeals ? `${pickupPct}% off online pick-up · ${NOT_ON_VALUE_DEALS}` : `${pickupPct}% off when you order online & pick up`);
+    if (deliveryPct > 0) chips.push(`${deliveryPct}% off online delivery food${notOnDeals ? ` · ${NOT_ON_VALUE_DEALS}` : ''}`);
+  }
+  chips.push(...ownPercentChips);
   return (
     <div className="bg-ink text-cream">
-      <div className="mx-auto max-w-6xl px-4 pb-7 pt-8 md:pb-9 md:pt-10">
-        <p className="font-cond text-sm font-bold uppercase tracking-[0.22em] text-cheese">
-          {canPickup ? 'Order online · delivery or pick-up' : 'Order online · cash on delivery'}
-        </p>
-        <h1 className="mt-1 font-display text-6xl uppercase leading-none tracking-wide md:text-7xl">The Menu</h1>
-        {shop.profile.tagline && (
-          <p className="mt-2 font-cond text-lg font-semibold italic text-cream/80">{shop.profile.tagline}</p>
-        )}
+      <div className="mx-auto max-w-6xl px-4 pb-5 pt-6 md:pb-7 md:pt-8">
+        <div className="md:flex md:items-end md:justify-between md:gap-8">
+          <h1 className="font-display text-5xl uppercase leading-none tracking-wide md:text-6xl">The Menu</h1>
+          <ul
+            aria-label="Hours, payment and delivery"
+            className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-cond text-[0.95rem] font-semibold leading-snug text-cream/80 md:mt-0 md:justify-end md:pb-1"
+          >
+            <HeaderFact icon="clock">{hoursChip}</HeaderFact>
+            <HeaderFact icon="cash">Cash on delivery</HeaderFact>
+            {/* The till's area names as places ("Brooks Churangi"), as the old all-capitals chip showed them. */}
+            <HeaderFact icon="pin" className="capitalize">
+              {deliveryChip}
+            </HeaderFact>
+          </ul>
+        </div>
         {announcement && (
           <p className="mt-4 flex w-fit max-w-2xl items-start gap-2 rounded-2xl border border-cheese/50 bg-cheese/10 px-4 py-2.5 font-cond text-lg font-bold leading-snug text-cheese">
             <span aria-hidden>★</span>
             <span>{announcement}</span>
           </p>
         )}
-        <ul className="mt-5 flex flex-wrap gap-2 font-cond text-sm font-bold uppercase tracking-wide">
-          {/* The same % off a delivery's food as off a pick-up (v0.7.37): one chip for every online order. */}
-          {deliveryPct > 0 && (!canPickup || deliveryPct === pickupPct) ? (
-            <li className="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">
-              {notOnDeals ? `${deliveryPct}% off online orders · ${NOT_ON_VALUE_DEALS}` : `${deliveryPct}% off every online order`}
-            </li>
-          ) : (
-            <>
-              {canPickup && (
-                <li className="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">
-                  {/* With value deals marked: shorter words, so the chip stays one line on a 375 px phone. */}
-                  {notOnDeals ? (
-                    `${pickupPct}% off online pick-up · ${NOT_ON_VALUE_DEALS}`
-                  ) : (
-                    <>{pickupPct}% off when you order online &amp; pick up</>
-                  )}
-                </li>
-              )}
-              {deliveryPct > 0 && (
-                <li className="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">
-                  {`${deliveryPct}% off online delivery food${notOnDeals ? ` · ${NOT_ON_VALUE_DEALS}` : ''}`}
-                </li>
-              )}
-            </>
-          )}
-          {ownPercentChips.map((chip) => (
-            <li key={chip} className="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">
-              {chip}
-            </li>
-          ))}
-          <li className={`rounded-full px-3.5 py-1.5 ${canPickup ? 'border border-cream/20' : 'bg-cheese text-ink'}`}>
-            {deliveryChip}
-          </li>
-          <li className="rounded-full border border-cream/20 px-3.5 py-1.5">{hoursChip}</li>
-          <li className="rounded-full border border-cream/20 px-3.5 py-1.5">Cash on delivery</li>
-        </ul>
-        {offerWindow !== null && (
-          <OfferBanner prices={offerPrices} where={offerWhere} window={offerWindow} dealsAnchor={offerDealsAnchor} />
+        {(chips.length > 0 || offerWindow !== null) && (
+          <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            {chips.length > 0 && (
+              <ul aria-label="Money off online" className="flex flex-wrap gap-2 font-cond text-sm font-bold uppercase tracking-wide">
+                {chips.map((words) => (
+                  <li key={words} className={chip}>
+                    {words}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {offerWindow !== null && (
+              <div className="lg:w-[26rem] lg:shrink-0">
+                <OfferTeaser prices={offerPrices} where={offerWhere} window={offerWindow} dealsAnchor={offerDealsAnchor} />
+              </div>
+            )}
+          </div>
         )}
-        <p className="mt-4 max-w-2xl text-sm leading-snug text-cream/75">{shop.website.allergyNotice}</p>
       </div>
     </div>
+  );
+}
+
+/** One fact in the header's line, after a small gold icon (drawn here: no icon font, nothing to load). */
+function HeaderFact({
+  icon,
+  className = '',
+  children,
+}: {
+  icon: 'clock' | 'cash' | 'pin';
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <li className="flex items-start gap-1.5">
+      <svg
+        aria-hidden
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="mt-[0.2em] h-4 w-4 shrink-0 text-cheese"
+      >
+        {icon === 'clock' && (
+          <>
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 2" />
+          </>
+        )}
+        {icon === 'cash' && (
+          <>
+            <rect x="2.5" y="6" width="19" height="12" rx="2" />
+            <circle cx="12" cy="12" r="2.5" />
+          </>
+        )}
+        {icon === 'pin' && (
+          <>
+            <path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z" />
+            <circle cx="12" cy="10" r="2.5" />
+          </>
+        )}
+      </svg>
+      <span className={className || undefined}>{children}</span>
+    </li>
   );
 }
 
@@ -967,13 +1043,31 @@ function CategoryRail({ sections }: { sections: Array<{ anchor: string; name: st
   );
 }
 
-function SectionTitle({ id, name, note }: { id: string; name: string; note: string | null }) {
+function SectionTitle({
+  id,
+  name,
+  note,
+  fine = null,
+}: {
+  id: string;
+  name: string;
+  note: string | null;
+  /** Words the section must say plainly, in solid gold under its title (Buy 1 Get 1: "Delivery charges & tax may apply"). */
+  fine?: string | null;
+}) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1 border-b-[3px] border-ink pb-2">
       <h2 id={id} className="font-display text-4xl uppercase leading-none tracking-wide text-ink md:text-5xl">
         {name}
       </h2>
       {note && <p className="font-cond text-sm font-bold uppercase tracking-wider text-ink-muted">{note}</p>}
+      {fine && (
+        <p className="basis-full pt-1">
+          <span className="inline-block rounded-md bg-cheese px-2 py-1 font-cond text-xs font-extrabold uppercase tracking-wide text-ink">
+            {fine}
+          </span>
+        </p>
+      )}
     </div>
   );
 }
@@ -1001,7 +1095,11 @@ function PickupOnly() {
   );
 }
 
-/** Size buttons: each shows its size and price and adds that exact item. */
+/**
+ * Size buttons: each shows its size and price and adds that exact item. With `cut` (every online order takes a %
+ * off: lib/offers discountOnEveryOrder) the price is the one after it, the menu price struck out beside it — display
+ * only, as before: the cart, the server and the till work the % out (lib/pricing).
+ */
 function VariantButtons({
   card,
   qtyByItem,
@@ -1009,6 +1107,7 @@ function VariantButtons({
   onPick,
   dark = false,
   onGold = false,
+  cut = null,
 }: {
   card: MenuCard;
   qtyByItem: Map<string, number>;
@@ -1017,16 +1116,28 @@ function VariantButtons({
   dark?: boolean;
   /** On a gold deal card: a solid ink button. */
   onGold?: boolean;
+  /** Each size's price before and after the % off, in the card's own order (lib/offers); null = the menu prices. */
+  cut?: readonly OfferPrice[] | null;
 }) {
   // Pick-up-only food is orderable only while online pick-up is: the whole card, or one size of it.
   if (card.pickupOnly && !canPickup) return <PickupOnly />;
   const sized = card.variants.length > 1;
   const note = pickupOnlyNote(card);
+  const cuts = cut && cut.length === card.variants.length ? cut : null;
   return (
     <div className={sized ? 'grid grid-cols-2 gap-2' : 'flex flex-wrap items-center gap-2'}>
       {card.variants.map((v, i) => {
         const inCart = qtyByItem.get(v.item.posItemId) ?? 0;
         const hasChoices = v.item.modifierGroups.length > 0;
+        const was = v.item.basePriceCents;
+        // A size the till marked "no discount" keeps its menu price.
+        const now = v.item.noDiscount === true ? was : (cuts?.[i]?.nowCents ?? was);
+        const struck = now < was ? (
+          <s className={`whitespace-nowrap text-[0.72rem] font-semibold ${dark ? 'opacity-60' : 'opacity-55'}`}>{formatCents(was)}</s>
+        ) : null;
+        // A size's name over its price (a lone size too: "Large 12""), so the button stays narrow on a phone.
+        const sizeName = cardSizeLabel(card, v.size);
+        const stacked = sized || sizeName !== '';
         if (!sizeOrderable(v, canPickup)) {
           // This size only: the card's other sizes still deliver.
           return (
@@ -1046,11 +1157,11 @@ function VariantButtons({
             type="button"
             key={v.item.posItemId}
             onClick={() => onPick(card, i)}
-            aria-label={`${hasChoices ? 'Choose options for' : 'Add'} ${variantLabel(card, v)}, ${formatCents(
-              v.item.basePriceCents,
-            )}${inCart > 0 ? ` (${inCart} in your order)` : ''}`}
+            aria-label={`${hasChoices ? 'Choose options for' : 'Add'} ${variantLabel(card, v)}, ${formatCents(now)}${
+              now < was ? ` (was ${formatCents(was)})` : ''
+            }${inCart > 0 ? ` (${inCart} in your order)` : ''}`}
             className={`group/btn relative flex min-h-[2.75rem] items-center gap-2 py-1.5 pr-1.5 font-cond font-bold uppercase tracking-wide transition-all active:scale-95 ${
-              sized ? 'justify-between rounded-2xl pl-3 text-left' : 'rounded-full pl-3.5'
+              stacked ? 'justify-between rounded-2xl pl-3 text-left' : 'rounded-full pl-3.5'
             } ${
               onGold
                 ? 'bg-ink py-2 text-lg text-cheese hover:bg-ink-soft'
@@ -1059,15 +1170,18 @@ function VariantButtons({
                   : 'border-2 border-ink bg-white text-ink hover:bg-ink hover:text-cheese'
             }`}
           >
-            {sized ? (
+            {stacked ? (
               <span className="leading-tight">
-                <span className="block text-[0.7rem] opacity-75">{cardSizeLabel(card, v.size)}</span>
-                <span className="block tabular-nums">{formatCents(v.item.basePriceCents)}</span>
+                <span className="block whitespace-nowrap text-[0.7rem] opacity-75">{sizeName}</span>
+                <span className="flex flex-wrap items-baseline gap-x-1.5 tabular-nums">
+                  <span className="whitespace-nowrap">{formatCents(now)}</span>
+                  {struck}
+                </span>
               </span>
             ) : (
               <>
-                {cardSizeLabel(card, v.size) && <span className="text-xs opacity-80">{cardSizeLabel(card, v.size)}</span>}
-                <span className="tabular-nums">{formatCents(v.item.basePriceCents)}</span>
+                <span className="whitespace-nowrap tabular-nums">{formatCents(now)}</span>
+                {struck}
               </>
             )}
             <span
@@ -1101,8 +1215,15 @@ interface CardProps {
   qtyByItem: Map<string, number>;
   canPickup: boolean;
   onPick: PickFn;
-  /** What the card says of the offers (lib/offers); none on a value deal. */
-  offer?: CardOffer;
+  /** What the card says of the offers (lib/offers, as the menu shows them); none on a value deal. */
+  offer?: ShownOffer;
+  /** The Buy 1 Get 1 deals' section, once the menu has them: the card's Buy 1 Get 1 tag jumps there. */
+  dealsAnchor?: string | null;
+}
+
+/** The prices the card's buttons show after its % off, when every online order takes it; else none (the menu prices). */
+function cutPrices(shown: ShownOffer | undefined): readonly OfferPrice[] | null {
+  return shown?.onPrice ? (shown.offer.discount?.prices ?? null) : null;
 }
 
 function countFor(card: MenuCard, qtyByItem: Map<string, number>): number {
@@ -1110,7 +1231,7 @@ function countFor(card: MenuCard, qtyByItem: Map<string, number>): number {
 }
 
 /** Signature pizzas and anything photographed: the food leads. */
-const PhotoCard = memo(function PhotoCard({ card, qtyByItem, canPickup, onPick, offer }: CardProps) {
+const PhotoCard = memo(function PhotoCard({ card, qtyByItem, canPickup, onPick, offer, dealsAnchor = null }: CardProps) {
   const count = countFor(card, qtyByItem);
   return (
     <article className="group relative flex overflow-hidden rounded-3xl bg-ink text-cream shadow-soft-md">
@@ -1140,23 +1261,41 @@ const PhotoCard = memo(function PhotoCard({ card, qtyByItem, canPickup, onPick, 
         {card.description && (
           <p className="mt-1.5 line-clamp-4 text-[0.82rem] leading-snug text-cream/70">{card.description}</p>
         )}
-        {offer && <OfferStrip offer={offer} dark />}
+        {offer && <OfferStrip shown={offer} dark dealsAnchor={dealsAnchor} />}
         <div className="mt-auto pt-3">
-          <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} dark />
+          <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} dark cut={cutPrices(offer)} />
         </div>
       </div>
     </article>
   );
 });
 
-/** Everything else: set like a line on the printed menu. */
-const ItemCard = memo(function ItemCard({ card, qtyByItem, canPickup, onPick, offer }: CardProps) {
+/**
+ * Everything else: set like a line on the printed menu. `small`: in a section of little things (isSmallSection), two
+ * to a row on a phone — a card with words there takes the whole row.
+ */
+const ItemCard = memo(function ItemCard({
+  card,
+  qtyByItem,
+  canPickup,
+  onPick,
+  offer,
+  dealsAnchor = null,
+  small = false,
+}: CardProps & { small?: boolean }) {
   const count = countFor(card, qtyByItem);
   const single = card.variants.length === 1 ? card.variants[0] : undefined;
+  const wide = small && Boolean(card.description);
   return (
-    <article className="flex flex-col rounded-2xl border border-paper-line bg-white p-4 shadow-soft-sm transition-shadow hover:shadow-soft-md">
+    <article
+      className={`flex flex-col rounded-2xl border border-paper-line bg-white ${small ? 'p-3.5' : 'p-4'} shadow-soft-sm transition-shadow hover:shadow-soft-md${
+        wide ? ' col-span-2 sm:col-span-3' : ''
+      }`}
+    >
       <div className="flex items-start justify-between gap-2">
-        <h3 className="font-cond text-xl font-extrabold uppercase leading-tight tracking-wide text-ink">
+        <h3
+          className={`font-cond ${small && !wide ? 'text-lg' : 'text-xl'} font-extrabold uppercase leading-tight tracking-wide text-ink`}
+        >
           {card.name}
           {single && cardSizeLabel(card, single.size) && (
             <span className="ml-2 align-middle text-xs font-bold tracking-widest text-ink-muted">
@@ -1167,9 +1306,9 @@ const ItemCard = memo(function ItemCard({ card, qtyByItem, canPickup, onPick, of
         <InCartBadge count={count} />
       </div>
       {card.description && <p className="mt-1 text-sm leading-snug text-ink-muted">{card.description}</p>}
-      {offer && <OfferStrip offer={offer} />}
+      {offer && <OfferStrip shown={offer} dealsAnchor={dealsAnchor} />}
       <div className="mt-auto pt-3">
-        <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} />
+        <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} cut={cutPrices(offer)} />
       </div>
     </article>
   );

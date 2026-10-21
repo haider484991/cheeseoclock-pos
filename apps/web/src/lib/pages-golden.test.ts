@@ -469,5 +469,19 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     expect(golden.html[golden.pages['a']!['/menu']!]).toContain('Menu coming right up');
     expect(golden.html[golden.pages['b']!['/menu (open)']!]).toContain('The Menu');
     expect(golden.html[golden.pages['b']!['/menu (closed)']!]).toContain('We’re not taking online orders right now');
+    // The cleaner menu (20 Oct 2026: "too much information" in its header): the golden took the four /menu pages in —
+    // one line of facts, the money off as chips, Buy 1 Get 1 as one line that opens to its rules, and the allergy
+    // words after the last section; no "Order online · …" line and no tagline above the title.
+    for (const state of ['b', 'c']) {
+      for (const route of ['/menu (open)', '/menu (closed)']) {
+        const menuHtml = golden.html[golden.pages[state]![route]!]!;
+        const header = menuHtml.slice(menuHtml.indexOf('The Menu</h1>'), menuHtml.indexOf('aria-label="Menu sections"'));
+        expect(header, `${state} ${route}`).toContain('<ul aria-label="Hours, payment and delivery"');
+        expect(header, `${state} ${route}`).toContain('<details class="group');
+        expect(header, `${state} ${route}`).not.toContain('Hygienically Made');
+        expect(menuHtml, `${state} ${route}`).not.toContain('Order online · ');
+        expect(menuHtml.indexOf('Allergy? Tell us'), `${state} ${route}`).toBeGreaterThan(menuHtml.lastIndexOf('</section>'));
+      }
+    }
   });
 });

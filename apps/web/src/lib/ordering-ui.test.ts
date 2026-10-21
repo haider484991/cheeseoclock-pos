@@ -29,6 +29,7 @@ const { buildMenuView, cartDeals, sizeOrderable } = await import('@/lib/menu-vie
 const { publicMenu } = await import('@/lib/public-menu');
 const { cartLineKey, cartPricedLines } = await import('@/lib/cart');
 const { priceOrder } = await import('@/lib/pricing');
+const { OFFER_FINE_PRINT, OFFER_RULES } = await import('@/lib/offers');
 
 type AppProps = Parameters<typeof OrderingApp>[0];
 type CartProps = Parameters<typeof MinimumNote>[0];
@@ -111,7 +112,8 @@ describe('/menu as served', () => {
   });
 
   it('the header’s hours chip names the days when the shop is not open every day, as the home page’s chip does; every day, the hours alone as before', () => {
-    const chip = (html: string) => /<li class="rounded-full border border-cream\/20 px-3\.5 py-1\.5">([^<]*)<\/li>/.exec(html)?.[1];
+    // The header's line of facts (20 Oct 2026: the cleaner menu) starts with the hours, after their icon.
+    const chip = (html: string) => /<ul aria-label="Hours, payment and delivery"[^>]*><li[^>]*><svg[^]*?<\/svg><span>([^<]*)<\/span><\/li>/.exec(html)?.[1];
     // Today's (open every day): the hours alone, exactly as v0.7.30 printed them.
     expect(chip(app())).toBe('1 pm – 1 am');
     // The owner's made-up hours, closed on Mondays: the days follow, in the home chip's words.
@@ -126,7 +128,8 @@ describe('/menu as served', () => {
   });
 
   it('the pick-up chip says value deals are left out only while the menu marks one (v0.7.34); with pick-up off, no chip as before', () => {
-    const chip = (html: string) => /<li class="rounded-full bg-cheese px-3\.5 py-1\.5 text-ink shadow-glow">([^<]*)<\/li>/.exec(html)?.[1];
+    // The header's first gold chip (20 Oct 2026: the money off has a list of its own).
+    const chip = (html: string) => /<ul aria-label="Money off online"[^>]*><li class="rounded-full bg-cheese px-3 py-1 text-ink">([^<]*)<\/li>/.exec(html)?.[1];
     expect(chip(app({ acceptingOrders: true, pickupAvailable: true }))).toBe('10% off when you order online &amp; pick up');
     expect(chip(app({ acceptingOrders: true, pickupAvailable: true, menu: DEALS_MENU }))).toBe('10% off online pick-up · not on value deals');
     expect(chip(app({ acceptingOrders: true, pickupAvailable: true, menu: DEALS_MENU, pickupDiscountPercent: 15 }))).toBe(
@@ -141,6 +144,135 @@ describe('/menu as served', () => {
     expect(card).toContain('border-dashed');
     expect(card.match(/<button/g) ?? []).toHaveLength(1);
     expect(card).toMatch(/Medium/);
+  });
+});
+
+/** A menu set like the shop's: Buy 1 Get 1 deals, a burger, a regular pizza in two sizes, and nine dips (one with words). */
+const SHOP_MENU = publicMenu({
+  categories: [
+    { posCategoryId: 'c-b1g1', name: 'Buy 1 Get 1 Deals', displayOrder: 0, items: [item('b1g1', 'Test Large + Free Side', 2000)] },
+    { posCategoryId: 'c-burger', name: 'Burgers', displayOrder: 1, items: [item('burger', 'Test Crispy Burger', 700)] },
+    {
+      posCategoryId: 'c-pizza',
+      name: 'Pizza',
+      displayOrder: 2,
+      items: [
+        item('fj-m', 'Test Fajita — Medium', 1500, { sortOrder: 1 }),
+        item('fj-l', 'Test Fajita — Large', 2000, { sortOrder: 2 }),
+      ],
+    },
+    {
+      posCategoryId: 'c-dips',
+      name: 'Dips',
+      displayOrder: 3,
+      items: [
+        item('dip-0', 'Test House Dip', 100, { description: 'Test words about the house dip.' }),
+        ...Array.from({ length: 8 }, (_, i) => item(`dip-${i + 1}`, `Test Dip ${i + 1}`, 100, { sortOrder: i + 1 })),
+      ],
+    },
+  ],
+  publishedAt: '2026-10-20T09:00:00.000Z',
+  store: STORE,
+});
+
+describe('the cleaner menu (20 Oct 2026: "too much information" in the header)', () => {
+  const open = (over: Partial<AppProps> = {}) => app({ menu: SHOP_MENU, acceptingOrders: true, pickupAvailable: true, ...over });
+  /** The page above the category pills: the header. */
+  const header = (html: string) => html.slice(0, html.indexOf('aria-label="Menu sections"'));
+  /** One card's markup, from its name to the next card. */
+  const cardOf = (html: string, name: string) => {
+    const at = html.indexOf(`>${name}`);
+    expect(at, name).toBeGreaterThan(-1);
+    const end = html.indexOf('</article>', at);
+    return html.slice(html.lastIndexOf('<article', at), end);
+  };
+  const ALLERGY = DEFAULT_SHOP_FACTS.website.allergyNotice;
+
+  it('the header: the title, one line of facts, the money off as chips — no tagline, no "Order online" line, no allergy words', () => {
+    const top = header(open({ deliveryDiscountPercent: 10 }));
+    expect(top).toContain('The Menu</h1>');
+    expect(top).toMatch(/<ul aria-label="Hours, payment and delivery"[^]*1 pm – 1 am[^]*Cash on delivery[^]*Delivery Rs 200–250 · DHA &amp; Clifton/);
+    expect(top).toContain('>10% off every online order</li>');
+    expect(DEFAULT_SHOP_FACTS.profile.tagline).not.toBe('');
+    expect(top).not.toContain(DEFAULT_SHOP_FACTS.profile.tagline);
+    expect(top).not.toContain('Order online · ');
+    expect(top).not.toContain(ALLERGY);
+  });
+
+  it('the allergy words close the menu, once, after the last section (each item’s sheet and the checkout say them too)', () => {
+    const html = open();
+    expect(html.split(ALLERGY).length - 1).toBe(1);
+    expect(html.indexOf(ALLERGY)).toBeGreaterThan(html.lastIndexOf('</section>'));
+  });
+
+  it('Buy 1 Get 1 in the header is one line: it jumps to the deals when the menu has them; else it opens to the rules', () => {
+    const withDeals = header(open());
+    expect(withDeals).toContain('href="#buy-1-get-1-deals"');
+    expect(withDeals).toContain('Buy 1 Get 1 FREE, 1–7 PM: see the deals');
+    expect(withDeals).not.toContain('<details');
+    for (const rule of OFFER_RULES) expect(withDeals).not.toContain(rule.split(' → ')[1]!);
+    // The deals' own section says "Delivery charges & tax may apply", in gold under its title.
+    expect(open()).toContain(`>${OFFER_FINE_PRINT.replace('&', '&amp;')}</span></p></div>`);
+    // A menu with no Buy 1 Get 1 deals yet: the line opens to both rules, the tag-us words and the fine print.
+    const noDeals = header(app({ acceptingOrders: true, pickupAvailable: true }));
+    expect(noDeals).toContain('<details class="group');
+    for (const rule of OFFER_RULES) expect(noDeals).toContain(rule.split(' → ')[1]!);
+    expect(noDeals).toContain(OFFER_FINE_PRINT.replace('&', '&amp;'));
+    // Switched off by the owner: no line at all.
+    const off = header(open({ deliveryFacts: { ...DEFAULT_FACTS, buy1Get1: { ...DEFAULT_FACTS.buy1Get1, on: false } } }));
+    expect(off).not.toContain('Buy 1 Get 1');
+  });
+
+  it('every online order takes the %: the price buttons show the price after it, the menu price struck out', () => {
+    const html = open({ deliveryDiscountPercent: 10 });
+    const burger = cardOf(html, 'Test Crispy Burger');
+    expect(burger).toContain('aria-label="Add Test Crispy Burger, Rs 630 (was Rs 700)"');
+    expect(burger).toMatch(/<s class="[^"]*">Rs 700<\/s>/);
+    expect(burger).toContain('>10% off</span>');
+    const pizza = cardOf(html, 'Test Fajita');
+    expect(pizza).toContain('aria-label="Add Test Fajita · Medium 9&quot;, Rs 1,350 (was Rs 1,500)"');
+    expect(pizza).toContain('aria-label="Add Test Fajita · Large 12&quot;, Rs 1,800 (was Rs 2,000)"');
+  });
+
+  it('a % only pick-up takes: the buttons keep the menu prices, the card says the % and the pick-up price in words', () => {
+    const burger = cardOf(open({ deliveryDiscountPercent: 0 }), 'Test Crispy Burger');
+    expect(burger).toContain('aria-label="Add Test Crispy Burger, Rs 700"');
+    expect(burger).not.toContain('<s ');
+    expect(burger).toContain('>10% off with pick-up</span>');
+    expect(burger).toContain('>Rs 630</span>');
+  });
+
+  it('a size the till marked "no discount" keeps its menu price on its button', () => {
+    const menu = publicMenu({
+      categories: SHOP_MENU.categories.map((c) =>
+        c.name === 'Pizza' ? { ...c, items: c.items.map((i) => (i.posItemId === 'fj-m' ? { ...i, noDiscount: true } : i)) } : c,
+      ),
+      publishedAt: SHOP_MENU.publishedAt,
+      store: STORE,
+    });
+    const pizza = cardOf(open({ menu, deliveryDiscountPercent: 10 }), 'Test Fajita');
+    expect(pizza).toContain('aria-label="Add Test Fajita · Medium 9&quot;, Rs 1,500"');
+    expect(pizza).toContain('aria-label="Add Test Fajita · Large 12&quot;, Rs 1,800 (was Rs 2,000)"');
+  });
+
+  it('Buy 1 Get 1 on a card is one tag that jumps to the deals; a regular pizza leaves the rule to them, a burger keeps its line', () => {
+    const html = open();
+    const pizza = cardOf(html, 'Test Fajita');
+    expect(pizza).toContain('aria-label="BUY 1 GET 1 FREE · 1–7 PM: see the Buy 1 Get 1 deals"');
+    expect(pizza).not.toContain('In a Buy 1 Get 1 deal');
+    const burger = cardOf(html, 'Test Crispy Burger');
+    expect(burger).toContain('href="#buy-1-get-1-deals"');
+    expect(burger).toContain('With any Large pizza in a Buy 1 Get 1 deal');
+  });
+
+  it('the dips: two to a row on a phone; the one with words takes the whole row', () => {
+    const html = open();
+    const dips = html.slice(html.indexOf('id="dips"'));
+    expect(dips).toContain('class="mt-4 grid gap-3 grid-cols-2 sm:grid-cols-3"');
+    expect(cardOf(html, 'Test House Dip')).toContain('col-span-2 sm:col-span-3');
+    expect(cardOf(html, 'Test Dip 1')).not.toContain('col-span-2');
+    // Any other section as before: one to a row on a phone.
+    expect(html.slice(html.indexOf('id="burgers"'), html.indexOf('id="dips"'))).toContain('class="mt-4 grid gap-3 sm:grid-cols-2"');
   });
 });
 
