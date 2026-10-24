@@ -179,11 +179,22 @@ describe('a category’s own % (v0.7.50, WEBSITE DISCOUNT BY CATEGORY)', () => {
 
   it('a block without them (or no block): the status is exactly as before, no new key', () => {
     const before = evaluateStatus({ ...beat, settings_pickup: { offered: true, percent: 10, alsoDelivery: true } }, NOW);
+    // (tillBills, 24 Oct 2026: what this till bills, for the menu's closed line; GET /api/store-status never sends it.)
     expect(Object.keys(before).sort()).toEqual(
-      ['acceptingOrders', 'deliveryDiscountPercent', 'pickupAvailable', 'pickupDiscountPercent', 'posAcceptingOrders', 'stale', 'updatedAt'].sort(),
+      ['acceptingOrders', 'deliveryDiscountPercent', 'pickupAvailable', 'pickupDiscountPercent', 'posAcceptingOrders', 'stale', 'tillBills', 'updatedAt'].sort(),
     );
     expect(Object.keys(evaluateStatus(beat, NOW))).toEqual(Object.keys(before));
     expect(evaluateStatus({ ...beat, settings_pickup: { ...on, categoryPercents: [] } }, NOW)).toEqual(before);
+  });
+
+  it('tillBills: what the till that last beat bills, open or closed, fresh or quiet; absent when it bills neither', () => {
+    for (const row of [beat, { ...beat, accepting_orders: false }, { ...beat, updated_at: ago(HEARTBEAT_STALE_MS + 1_000) }]) {
+      expect(evaluateStatus({ ...row, settings_pickup: on }, NOW).tillBills).toEqual({ delivery: true, categories: true });
+    }
+    expect(evaluateStatus({ ...beat, delivery_discount: false }, NOW).tillBills).toEqual({ delivery: false, categories: true });
+    expect(evaluateStatus({ ...beat, category_discount: null }, NOW).tillBills).toEqual({ delivery: true, categories: false });
+    expect(evaluateStatus({ ...beat, delivery_discount: false, category_discount: false }, NOW)).not.toHaveProperty('tillBills');
+    expect(evaluateStatus(null, NOW)).not.toHaveProperty('tillBills');
   });
 
   it('the block reader keeps only good rows: each category once (the first), a whole % from 1 to 50, at most 10', () => {

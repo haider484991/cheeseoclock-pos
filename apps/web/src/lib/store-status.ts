@@ -91,6 +91,12 @@ export interface StoreStatus {
   pickupCategoryPercents?: WebsiteCategoryPercent[];
   /** The same on a delivery's food: only while the delivery % applies too (deliveryDiscountPercent's rules). Absent = none. */
   deliveryCategoryPercents?: WebsiteCategoryPercent[];
+  /**
+   * What the till that last beat bills, live or not (its 'delivery_discount' and 'category_discount'): the menu's
+   * money-off line shows the owner's saved offer while the shop is closed, only as far as that till bills it
+   * (24 Oct 2026). Absent = neither, or no till heard.
+   */
+  tillBills?: { delivery: boolean; categories: boolean };
 }
 
 export const CLOSED: StoreStatus = {
@@ -183,6 +189,9 @@ export function evaluateStatus(
       posAccepting && !stale && row.delivery_discount === true && block?.alsoDelivery === true ? block.percent : 0,
     ...(own.length > 0 ? { pickupCategoryPercents: own } : {}),
     ...(deliveryOwn.length > 0 ? { deliveryCategoryPercents: deliveryOwn } : {}),
+    ...(row.delivery_discount === true || row.category_discount === true
+      ? { tillBills: { delivery: row.delivery_discount === true, categories: row.category_discount === true } }
+      : {}),
   };
 }
 
@@ -244,6 +253,8 @@ export async function getStoreStatus(): Promise<StoreStatus> {
       pickupAvailable,
       pickupDiscountPercent: PICKUP_DISCOUNT_PERCENT,
       deliveryDiscountPercent: open && process.env['DEV_DELIVERY_DISCOUNT'] === '1' ? PICKUP_DISCOUNT_PERCENT : 0,
+      // DEV_TILL_BILLS=1: a till that bills the delivery % and the categories' own (the closed line shows them).
+      ...(process.env['DEV_TILL_BILLS'] === '1' ? { tillBills: { delivery: true, categories: true } } : {}),
     };
   }
   try {

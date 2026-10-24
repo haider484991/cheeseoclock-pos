@@ -83,14 +83,20 @@ export default async function MenuPage() {
   // or device id; with no menu, the pages' own read (today's details with none stored).
   const shop = menu ? shopFactsFromBlock(parseStoredShop(menu.shop ?? null)) : await getShopFacts();
   // The website's money off as the owner saved it (the block's pick-up offer): the menu's sticky line shows it while
-  // the till is not taking orders (24 Oct 2026). Only the %s and their categories go to the browser.
+  // the till is not taking orders (24 Oct 2026) — the delivery % and the categories' own only where the till that last
+  // beat bills them, so the line never promises more than the checkout will take off. Only the %s and their
+  // categories go to the browser.
+  const bills = store.tillBills;
   const advertisedOffer =
     block && block.pickup.percent > 0
       ? {
           pickup: block.pickup.offered,
           percent: block.pickup.percent,
-          alsoDelivery: block.pickup.alsoDelivery === true,
-          categoryPercents: (block.pickup.categoryPercents ?? []).map((c) => ({ categoryId: c.categoryId, percent: c.percent })),
+          alsoDelivery: block.pickup.alsoDelivery === true && bills?.delivery === true,
+          categoryPercents:
+            bills?.categories === true
+              ? (block.pickup.categoryPercents ?? []).map((c) => ({ categoryId: c.categoryId, percent: c.percent }))
+              : [],
         }
       : null;
 

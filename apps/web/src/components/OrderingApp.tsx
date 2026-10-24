@@ -1266,6 +1266,8 @@ function CategoryRail({
                 </li>
               ))}
             </ul>
+            {/* The owner's rule: a website % is off the food, never the delivery charge (the fee line takes no share). */}
+            <span className="text-cream/70">· food only, not the delivery fee</span>
             {!offersAreLive && <span className="hidden text-cream/70 sm:inline">· when online ordering opens</span>}
           </div>
         </div>

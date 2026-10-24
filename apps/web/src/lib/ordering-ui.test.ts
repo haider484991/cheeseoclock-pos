@@ -215,6 +215,8 @@ describe('the cleaner menu (20 Oct 2026: "too much information" in the header)',
     const closed = app({ menu: SHOP_MENU, advertisedOffer: saved });
     // (The till's "Pizza" is the menu's "Regular Pizzas", sectionTitle.)
     expect(chips(closed)).toEqual(['20% off Regular Pizzas online', '10% off the rest online']);
+    // The owner's rule, on every screen: off the food, never the delivery charge.
+    expect(closed).toContain('</ul><span class="text-cream/70">· food only, not the delivery fee</span>');
     // Said on a wider screen only (a phone's line stays short).
     expect(closed).toContain('<span class="hidden text-cream/70 sm:inline">· when online ordering opens</span>');
     // Taking orders: the line is what the till bills now, without the "when" words.
