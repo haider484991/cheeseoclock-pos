@@ -78,7 +78,7 @@ const T = {
   taxIn: { en: 'Tax included', ur: 'Tax shamil' },
 } satisfies Record<string, Words>;
 
-/** "from Rs 850" / "Rs 850 se shuru": the lowest of several prices, never "sirf" (only). */
+/** The lowest of several prices: "from <price>" / "<price> se shuru", never "sirf" (only). */
 function priceWords(cents: number, from: boolean, lang: GateLang): string {
   const p = formatCents(cents);
   if (!from) return p;
