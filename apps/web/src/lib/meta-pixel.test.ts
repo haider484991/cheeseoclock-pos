@@ -10,6 +10,7 @@ import {
   createPixel,
   initiateCheckoutPayload,
   isTrackingPath,
+  locationPayload,
   metaPixelSnippet,
   pixel,
   pkr,
@@ -794,5 +795,35 @@ describe('readTestCode: Events Manager’s Test events codes only', () => {
     for (const bad of ['', 'TEST', '12345', 'TEST 123', 'TEST<script>', `TEST${'1'.repeat(30)}`, null, undefined]) {
       expect(readTestCode(bad), String(bad)).toBeNull();
     }
+  });
+});
+
+describe('LocationConfirmed: the landing popup’s choice', () => {
+  const EID = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a99';
+
+  it('a custom event with the area’s name, and the id the server repeats', () => {
+    const { win, calls } = phone();
+    const p = on(win);
+    expect(p.locationConfirmed({ fulfilment: 'delivery', zoneName: 'DHA Phase 6' }, EID)).toBe(true);
+    expect(p.locationConfirmed({ fulfilment: 'pickup', zoneName: null }, EID)).toBe(true);
+    expect(calls).toEqual([
+      ['trackCustom', 'LocationConfirmed', { fulfilment: 'delivery', content_name: 'DHA Phase 6', content_category: 'Location' }, { eventID: EID }],
+      ['trackCustom', 'LocationConfirmed', { fulfilment: 'pickup', content_name: 'Pick-up', content_category: 'Location' }, { eventID: EID }],
+    ]);
+  });
+
+  it('never without a proper event id, from a tracking page, or without a pixel', () => {
+    const { win, calls } = phone();
+    expect(on(win).locationConfirmed({ fulfilment: 'pickup', zoneName: null }, 'x')).toBe(false);
+    const track = phone({ location: { pathname: '/track/abc' } });
+    expect(on(track.win).locationConfirmed({ fulfilment: 'pickup', zoneName: null }, EID)).toBe(false);
+    expect(createPixel({ pixelId: null, getWindow: () => win }).locationConfirmed({ fulfilment: 'pickup', zoneName: null }, EID)).toBe(false);
+    expect(calls).toHaveLength(0);
+    expect(track.calls).toHaveLength(0);
+  });
+
+  it('carries the area only, at most 60 characters', () => {
+    expect(locationPayload({ fulfilment: 'delivery', zoneName: `  ${'x'.repeat(80)} ` }).content_name).toHaveLength(60);
+    expect(locationPayload({ fulfilment: 'delivery', zoneName: null }).content_name).toBe('Delivery');
   });
 });

@@ -15,6 +15,7 @@
  *  - At a Purchase only, the customer's phone and name as SHA-256 hashes, never in clear
  *    (lib/meta-user-data, "advanced matching": the same hashes the server sends, lib/meta-capi).
  *  - A Contact when a WhatsApp or call link is tapped: which of the two, and nothing else.
+ *  - A LocationConfirmed (custom) from the landing popup: delivery or pick-up, and the area's name.
  *  - Nothing at all from a tracking page. Its address right after checkout is
  *    `/track/<order id>?phone=<the customer's phone>`, the pixel sends the page address with
  *    every event, and it sends the referrer too: so no event fires on /track, or on a page that
@@ -218,6 +219,34 @@ export function contactChannelOf(href: string | null | undefined): ContactChanne
   return host === 'wa.me' || host === 'api.whatsapp.com' || host === 'web.whatsapp.com' ? 'whatsapp' : null;
 }
 
+/** The landing popup's custom event (components/location), browser and server alike. */
+export const LOCATION_EVENT_NAME = 'LocationConfirmed';
+
+export interface LocationEventChoice {
+  fulfilment: 'delivery' | 'pickup';
+  /** A delivery's area as the customer picked it ("DHA Phase 6"); null for a pick-up. */
+  zoneName: string | null;
+}
+
+/** LocationConfirmed: delivery or pick-up, and the area's name — never an address or a pin. */
+export interface LocationPayload {
+  fulfilment: 'delivery' | 'pickup';
+  content_name: string;
+  content_category: 'Location';
+}
+
+export function locationPayload(choice: LocationEventChoice): LocationPayload {
+  const area = choice.fulfilment === 'delivery' && choice.zoneName ? choice.zoneName.trim().slice(0, 60) : '';
+  return {
+    fulfilment: choice.fulfilment,
+    content_name: choice.fulfilment === 'pickup' ? 'Pick-up' : area || 'Delivery',
+    content_category: 'Location',
+  };
+}
+
+/** An event id the browser makes for one event (a UUID): what the server's copy must repeat. */
+export const EVENT_ID = /^[A-Za-z0-9_-]{8,64}$/;
+
 // ---------------------------------------------------------------------------
 // Meta's Test Events
 
@@ -405,6 +434,11 @@ export interface Pixel {
   identify(userData: MetaUserData): boolean;
   /** A WhatsApp or call link was tapped. */
   contact(channel: ContactChannel): boolean;
+  /**
+   * The landing popup's choice was confirmed (components/location): a custom event, with the id
+   * the server's copy carries too (api/meta/event), so Meta counts it once.
+   */
+  locationConfirmed(choice: LocationEventChoice, eventId: string): boolean;
 }
 
 /**
@@ -440,9 +474,10 @@ export function createPixel(deps: PixelDeps): Pixel {
     event: string,
     payload?: object,
     options?: PixelOptions,
+    method: 'track' | 'trackCustom' = 'track',
   ): boolean {
     try {
-      const args: unknown[] = ['track', event];
+      const args: unknown[] = [method, event];
       // The pixel's argument order is (event, parameters, options): options need parameters in front of them.
       if (payload !== undefined || options !== undefined) args.push(payload ?? {});
       if (options !== undefined) args.push(options);
@@ -516,6 +551,14 @@ export function createPixel(deps: PixelDeps): Pixel {
     trackPurchaseOnce,
     identify,
     contact: (channel) => safely(() => track('Contact', contactPayload(channel))),
+    locationConfirmed: (choice, eventId) =>
+      safely(() => {
+        if (!EVENT_ID.test(eventId)) return false;
+        const win = ready();
+        return win
+          ? send(win, LOCATION_EVENT_NAME, locationPayload(choice), { eventID: eventId }, 'trackCustom')
+          : false;
+      }),
     pageView: (pathname) => safely(() => shouldTrackPageView(pathname) && track('PageView')),
     viewMenu: () => safely(() => track('ViewContent', viewMenuPayload())),
     viewItem: (item) => safely(() => track('ViewContent', viewItemPayload(item))),

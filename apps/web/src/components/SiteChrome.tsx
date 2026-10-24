@@ -6,6 +6,7 @@ import { FOOTER_LATE_LINK, FOOTER_PAY_CHIP } from '@/lib/page-copy';
 import { orderLine, shopHoursLine, shopTelUrl, whatsappLinesOf } from '@/lib/shop-facts';
 import { getCopyFacts } from '@/lib/site-facts';
 import { BrandMark } from './BrandMark';
+import { LocationChip } from './location/LocationChip';
 import { RecentOrderLink } from './RecentOrderLink';
 
 /**
@@ -14,7 +15,8 @@ import { RecentOrderLink } from './RecentOrderLink';
  * with the root layout and the page): today's with none stored.
  */
 export async function SiteHeader() {
-  const shop = shopOf(await getCopyFacts());
+  const facts = await getCopyFacts();
+  const shop = shopOf(facts);
   return (
     <header className="sticky top-0 z-40 border-b border-white/10 bg-night/85 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-2 px-4 sm:h-[4.5rem]">
@@ -43,6 +45,8 @@ export async function SiteHeader() {
           >
             WhatsApp
           </a>
+          {/* The landing popup's area, and the way to change it (client only: nothing in the page's HTML). */}
+          <LocationChip zones={facts.zones.map((z) => ({ id: z.id, shortName: z.shortName }))} />
           <Link
             href="/menu"
             className="ml-1 whitespace-nowrap rounded-full bg-cheese px-4 py-2.5 font-display text-base tracking-wide text-night shadow-glow transition-all hover:bg-cheese-hot hover:shadow-glow-lg active:scale-95 sm:ml-2 sm:px-5"

@@ -14,8 +14,11 @@ import { MetaPixel } from '@/components/MetaPixel';
 import { ShopContactProvider } from '@/components/ordering/ShopContext';
 import { META_PIXEL_ID } from '@/lib/meta-pixel';
 import { shopContactOf } from '@/lib/shop-facts';
-import { getCopyFacts, getShopFacts } from '@/lib/site-facts';
+import { getCopyFacts, getMenuFacts, getShopFacts, getSiteFacts } from '@/lib/site-facts';
 import { SiteAnalytics } from '@/components/SiteAnalytics';
+import { LocationGate } from '@/components/location/LocationGate';
+import { BUSINESS } from '@/lib/business';
+import { gateSlides } from '@/lib/gate-slides';
 import './globals.css';
 
 // The printed menu's type: Anton headlines, Barlow Condensed labels, Barlow body.
@@ -84,6 +87,8 @@ export const viewport: Viewport = {
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // The Restaurant node carries the owner's name, phone, address, hours and payments (lib/seo).
   const shop = await getShopFacts();
+  // The landing location popup's areas and deals: the same one read as the page's (lib/site-facts).
+  const [site, menu] = await Promise.all([getSiteFacts(), getMenuFacts()]);
   return (
     <html lang="en" className={`${display.variable} ${cond.variable} ${sans.variable}`}>
       <body className="font-sans">
@@ -95,6 +100,24 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         {META_PIXEL_ID !== null && <MetaPixel />}
         {/* The error screen (app/error.tsx, in the browser) gets the owner's name and numbers from here. */}
         <ShopContactProvider contact={shopContactOf(shop)}>{children}</ShopContactProvider>
+        {/*
+          The landing popup (components/location): Delivery or Pick-up and the area, under a deals banner.
+          Client only and closed on the server, so no page's HTML changes; never on /track or /dashboard.
+        */}
+        <LocationGate
+          zones={site.zones.map((z) => ({
+            id: z.id,
+            name: z.name,
+            shortName: z.shortName,
+            group: z.group,
+            feeCents: z.feeCents,
+            feeItemId: z.feeItemId,
+            active: z.active,
+          }))}
+          slides={gateSlides(menu, { buy1Get1: site.buy1Get1 })}
+          shop={{ lat: BUSINESS.latitude, lng: BUSINESS.longitude, address: shop.profile.address.street }}
+          pickupOffered={site.pickup?.offered ?? true}
+        />
         {/* Film grain over everything — subtle, pointer-transparent. */}
         <div
           aria-hidden

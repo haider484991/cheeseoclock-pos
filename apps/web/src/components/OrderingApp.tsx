@@ -77,6 +77,7 @@ import {
 } from '@/lib/device-memory';
 import { menuImageSrcSet } from '@/lib/images';
 import { DEALS_PRICE_PROMISE, OFFER_FINE_PRINT, OFFER_FINE_PRINT_TAX_INCLUDED, cardOffer, discountOnEveryOrder, offerSectionOf, regularPizzaPrices, type OfferPrice } from '@/lib/offers';
+import { onLocationChoice, readLocationChoice, type LocationChoice } from '@/lib/location-choice';
 import { pixel, type PixelLine } from '@/lib/meta-pixel';
 import { funnel, type AddHow } from '@/lib/funnel';
 import { trackPath } from '@/lib/order-display';
@@ -434,6 +435,17 @@ export function OrderingApp({
   }
 
   const [chosenFulfilment, setFulfilment] = useState<WebFulfilment>('delivery');
+  // The landing location popup (components/location, lib/location-choice): the choice this phone
+  // confirmed, and one confirmed while the menu is open, set the checkout's delivery or pick-up and area.
+  useEffect(() => {
+    function apply(choice: LocationChoice | null) {
+      if (!choice) return;
+      setFulfilment(choice.fulfilment);
+      if (choice.fulfilment === 'delivery' && choice.zoneId && openZone(choice.zoneId)) setZoneId(choice.zoneId);
+    }
+    apply(readLocationChoice());
+    return onLocationChoice(apply);
+  }, [openZone]);
   // Pickup silently falls back to delivery if the till stops offering it.
   const fulfilment: WebFulfilment = canPickup ? chosenFulfilment : 'delivery';
   const pickup = fulfilment === 'pickup';

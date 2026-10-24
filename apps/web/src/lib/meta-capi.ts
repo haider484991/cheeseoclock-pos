@@ -1,11 +1,16 @@
 import { metaUserData, type MetaUserData } from './meta-user-data';
 import {
+  EVENT_ID,
+  LOCATION_EVENT_NAME,
   isTrackingPath,
+  locationPayload,
   purchaseEventId,
   purchasePayload,
   readPixelId,
   readTestCode,
   type BasketPayload,
+  type LocationEventChoice,
+  type LocationPayload,
   type PixelLine,
 } from './meta-pixel';
 
@@ -136,14 +141,54 @@ export type CapiUserData = { [K in keyof MetaUserData]?: string[] } & {
   fbc?: string;
 };
 
-export interface CapiEvent {
-  event_name: 'Purchase';
+interface CapiEventBase {
   event_time: number;
   event_id: string;
   action_source: 'website';
   event_source_url: string;
   user_data: CapiUserData;
+}
+
+export interface CapiPurchaseEvent extends CapiEventBase {
+  event_name: 'Purchase';
   custom_data: BasketPayload & { content_type: 'product'; order_id: string };
+}
+
+/** The landing popup's LocationConfirmed: the request's own details only (no phone or name is known there). */
+export interface CapiLocationEvent extends CapiEventBase {
+  event_name: typeof LOCATION_EVENT_NAME;
+  custom_data: LocationPayload;
+}
+
+export type CapiEvent = CapiPurchaseEvent | CapiLocationEvent;
+
+/** What the request itself says, as Meta's user_data. */
+function requestUserData(facts: RequestFacts): CapiUserData {
+  const userData: CapiUserData = {};
+  if (facts.ip) userData.client_ip_address = facts.ip;
+  if (facts.userAgent) userData.client_user_agent = facts.userAgent;
+  if (facts.fbp) userData.fbp = facts.fbp;
+  if (facts.fbc) userData.fbc = facts.fbc;
+  return userData;
+}
+
+/** The popup's LocationConfirmed, or null for an event id the browser could not have made. */
+export function locationEvent(
+  choice: LocationEventChoice,
+  eventId: string,
+  facts: RequestFacts,
+  nowMs: number = Date.now(),
+): CapiLocationEvent | null {
+  if (!EVENT_ID.test(eventId)) return null;
+  return {
+    event_name: LOCATION_EVENT_NAME,
+    event_time: Math.floor(nowMs / 1000),
+    event_id: eventId,
+    action_source: 'website',
+    event_source_url: facts.sourceUrl,
+    user_data: requestUserData(facts),
+    custom_data: locationPayload(choice),
+  };
 }
 
 export interface ServerPurchase {
@@ -156,16 +201,13 @@ export interface ServerPurchase {
 }
 
 /** The Purchase for one order, or null when its total is not an amount. */
-export function purchaseEvent(order: ServerPurchase, facts: RequestFacts, nowMs: number = Date.now()): CapiEvent | null {
+export function purchaseEvent(order: ServerPurchase, facts: RequestFacts, nowMs: number = Date.now()): CapiPurchaseEvent | null {
   const basket = purchasePayload(order.totalCents, order.lines);
   if (basket === null) return null;
   const hashed = metaUserData(order.customer);
   const userData: CapiUserData = {};
   if (hashed) for (const [key, value] of Object.entries(hashed)) userData[key as keyof MetaUserData] = [value];
-  if (facts.ip) userData.client_ip_address = facts.ip;
-  if (facts.userAgent) userData.client_user_agent = facts.userAgent;
-  if (facts.fbp) userData.fbp = facts.fbp;
-  if (facts.fbc) userData.fbc = facts.fbc;
+  Object.assign(userData, requestUserData(facts));
   return {
     event_name: 'Purchase',
     event_time: Math.floor(nowMs / 1000),
@@ -254,6 +296,30 @@ export async function sendServerPurchase(
     return result;
   } catch (e) {
     console.warn('Meta Conversions API: Purchase not sent', e instanceof Error ? e.message : e);
+    return { ok: false, error: 'failed' };
+  }
+}
+
+/**
+ * The popup's LocationConfirmed from the server (api/meta/event): the same never-throwing send as
+ * the Purchase's, with the browser's event id so Meta keeps one of the two.
+ */
+export async function sendServerLocation(
+  req: Request,
+  choice: LocationEventChoice,
+  eventId: string,
+  options: { config?: CapiConfig | null; fetchImpl?: typeof fetch } = {},
+): Promise<SendResult> {
+  try {
+    const config = options.config === undefined ? readCapiConfig() : options.config;
+    if (config === null) return { ok: false, error: 'off' };
+    const event = locationEvent(choice, eventId, requestFacts(req));
+    if (event === null) return { ok: false, error: 'bad event id' };
+    const result = await sendCapiEvents(config, [event], options.fetchImpl ? { fetchImpl: options.fetchImpl } : {});
+    if (!result.ok) console.warn('Meta Conversions API: LocationConfirmed not sent', result.status ?? '', result.error ?? '');
+    return result;
+  } catch (e) {
+    console.warn('Meta Conversions API: LocationConfirmed not sent', e instanceof Error ? e.message : e);
     return { ok: false, error: 'failed' };
   }
 }

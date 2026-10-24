@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
   CAPI_TIMEOUT_MS,
+  locationEvent,
+  sendServerLocation,
   GRAPH_VERSION,
   purchaseEvent,
   readCapiConfig,
@@ -257,5 +259,30 @@ describe('sendServerPurchase: the order route’s one call', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('LocationConfirmed from the server', () => {
+  const EID = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a99';
+  const facts = requestFacts(request({ 'x-forwarded-for': '39.45.1.2', 'user-agent': 'UA', referer: 'https://www.cheeseoclock.net/' }), NOW);
+
+  it('is the browser’s custom event, with its id, and only what the request says about the person', () => {
+    expect(locationEvent({ fulfilment: 'delivery', zoneName: 'DHA Phase 6' }, EID, facts, NOW)).toEqual({
+      event_name: 'LocationConfirmed',
+      event_time: NOW / 1000,
+      event_id: EID,
+      action_source: 'website',
+      event_source_url: 'https://www.cheeseoclock.net/',
+      user_data: { client_ip_address: '39.45.1.2', client_user_agent: 'UA' },
+      custom_data: { fulfilment: 'delivery', content_name: 'DHA Phase 6', content_category: 'Location' },
+    });
+    expect(locationEvent({ fulfilment: 'pickup', zoneName: null }, 'bad id!', facts, NOW)).toBeNull();
+  });
+
+  it('is sent when on, and never throws', async () => {
+    const { fetchImpl, sent } = meta();
+    await expect(sendServerLocation(request(), { fulfilment: 'pickup', zoneName: null }, EID, { config: CONFIG, fetchImpl })).resolves.toMatchObject({ ok: true });
+    expect((sent[0]!.body as { data: Array<{ event_name: string }> }).data[0]!.event_name).toBe('LocationConfirmed');
+    await expect(sendServerLocation(request(), { fulfilment: 'pickup', zoneName: null }, EID, { config: null, fetchImpl })).resolves.toEqual({ ok: false, error: 'off' });
   });
 });
