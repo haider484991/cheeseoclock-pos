@@ -179,9 +179,26 @@ export function factsFromBlock(block: PublishedSettings | null | undefined): Sit
     // A block without them (a v0.7.29 till's, and nothing kept from an earlier one): today's site.
     announcement: announcementInForce(block.announcement),
     minDeliveryOrderCents: block.minDeliveryOrderCents ?? 0,
-    // A block without them (before v0.7.39, nothing kept): the poster's rules.
-    buy1Get1: block.buy1Get1 ? { ...block.buy1Get1 } : DEFAULT_BUY_1_GET_1_RULES,
+    // A block without them (before v0.7.39, nothing kept): the poster's rules. The tills' old built-in ones: today's.
+    buy1Get1: block.buy1Get1 ? tillBuy1Get1Rules(block.buy1Get1) : DEFAULT_BUY_1_GET_1_RULES,
   };
+}
+
+/**
+ * The rules every till sent as its own built-in default before 24 Oct 2026 (on, 1–7 PM, the name asked). A till whose
+ * owner never saved Buy 1 Get 1 hours still sends them with each publish (its block always carries the rules), so the
+ * website could not start the deals at 12 PM — the hours the printed menu and the user set (24 Oct 2026: "Buy 1 Get 1
+ * default from 12 PM … with the 12–7 PM chip"). These exact rules read as today's default; any other hours the owner
+ * saves pass as they are. Retires itself: a till updated past 3e5c143 sends 12–7 PM itself. (An owner who saves
+ * exactly 1–7 PM with the name asked would read as 12–7 PM here until then — the hours the posters print.)
+ */
+const TILLS_OLD_DEFAULT_BUY_1_GET_1: Readonly<Buy1Get1Rules> = Object.freeze({ on: true, opensMinute: 13 * 60, closesMinute: 19 * 60, asksSocial: true });
+
+export function tillBuy1Get1Rules(sent: Buy1Get1Rules): Buy1Get1Rules {
+  const old = TILLS_OLD_DEFAULT_BUY_1_GET_1;
+  const isOldDefault =
+    sent.on === old.on && sent.opensMinute === old.opensMinute && sent.closesMinute === old.closesMinute && sent.asksSocial === old.asksSocial;
+  return isOldDefault ? { ...DEFAULT_BUY_1_GET_1_RULES } : { ...sent };
 }
 
 export function findFactZone(facts: SiteFacts, id: string | null | undefined): FactZone | undefined {
