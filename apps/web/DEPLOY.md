@@ -749,7 +749,8 @@ that answers Karachi is `bom1` (Mumbai).
   instance's first request; now one read (or one probe), and DDL only when Postgres says
   something is missing.
 - **Where things run:** each instance logs `regions: database <neon region>, function <vercel
-  region>` once. If the database is not in or next to `iad1`, set the functions' region next to
-  it (Vercel → Settings → Functions, or `regions` in a `vercel.json`): every query is a round trip
-  between the two.
+  region>` once. The first log (24 Oct 2026) said `database ap-southeast-1, function iad1`:
+  every query crossed from Washington to Singapore and back. `vercel.json` now pins the
+  functions to `sin1` (Singapore), beside the database; `lib/vercel-region.test.ts` keeps it so.
+  If the database ever moves, move the region with it.
 
