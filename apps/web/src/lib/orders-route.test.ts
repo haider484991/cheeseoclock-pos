@@ -1139,3 +1139,52 @@ describe('POST /api/orders — Meta Conversions API (lib/meta-capi)', () => {
     expect(sent).toHaveLength(0);
   });
 });
+
+describe('POST /api/orders — a deal whose price includes its tax (0057)', () => {
+  // The shop's live menu: the delivery charges at no tax (Settings → Delivery areas & fees), the deal marked.
+  const dealMenu = (): PublishedMenu => {
+    const m = menu(true);
+    m.categories.push({
+      posCategoryId: 'c-deals',
+      name: 'Value Deals',
+      displayOrder: 0,
+      items: [item('mega', 'Mega Cheese Box', 4800, { noDiscount: true, taxIncluded: true })],
+    });
+    for (const c of m.categories) if (c.name === 'Delivery Charges') for (const i of c.items) i.taxRateBps = 0;
+    return m;
+  };
+
+  it('a delivery: the printed price plus the delivery fee, nothing added; the line carries the mark to the till', async () => {
+    await publish(dealMenu());
+    const r = await place({ zoneId: 'dha-6', items: [{ posItemId: 'mega', quantity: 1, modifierIds: [] }] });
+    expect(r.status).toBe(200);
+    expect(r.json.data).toMatchObject({ subtotalCents: 500_000, taxCents: 0, totalCents: 500_000 });
+    const row = await stored(r.json.data!.orderId);
+    expect(row.total_cents).toBe(480_000 + 20_000);
+    expect(row.tax_cents).toBe(0);
+    expect(row.items[0]).toMatchObject({ posItemId: 'mega', unitPriceCents: 480_000, noDiscount: true, taxIncluded: true });
+    // The delivery charge's stored line is as before (no mark).
+    expect(row.items[1]).not.toHaveProperty('taxIncluded');
+  });
+
+  it('beside a regular pizza: the pizza has its 15% added, the deal stays Rs 4,800', async () => {
+    await publish(dealMenu());
+    const r = await place({
+      zoneId: 'dha-6',
+      items: [
+        { posItemId: 'mega', quantity: 2, modifierIds: [] },
+        { posItemId: 'fajita-l', quantity: 1, modifierIds: [] },
+      ],
+    });
+    const row = await stored(r.json.data!.orderId);
+    expect(row.tax_cents).toBe(30_000);
+    expect(row.total_cents).toBe(2 * 480_000 + 200_000 + 30_000 + 20_000);
+  });
+
+  it('GET /api/menu carries the mark', async () => {
+    await publish(dealMenu());
+    const json = (await (await apiMenu.GET()).json()) as { data: PublishedMenu };
+    const mega = json.data.categories.flatMap((c) => c.items).find((i) => i.posItemId === 'mega');
+    expect(mega).toMatchObject({ taxIncluded: true, basePriceCents: 480_000 });
+  });
+});
