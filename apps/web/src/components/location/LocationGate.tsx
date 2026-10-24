@@ -283,7 +283,7 @@ export function LocationGate({
 
         {slides.length > 0 && <DealSlides slides={slides} lang={lang} t={t} />}
 
-        <p className="mt-1.5 truncate text-center font-cond text-[10.5px] font-bold uppercase tracking-[0.12em] text-cheese/80">{BRAND_LINES}</p>
+        <p className="mt-1.5 text-balance text-center font-cond text-[10.5px] font-bold uppercase leading-snug tracking-[0.1em] text-cheese/80">{BRAND_LINES}</p>
 
         <h2 id={titleId} className="mt-3 font-display text-[26px] leading-none tracking-wide text-cream">
           {t(T.title)}
