@@ -115,14 +115,18 @@ export function ItemCostSheetDrawer({
                 <p className="rounded-lg bg-stone-50 px-3 py-2 text-sm dark:bg-stone-800/60">
                   {sheet.priceToHitCents <= sheet.row.basePriceCents
                     ? `On its ${formatBps(sheet.row.targetBps)} target at today's price of ${formatCents(sheet.row.basePriceCents)}.`
-                    : `The price that brings it to its ${formatBps(sheet.row.targetBps)} target: ${formatCents(sheet.priceToHitCents)} (now ${formatCents(sheet.row.basePriceCents)}), before tax.`}
+                    : `The price that brings it to its ${formatBps(sheet.row.targetBps)} target: ${formatCents(sheet.priceToHitCents)} (now ${formatCents(sheet.row.basePriceCents)}), ${sheet.row.priceIncludesTax ? 'tax included' : 'before tax'}.`}
                 </p>
               )}
 
               {sheet.onFoodpanda && sheet.row.flag !== 'grey' && <OnFoodpanda line={sheet.onFoodpanda} costCents={sheet.row.costCents} />}
 
               <p className="text-xs text-stone-500">
-                At today&apos;s prices, from the recipe as it is now; the menu price is before tax. Sold on this till in the
+                At today&apos;s prices, from the recipe as it is now;{' '}
+                {sheet.row.priceIncludesTax
+                  ? `the menu price ${formatCents(sheet.row.basePriceCents)} includes its tax, so it is counted before tax.`
+                  : 'the menu price is before tax.'}{' '}
+                Sold on this till in the
                 last 28 days: {new Intl.NumberFormat('en-PK').format(sheet.row.soldLast28)}.
               </p>
             </div>

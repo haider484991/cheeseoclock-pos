@@ -30,7 +30,7 @@ import type {
   WasteReasonId,
 } from '@cheeseoclock/shared-types';
 import { WASTE_REASONS } from '@cheeseoclock/shared-types';
-import { splitOrderLines } from './profit.js';
+import { priceBeforeTaxCents, splitOrderLines, type TaxInside } from './profit.js';
 import { BASE_PART, expandRecipe, type ExpandedLine, type PickedChoice, type RecipeLine } from './recipe-expand.js';
 import { costLines, type PriceOf } from './plate-cost.js';
 import { unitCostMc, valueCents, type Pack } from './units.js';
@@ -140,7 +140,8 @@ export function stockValueAt(q: number, price: { pack: Pack; kind: PriceKind } |
  * off before tax (ref × (sub − disc) ÷ total), shared out the same way. The
  * nets add up to (sub − disc) − refund-before-tax exactly. `discountSkips`:
  * the lines that took none of the discount under its frozen rule (a delivery
- * charge; profit.ts splitOrderLines).
+ * charge; profit.ts splitOrderLines). `taxInside`: its tax-included lines
+ * (0057) and the tax stored inside them, taken out of their prices.
  */
 export function lineNetsExTax(
   lineTotalsCents: readonly number[],
@@ -148,9 +149,10 @@ export function lineNetsExTax(
   totalCents: number,
   refundedCents: number,
   discountSkips?: readonly boolean[],
+  taxInside?: TaxInside,
 ): number[] {
   // The one allocation (costing spec 4.4), shared with Profit.
-  return splitOrderLines(lineTotalsCents, discountCents, totalCents, refundedCents, discountSkips).nets;
+  return splitOrderLines(lineTotalsCents, discountCents, totalCents, refundedCents, discountSkips, taxInside).nets;
 }
 
 // ------------------------------------------------------------ food cost --
@@ -172,6 +174,11 @@ export interface FoodCostLine {
    * today). Absent = it took its share (every discount before 0.7.26).
    */
   skipsDiscount?: boolean;
+  /**
+   * Its price holds its tax (order_items.tax_included, 0057): the line's rate (tax_rate_bps_snapshot).
+   * Absent = the tax was added on top (every line before 0057).
+   */
+  taxInsideBps?: number;
   /** Cost rows kept with the sale for this line (0 when none). */
   parts: number;
   costCents: number;
@@ -195,6 +202,8 @@ export interface FoodCostOrder {
   discountCents: number;
   totalCents: number;
   refundedCents: number;
+  /** orders.included_tax_cents (0057): the tax inside its tax-included lines as stored; absent or 0 = none. */
+  includedTaxCents?: number;
   /** In the order the till lists them ((created_at, id)). */
   lines: FoodCostLine[];
   /** Only read when no line kept a cost row. */
@@ -255,6 +264,8 @@ function addMissing(t: FoodCostTally, l: FoodCostLine, why: ReportMissingCostWhy
 export interface OrderFoodCost {
   /** Each line at what the customer paid, before tax (lineNetsExTax), in the order given. */
   nets: number[];
+  /** Each line at menu price before tax (before discounts and refunds): its total, a tax-included line's less the tax inside. */
+  menu: number[];
   /**
    * Each line's cost is known: a FULL line of an order that kept its cost;
    * for an estimated order, a line with a recipe when everything it took had
@@ -284,18 +295,26 @@ export interface OrderFoodCost {
  *  - an order that kept none adds its estimate; its lines are "known" only
  *    when every ingredient it took had a price and the item has a recipe
  *    today (then the estimate is their cost).
- * Part refunds lower the sales, never the cost: the food was made.
+ * Part refunds lower the sales, never the cost: the food was made. A
+ * tax-included line (0057) counts its price less the tax inside it, as the
+ * order stored that tax.
  */
 export function orderFoodCost(o: FoodCostOrder): OrderFoodCost {
+  const inside = o.lines.some((l) => l.taxInsideBps !== undefined)
+    ? { ratesBps: o.lines.map((l) => l.taxInsideBps ?? null), includedTaxCents: o.includedTaxCents ?? 0 }
+    : undefined;
   const nets = lineNetsExTax(
     o.lines.map((l) => l.lineTotalCents),
     o.discountCents,
     o.totalCents,
     o.refundedCents,
     o.lines.some((l) => l.skipsDiscount === true) ? o.lines.map((l) => l.skipsDiscount === true) : undefined,
+    inside,
   );
+  const menu = o.lines.map((l) => priceBeforeTaxCents(l.lineTotalCents, l.taxInsideBps));
   const r: OrderFoodCost = {
     nets,
+    menu,
     known: o.lines.map(() => false),
     why: o.lines.map(() => null),
     foodSalesCents: 0,
@@ -325,7 +344,7 @@ export function orderFoodCost(o: FoodCostOrder): OrderFoodCost {
       if (l.status === 'full') {
         r.known[i] = true;
         r.knownSalesCents += net;
-        r.knownMenuSalesCents += l.lineTotalCents;
+        r.knownMenuSalesCents += menu[i] ?? 0;
         r.knownCostCents += l.costCents;
       } else {
         r.why[i] = l.status === 'none' ? 'no_recipe' : l.status === 'partial' ? 'no_price' : 'not_recorded';
@@ -339,7 +358,7 @@ export function orderFoodCost(o: FoodCostOrder): OrderFoodCost {
     else {
       r.known[i] = true;
       knownNet += net;
-      knownMenu += l.lineTotalCents;
+      knownMenu += menu[i] ?? 0;
       anyKnown = true;
     }
   });
@@ -394,8 +413,8 @@ export function tallyFoodCost(t: FoodCostTally, o: FoodCostOrder): void {
 
 /**
  * The plain orders of a period at once: counted orders with nothing to share
- * out (no discount, no part refund — each line's net is its menu price) that
- * kept their cost. Reports adds these up in SQL — their food and fee sales,
+ * out (no discount, no part refund, no tax inside a price (0057) — each
+ * line's net is its menu price) that kept their cost. Reports adds these up in SQL — their food and fee sales,
  * the cost of their food lines — and reads only the food lines that are NOT
  * fully costed, one by one (`notFull`: no row, or a row that is partial,
  * 'none' or failed). The result is exactly what tallyFoodCost gives order by

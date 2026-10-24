@@ -223,6 +223,33 @@ live('Edit order through the till’s calls', () => {
     expect(snap(id).order.discountCents).toBeGreaterThan(0);
     expect(slip()).toMatchObject({ added: [], removed: [] });
   });
+
+  it('a deal added or taken off: the slip carries what it is made of, as the ticket prints it; other lines carry none', async () => {
+    const { updateMenuItem } = await import('../../db/repositories/menu-item-repo.js');
+    updateMenuItem(db as never, { id: shop.item.deal, description: '2 Large test pizzas + 1 litre drink' }, MANAGER);
+    const id = await sentOrder([['fajitaM', 1]]);
+    const deal = { ...add('deal'), modifierIds: [shop.choice.d1Fajita, shop.choice.d2Veggie] };
+    const cola = add('cola');
+    const p = await data<OrderEditPreview>('orders:previewEdit', { orderId: id, ops: [deal, cola] });
+    await data('orders:saveEdit', { orderId: id, baseKey: p.baseKey, ops: [deal, cola] });
+    expect(slip().added).toEqual([
+      expect.objectContaining({ name: 'Big Two Deal', quantity: 1, contents: '2 Large test pizzas + 1 litre drink' }),
+      expect.objectContaining({ name: 'Cola 345 ml', quantity: 1 }),
+    ]);
+    expect(slip().added[1]).not.toHaveProperty('contents');
+
+    const off = [{ op: 'remove', orderItemId: deal.lineId }];
+    const q = await data<OrderEditPreview>('orders:previewEdit', { orderId: id, ops: off });
+    await data('orders:saveEdit', {
+      orderId: id,
+      baseKey: q.baseKey,
+      ops: off,
+      reason: 'Customer changed order',
+      approverPin: PIN,
+      foodMade: { [deal.lineId]: 'not_made' },
+    });
+    expect(slip().removed).toEqual([expect.objectContaining({ name: 'Big Two Deal', contents: '2 Large test pizzas + 1 litre drink' })]);
+  });
 });
 
 live('Free order through the till’s calls', () => {

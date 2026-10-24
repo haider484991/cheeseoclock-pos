@@ -217,8 +217,13 @@ export interface MenuCostRow {
   categoryName: string;
   isActive: boolean;
   basePriceCents: number;
-  /** The typical price: the item's price plus its usual paid picks (ex-tax, as on the menu). */
+  /**
+   * The typical price: the item's price plus its usual paid picks, before tax (as on the menu; for a
+   * price that includes its tax, less the tax inside it).
+   */
   priceCents: number;
+  /** Its menu price includes its tax (0057): `priceCents`, what you keep and the food cost are on its part before tax. */
+  priceIncludesTax?: true;
   /** What a typical plate costs to make. */
   costCents: number;
   /** Cheapest and dearest plate, from the picks the customer makes. */

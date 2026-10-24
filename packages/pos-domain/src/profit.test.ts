@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CHANNEL_FEES, DEFAULT_FOODPANDA_FEES, DEFAULT_RIDER_COST } from '@cheeseoclock/shared-types';
 import { allocateDiscount } from './discount.js';
+import { lineTaxOf } from './discount-base.js';
 import { foodpandaOrderMoney } from './foodpanda.js';
 import {
   contributionCents,
@@ -10,6 +11,7 @@ import {
   orderSalesExTaxCents,
   perKnownOrderCents,
   paymentFeeCents,
+  priceBeforeTaxCents,
   profitWaterfall,
   riderCost,
   splitOrderLines,
@@ -72,6 +74,85 @@ describe('line allocation (costing spec 4.4)', () => {
   it('a discount and a part refund on the same order', () => {
     const s = checks([80_000, 45_000, 20_000], 14_500, 151_380, 11_600);
     expect(s.salesExTaxCents).toBe(145_000 - 14_500 - 10_000);
+  });
+});
+
+describe('a price that includes its tax (0057): the tax inside it is not sales', () => {
+  // A Rs 4,800 deal at 15% in cash holds Rs 626.09 (the till's stored included tax), by card at 8% Rs 355.56.
+  const DEAL = 480_000;
+  const PIZZA = 200_000;
+  const inside = (included: number, ...rates: Array<number | null>) => ({ ratesBps: rates, includedTaxCents: included });
+  const money = (sub: number, disc: number, tot: number, ref: number, included: number) => ({
+    subtotalCents: sub,
+    discountCents: disc,
+    totalCents: tot,
+    refundedCents: ref,
+    includedTaxCents: included,
+  });
+
+  it('in cash: the deal counts what is left before tax, line by line exactly as the till holds it; the pizza beside it its price', () => {
+    const s = splitOrderLines([DEAL, PIZZA], 0, 710_000, 0, undefined, inside(62_609, 1_500, null));
+    expect(s.included).toEqual([62_609, 0]);
+    expect(s.nets).toEqual([417_391, 200_000]);
+    expect(s.nets[0]).toBe(DEAL - lineTaxOf({ lineTotalCents: DEAL, taxRateBps: 1_500, taxIncluded: true }, 0).includedCents);
+    expect(s.salesExTaxCents).toBe(617_391);
+    expect(orderSalesExTaxCents(money(680_000, 0, 710_000, 0, 62_609))).toBe(617_391);
+  });
+
+  it('by card: the tax the order stored (8/108 of it), not the cash rate', () => {
+    const s = splitOrderLines([DEAL], 0, DEAL, 0, undefined, inside(35_556, 1_500));
+    expect(s.nets).toEqual([444_444]);
+    expect(orderSalesExTaxCents(money(DEAL, 0, DEAL, 0, 35_556))).toBe(444_444);
+  });
+
+  it('after a discount: each line holds the tax lineTaxOf gives on what is left of it', () => {
+    // 10% off both: the deal Rs 4,320 left (its tax inside it), the pizza Rs 1,800 + 15% added.
+    const shares = allocateDiscount([DEAL, PIZZA], 68_000);
+    const held = lineTaxOf({ lineTotalCents: DEAL, taxRateBps: 1_500, taxIncluded: true }, shares[0]!).includedCents;
+    const total = 680_000 - 68_000 + 27_000;
+    const s = splitOrderLines([DEAL, PIZZA], 68_000, total, 0, undefined, inside(held, 1_500, null));
+    expect(s.discounts).toEqual(shares);
+    expect(s.nets).toEqual([DEAL - shares[0]! - held, PIZZA - shares[1]!]);
+    expect(s.nets[0]).toBe(375_652);
+    expect(orderSalesExTaxCents(money(680_000, 68_000, total, 0, held))).toBe(s.salesExTaxCents);
+  });
+
+  it('a part refund: what is handed back comes off before tax, at the share the price before tax is of the bill', () => {
+    // Rs 480 back on the Rs 4,800 deal: round(48,000 × 417,391 ÷ 480,000) = 41,739 before tax.
+    const s = splitOrderLines([DEAL], 0, DEAL, 48_000, undefined, inside(62_609, 1_500));
+    expect(s.refundExTaxCents).toBe(41_739);
+    expect(s.nets).toEqual([375_652]);
+    // The rule on what is left, line by line: Rs 4,320 holds 15/115 of it.
+    expect(s.nets[0]).toBe(432_000 - lineTaxOf({ lineTotalCents: 432_000, taxRateBps: 1_500, taxIncluded: true }, 0).includedCents);
+    expect(orderSalesExTaxCents(money(DEAL, 0, DEAL, 48_000, 62_609))).toBe(375_652);
+  });
+
+  it('two deals: the stored tax shared by what each holds, to the paisa; more than they hold at their rates: by what is left of them', () => {
+    const cash = splitOrderLines([DEAL, 130_000], 0, 610_000, 0, undefined, inside(62_609 + 16_957, 1_500, 1_500));
+    expect(cash.included).toEqual([62_609, 16_957]);
+    const more = splitOrderLines([DEAL, 130_000], 0, 610_000, 0, undefined, inside(100_000, 1_500, 1_500));
+    expect(more.included.reduce((a, b) => a + b, 0)).toBe(100_000);
+    expect(more.included).toEqual(allocateDiscount([DEAL, 130_000], 100_000));
+  });
+
+  it('an order with no such line (every order before 0057) reads exactly as before', () => {
+    for (const [lines, disc, tot, ref] of [
+      [[100_000, 50_000], 0, 174_000, 5_000],
+      [[80_000, 45_000, 20_000], 14_500, 151_380, 11_600],
+      [[50_000, 30_000], 80_000, 0, 500],
+    ] as Array<[number[], number, number, number]>) {
+      const before = splitOrderLines(lines, disc, tot, ref);
+      expect(splitOrderLines(lines, disc, tot, ref, undefined, inside(0, ...lines.map(() => null)))).toEqual(before);
+      expect(splitOrderLines(lines, disc, tot, ref, undefined, inside(0, ...lines.map(() => 1_500)))).toEqual(before);
+      expect(before.included).toEqual(lines.map(() => 0));
+    }
+  });
+
+  it('a price before tax at its own rate (the menu basis): Rs 4,800 at 15% is Rs 4,173.91; any other price is its own', () => {
+    expect(priceBeforeTaxCents(DEAL, 1_500)).toBe(417_391);
+    expect(priceBeforeTaxCents(DEAL, 800)).toBe(444_444);
+    expect(priceBeforeTaxCents(DEAL)).toBe(DEAL);
+    expect(priceBeforeTaxCents(DEAL, null)).toBe(DEAL);
   });
 });
 

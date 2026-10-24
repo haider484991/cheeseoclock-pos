@@ -1487,12 +1487,14 @@ function soldLinesOf(db: AppDatabase, orderId: string): TaxedDiscountLine[] {
 }
 
 /**
- * A counted order with nothing to share out — no discount, no refund, so
- * every line's net is its menu price — that kept its cost with the sale
- * (alias `o`). These are added up in SQL; only the others are read line by
- * line.
+ * A counted order with nothing to share out — no discount, no refund, no
+ * tax inside a price (0057: a tax-included line's price is not its sales
+ * before tax), so every line's net is its menu price — that kept its cost
+ * with the sale (alias `o`). These are added up in SQL; only the others are
+ * read line by line.
  */
 export const PLAIN_KEPT = `(o.discount_cents = 0
+    AND o.included_tax_cents = 0
     AND NOT EXISTS (SELECT 1 FROM payments rp
                      WHERE rp.order_id = o.id AND rp.amount_cents < 0 AND rp.deleted_at IS NULL)
     AND EXISTS (SELECT 1 FROM order_item_costs k
@@ -1551,7 +1553,8 @@ export function discountRowOf(json: string | null | undefined): {
 }
 
 const REST_ORDERS = `ro AS MATERIALIZED (
-    SELECT o.id AS id, o.discount_cents AS disc, o.tax_cents AS tax, o.total_cents AS tot, ${REFUNDED} AS ref, ${DISCOUNT_ROW} AS drow
+    SELECT o.id AS id, o.discount_cents AS disc, o.tax_cents AS tax, o.total_cents AS tot, ${REFUNDED} AS ref, ${DISCOUNT_ROW} AS drow,
+           o.included_tax_cents AS incl
       FROM orders o WHERE ${IN_RANGE} AND ${COUNTED} AND NOT ${PLAIN_KEPT})`;
 
 /** A line's cost rows, added up (with the LEFT JOIN of order_item_costs `c`, grouped by line). */
@@ -1565,7 +1568,7 @@ export const LINE_COSTS = `COUNT(c.id) AS parts, COALESCE(SUM(c.cost_cents), 0) 
  */
 export const FOOD_COST_LINES_SQL = `
   WITH ${REST_ORDERS}
-  SELECT ro.id AS orderId, ro.disc AS disc, ro.tax AS tax, ro.tot AS tot, ro.ref AS ref, ro.drow AS drow,
+  SELECT ro.id AS orderId, ro.disc AS disc, ro.tax AS tax, ro.tot AS tot, ro.ref AS ref, ro.drow AS drow, ro.incl AS incl,
          oi.id AS lineId, oi.menu_item_id AS itemId, oi.menu_item_name AS soldName,
          oi.quantity AS qty, oi.line_total_cents AS lineTotal, oi.tax_rate_bps_snapshot AS rate, oi.no_discount AS nd,
          oi.tax_included AS ti, ${FEE_LINE} AS isFee,
@@ -2224,6 +2227,7 @@ function tallyFoodSales(db: AppDatabase, range: ReportRange, pricing: () => Pric
     tot: number;
     ref: number;
     drow: string | null;
+    incl: number;
     lineId: string;
     itemId: string | null;
     soldName: string;
@@ -2247,13 +2251,25 @@ function tallyFoodSales(db: AppDatabase, range: ReportRange, pricing: () => Pric
     ref: number;
     /** The discount row (DISCOUNT_ROW): its frozen rule and its own terms. */
     drow: string | null;
+    /** The tax inside its tax-included lines as stored (0057; 0 = none). */
+    incl: number;
     lines: FoodCostLine[];
     sold: TaxedDiscountLine[];
   }> = [];
   for (const r of rows) {
     let o = orders[orders.length - 1];
     if (!o || o.id !== r.orderId) {
-      o = { id: r.orderId, disc: Number(r.disc), tax: Number(r.tax), tot: Number(r.tot), ref: Number(r.ref), drow: r.drow, lines: [], sold: [] };
+      o = {
+        id: r.orderId,
+        disc: Number(r.disc),
+        tax: Number(r.tax),
+        tot: Number(r.tot),
+        ref: Number(r.ref),
+        drow: r.drow,
+        incl: Number(r.incl ?? 0),
+        lines: [],
+        sold: [],
+      };
       orders.push(o);
     }
     const it = menu.item(r.itemId);
@@ -2268,6 +2284,8 @@ function tallyFoodSales(db: AppDatabase, range: ReportRange, pricing: () => Pric
       costCents: Number(r.cost),
       status: lineStatus(parts, r.worst),
       hasRecipeNow: r.itemId !== null && menu.withRecipe.has(r.itemId),
+      // Its price holds its tax (0057): taken out of its sales at the order's stored included tax.
+      ...(Number(r.ti) === 1 ? { taxInsideBps: Number(r.rate) } : {}),
     });
     o.sold.push({
       lineTotalCents: Number(r.lineTotal),
@@ -2300,6 +2318,7 @@ function tallyFoodSales(db: AppDatabase, range: ReportRange, pricing: () => Pric
       discountCents: o.disc,
       totalCents: o.tot,
       refundedCents: o.ref,
+      ...(o.incl > 0 ? { includedTaxCents: o.incl } : {}),
       lines: o.lines,
       estimate: estimates.get(o.id) ?? null,
     });

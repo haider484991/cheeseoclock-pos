@@ -9,6 +9,7 @@ import {
   lineCostStatus,
   lineNetsExTax,
   movementWithoutCosts,
+  orderFoodCost,
   orderKeptCost,
   stockValueAt,
   tallyFoodCost,
@@ -222,6 +223,43 @@ const L = (over: Partial<FoodCostLine>): FoodCostLine => ({
   status: 'full',
   hasRecipeNow: true,
   ...over,
+});
+
+describe('a price that includes its tax (0057) in the food cost', () => {
+  // A Rs 4,800 deal at 15% holds Rs 626.09 in cash (the order's stored included tax), Rs 355.56 by card.
+  const deal = () => L({ key: 'deal', name: 'Deal', lineTotalCents: 480_000, costCents: 150_000, taxInsideBps: 1_500 });
+  const pizza = () => L({ key: 'pizza', lineTotalCents: 200_000, costCents: 50_000 });
+
+  it('the deal counts its price less the tax inside it, as sales and at menu price; the pizza beside it its price', () => {
+    const r = orderFoodCost({ discountCents: 0, totalCents: 710_000, refundedCents: 0, includedTaxCents: 62_609, lines: [deal(), pizza()], estimate: null });
+    expect(r.nets).toEqual([417_391, 200_000]);
+    expect(r.menu).toEqual([417_391, 200_000]);
+    expect(r).toMatchObject({ foodSalesCents: 617_391, knownSalesCents: 617_391, knownMenuSalesCents: 617_391, knownCostCents: 200_000 });
+  });
+
+  it('by card: sales hold what the order stored; the menu basis stays the price before tax at its own rate', () => {
+    const r = orderFoodCost({ discountCents: 0, totalCents: 480_000, refundedCents: 0, includedTaxCents: 35_556, lines: [deal()], estimate: null });
+    expect(r).toMatchObject({ foodSalesCents: 444_444, knownSalesCents: 444_444, knownMenuSalesCents: 417_391 });
+  });
+
+  it('an estimated order (no cost kept) counts the same sales', () => {
+    const r = orderFoodCost({
+      discountCents: 0,
+      totalCents: 480_000,
+      refundedCents: 0,
+      includedTaxCents: 62_609,
+      lines: [L({ ...deal(), parts: 0, status: null })],
+      estimate: { costCents: 140_000, priced: true, tookStock: true },
+    });
+    expect(r).toMatchObject({ estimated: true, foodSalesCents: 417_391, knownSalesCents: 417_391, knownMenuSalesCents: 417_391, knownCostCents: 140_000 });
+  });
+
+  it('a line without the mark (every line before 0057) reads exactly as before, whatever the order says', () => {
+    const o = { discountCents: 23_000, totalCents: 240_120, refundedCents: 1_000, lines: [pizza(), L({ key: 'fee', lineTotalCents: 20_000, isFee: true })], estimate: null };
+    const before = orderFoodCost(o);
+    expect(orderFoodCost({ ...o, includedTaxCents: 0 })).toEqual(before);
+    expect(before.menu).toEqual([200_000, 20_000]);
+  });
 });
 
 describe('tallyFoodCost: one counted order into the food cost', () => {

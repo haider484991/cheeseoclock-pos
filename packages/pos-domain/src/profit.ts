@@ -19,6 +19,7 @@
  */
 import type { ProfitStepKey, ReportPaymentGroup, RiderCostSetting } from '@cheeseoclock/shared-types';
 import { allocateDiscount, weightsThatCarry } from './discount.js';
+import { computeTax } from './tax.js';
 import { mulDivRound } from './units.js';
 
 /** round(n ÷ d), half away from zero, d > 0. */
@@ -37,19 +38,60 @@ export interface OrderMoney {
   discountCents: number;
   totalCents: number;
   refundedCents: number;
+  /**
+   * The tax inside its tax-included lines (orders.included_tax_cents, 0057), as the payments settled
+   * it; absent or 0 = none (every order before 0057).
+   */
+  includedTaxCents?: number;
+}
+
+/**
+ * The tax inside an order's tax-included lines (0057: a deal on the 24 Oct 2026 menu, "the price
+ * you see is the price you pay"), for splitOrderLines.
+ */
+export interface TaxInside {
+  /** Per line: the rate (bps, tax_rate_bps_snapshot) of a line whose price holds its tax (order_items.tax_included); null for every other. */
+  ratesBps: ReadonlyArray<number | null>;
+  /** orders.included_tax_cents as stored: worked at the lines' rates, then as the payments settled it (8% by card). */
+  includedTaxCents: number;
 }
 
 export interface OrderSplit {
   /** Each line's share of the order's discount. */
   discounts: number[];
+  /** Each line's share of the tax inside a tax-included price (0 on every other line). */
+  included: number[];
   /** Each line's share of the part refunds, before tax. */
   refunds: number[];
-  /** Each line at what the customer paid, before tax: line total − discount share − refund share. */
+  /** Each line at what the customer paid, before tax: line total − discount share − tax inside − refund share. */
   nets: number[];
-  /** The part refunds before tax: round(refunded × (sub − discount) ÷ total); 0 when the total is 0. */
+  /** The part refunds before tax: round(refunded × (sub − discount − tax inside) ÷ total); 0 when the total is 0. */
   refundExTaxCents: number;
   /** Σ nets: the order's sales before tax (rev_o). */
   salesExTaxCents: number;
+}
+
+/**
+ * Each line's share of the tax inside the order's tax-included lines: the stored amount (as the
+ * payments settled it) shared out by the tax each line holds at its own rate after its discount
+ * share (pos-domain lineTaxOf) — exactly that tax, line by line, when the order was settled at the
+ * lines' rates (in cash). More than that (a way of paying with a higher rate): by what is left of
+ * the lines. 0 on every other line.
+ */
+function includedShares(lineNets: readonly number[], inside: TaxInside | undefined): number[] {
+  const stored = inside ? Math.max(0, Math.round(inside.includedTaxCents)) : 0;
+  if (!inside || stored === 0) return lineNets.map(() => 0);
+  const rateOf = (i: number) => inside.ratesBps[i] ?? null;
+  const atRate = lineNets.map((n, i) => {
+    const rate = rateOf(i);
+    return rate === null ? 0 : (computeTax(Math.max(0, n), rate, 'inclusive').taxCents as number);
+  });
+  const held = atRate.reduce((s, x) => s + x, 0);
+  if (held > 0 && stored <= held) return allocateDiscount(atRate, stored);
+  return allocateDiscount(
+    lineNets.map((n, i) => (rateOf(i) === null ? 0 : n)),
+    stored,
+  );
 }
 
 /**
@@ -65,6 +107,15 @@ export interface OrderSplit {
  * discount's split exactly as the till split it. Absent = every line (every
  * discount before 0.7.26). Part refunds are still spread over every line's
  * net, the delivery charge and the value deals included.
+ *
+ * `taxInside`: the order's tax-included lines (0057) and the tax inside them
+ * as it stored it (orders.included_tax_cents). Each such line's price holds
+ * its tax, so its value before tax is what is left after its discount share
+ * less its share of that stored tax (includedShares; in cash exactly
+ * net − (net − round(net × 10,000 ÷ (10,000 + rate))), pos-domain lineTaxOf),
+ * and the part refunds before tax are refunded × (what is left before tax) ÷
+ * total — the shift report's and Reports Overview's sales before tax, line by
+ * line. Absent, or no such line: every figure as before 0057.
  */
 export function splitOrderLines(
   lineTotalsCents: readonly number[],
@@ -72,6 +123,7 @@ export function splitOrderLines(
   totalCents: number,
   refundedCents: number,
   discountSkips?: readonly boolean[],
+  taxInside?: TaxInside,
 ): OrderSplit {
   // A discount more than the lines it may come off (only an older till
   // stores one) is split over every line, as that till split it.
@@ -82,25 +134,39 @@ export function splitOrderLines(
     discountCents,
   );
   const lineNets = lineTotalsCents.map((t, i) => t - (discounts[i] ?? 0));
-  const afterDiscount = lineNets.reduce((s, x) => s + x, 0);
+  const included = includedShares(lineNets, taxInside);
+  const beforeTax = lineNets.map((n, i) => n - (included[i] ?? 0));
+  const afterDiscount = beforeTax.reduce((s, x) => s + x, 0);
   const refundExTaxCents = totalCents > 0 && refundedCents > 0 ? mulDivRound(refundedCents, afterDiscount, totalCents) : 0;
-  const refunds = allocateDiscount(lineNets, refundExTaxCents);
-  const nets = lineNets.map((n, i) => n - (refunds[i] ?? 0));
-  return { discounts, refunds, nets, refundExTaxCents, salesExTaxCents: nets.reduce((s, x) => s + x, 0) };
+  const refunds = allocateDiscount(beforeTax, refundExTaxCents);
+  const nets = beforeTax.map((n, i) => n - (refunds[i] ?? 0));
+  return { discounts, included, refunds, nets, refundExTaxCents, salesExTaxCents: nets.reduce((s, x) => s + x, 0) };
 }
 
 /**
  * An order's sales before tax from its stored money alone — the same figure
  * as Σ splitOrderLines' nets when its lines add up to its stored subtotal
- * (they do: the till stores the subtotal from them). For the orders read
- * without their lines (a plain order's commission).
+ * (they do: the till stores the subtotal from them) and the tax inside its
+ * tax-included lines is the stored one. For the orders read without their
+ * lines (a plain order's commission).
  */
 export function orderSalesExTaxCents(m: OrderMoney): number {
   const sub = Math.max(0, m.subtotalCents);
   const disc = m.discountCents > 0 && sub > 0 ? Math.min(Math.round(m.discountCents), sub) : 0;
-  const afterDiscount = sub - disc;
+  const inside = Math.min(Math.max(0, Math.round(m.includedTaxCents ?? 0)), sub - disc);
+  const afterDiscount = sub - disc - inside;
   const refundExTax = m.totalCents > 0 && m.refundedCents > 0 ? mulDivRound(m.refundedCents, afterDiscount, m.totalCents) : 0;
   return afterDiscount - Math.min(refundExTax, afterDiscount);
+}
+
+/**
+ * A tax-included line's price before tax at its own rate (0057: the menu price the Costing page and
+ * "at menu price" figures work on): price − the tax inside it (pos-domain lineTaxOf, no discount).
+ * Absent rate: the price is before tax already (every other line).
+ */
+export function priceBeforeTaxCents(priceCents: number, taxInsideBps?: number | null): number {
+  if (taxInsideBps === undefined || taxInsideBps === null) return priceCents;
+  return priceCents - (computeTax(Math.max(0, priceCents), taxInsideBps, 'inclusive').taxCents as number);
 }
 
 // --------------------------------------------------------- payment fees --

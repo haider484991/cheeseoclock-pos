@@ -5,6 +5,7 @@ import {
   foodCostFlag,
   pickMix,
   plateCost,
+  priceBeforeTaxMc,
   priceToHitTarget,
   requiredPicks,
   type PlateGroup,
@@ -308,5 +309,38 @@ describe('price to hit the target', () => {
   it('an exact hit is not pushed up a step, and a zero target gives nothing', () => {
     expect(priceToHitTarget(30_000_000, 3000, 0, 1000)).toBe(100_000);
     expect(priceToHitTarget(30_000_000, 0, 0, 1000)).toBeNull();
+  });  it('a price that includes its tax (0057): the price to type is the one whose part before tax hits it', () => {
+    // Rs 609.42 at 30% before tax = Rs 2,031.40; with 15% inside it Rs 2,336.11 → Rs 2,340 (before tax Rs 2,034.78).
+    expect(priceToHitTarget(60_942_000, 3000, 0, 1000, 1500)).toBe(234_000);
+    expect(priceToHitTarget(60_942_000, 3000, 0, 1000, null)).toBe(204_000);
+    expect(priceToHitTarget(60_942_000, 3000, 10_000_000, 1000, 1500)).toBe(224_000);
+  });
+});
+
+describe('a price that includes its tax (0057): what it earns is worked on its part before tax', () => {
+  const medium = (over: Partial<PlateItemInput> = {}): PlateItemInput => ({
+    basePriceCents: 2000,
+    recipe: [line('dough', 200), line('cheese', 60), line('chicken', 40), line('onion', 10), line('box', 1)],
+    groups: [],
+    ...over,
+  });
+
+  it('Rs 23 with 15% inside is Rs 20 before tax: the same price, profit and food cost as Rs 20 with the tax on top', () => {
+    const inside = plateCost(medium({ basePriceCents: 2300, taxInsideBps: 1500 }), priceOf());
+    expect(inside).toMatchObject({ typicalCostCents: 500, typicalPriceCents: 2000, profitCents: 1500, foodCostBps: 2500 });
+    expect(priceBeforeTaxMc(2_300_000, 1500)).toBe(2_000_000);
+    expect(priceBeforeTaxMc(2_300_000)).toBe(2_300_000);
+  });
+
+  it('a paid extra on it holds its share of the tax too', () => {
+    const veg = veggieLovers();
+    const extra = (pc: ReturnType<typeof plateCost>) => pc.paidExtras.find((x) => x.option.id === 'extraCheese')!;
+    // Rs 1.50 with 15% inside: Rs 1.30 before tax; 40 g of cheese costs 80 paisa.
+    expect(extra(plateCost({ ...veg, taxInsideBps: 1500 }, priceOf())).marginCents).toBe(50);
+    expect(extra(plateCost(veg, priceOf())).marginCents).toBe(70);
+  });
+
+  it('an item without it (every item before 0057) reads exactly as before', () => {
+    expect(plateCost(medium({ taxInsideBps: null }), priceOf())).toEqual(plateCost(medium(), priceOf()));
   });
 });

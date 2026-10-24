@@ -33,14 +33,16 @@
  * discount (the shop's part only), which already holds it.
  *
  * Speed, as Food cost & stock (costing spec §6): orders with nothing to share
- * out (no discount, no part refund) that kept their cost are added up in SQL,
+ * out (no discount, no part refund, no tax inside a price) that kept their
+ * cost are added up in SQL,
  * a line's cost rows folded into one number by an indexed look-up
  * (idx_order_item_costs_line_part); only the others are read line by line,
  * each with its discount and part refunds shared out (pos-domain
  * splitOrderLines — the one allocation the till has; a delivery charge or a
  * value deal the discount's FROZEN rule left alone takes none of it, from the
  * rule on the discount row, the name the line was sold under and its own
- * never-discounted mark, never the live setting).
+ * never-discounted mark, never the live setting) and a tax-included line's
+ * share of the tax the order stored inside it (0057) taken out of its price.
  *
  * The waterfall: sales before tax − food cost of the sales whose cost is
  * known − the sales whose cost is NOT known (set aside, never costed at Rs 0)
@@ -204,10 +206,10 @@ export const PROFIT_PLAIN_SQL = `
 export const PROFIT_REST_SQL = `
   WITH ro AS MATERIALIZED (
          SELECT o.rowid AS oid, o.id AS id, o.discount_cents AS disc, o.tax_cents AS tax, o.total_cents AS tot, ${REFUNDED} AS ref,
-                o.mode AS mode, o.source AS source, ${AREA} AS area, ${DISCOUNT_ROW} AS drow
+                o.mode AS mode, o.source AS source, ${AREA} AS area, ${DISCOUNT_ROW} AS drow, o.included_tax_cents AS incl
            FROM orders o WHERE ${IN_RANGE} AND ${COUNTED} AND NOT ${PLAIN_KEPT})
   SELECT ro.oid AS oid, ro.id AS orderId, ro.disc AS disc, ro.tax AS tax, ro.tot AS tot, ro.ref AS ref, ro.mode AS mode, ro.source AS source, ro.area AS area,
-         ro.drow AS drow,
+         ro.drow AS drow, ro.incl AS incl,
          oi.id AS lineId, oi.created_at AS at,
          oi.menu_item_id AS itemId, oi.menu_item_name AS soldName, oi.quantity AS qty, oi.line_total_cents AS lineTotal,
          oi.tax_rate_bps_snapshot AS rate, oi.no_discount AS nd, oi.tax_included AS ti,
@@ -446,6 +448,7 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
     source: string;
     area: string | null;
     drow: string | null;
+    incl: number;
     lineId: string;
     at: string;
     itemId: string | null;
@@ -492,7 +495,15 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
         area: r.area,
         drow: r.drow,
         tax: Number(r.tax),
-        order: { discountCents: Number(r.disc), totalCents: Number(r.tot), refundedCents: Number(r.ref), lines: [], estimate: null },
+        order: {
+          discountCents: Number(r.disc),
+          totalCents: Number(r.tot),
+          refundedCents: Number(r.ref),
+          // The tax inside its tax-included lines as stored (0057), taken out of their sales.
+          ...(Number(r.incl ?? 0) > 0 ? { includedTaxCents: Number(r.incl) } : {}),
+          lines: [],
+          estimate: null,
+        },
         lines: [],
       };
       byOrder.set(oid, o);
@@ -512,6 +523,7 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
         costCents: c.cost,
         status: c.status,
         hasRecipeNow: r.itemId !== null && menu.withRecipe.has(r.itemId),
+        ...(Number(r.ti) === 1 ? { taxInsideBps: Number(r.rate) } : {}),
       },
       sold: {
         lineTotalCents: Number(r.lineTotal),
@@ -571,7 +583,8 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
       if (kept && !l.isFee && l.status === 'full') {
         it.knownUnits += l.quantity;
         it.knownSalesCents += net;
-        it.knownMenuSalesCents += l.lineTotalCents;
+        // At menu price before tax: a tax-included line's price less the tax inside it.
+        it.knownMenuSalesCents += r.menu[i] ?? l.lineTotalCents;
         it.costCents += l.costCents;
       }
     });

@@ -40,12 +40,14 @@ export interface WhatIfDishInput {
   unitsLast28: number;
   /** Its category's food-cost target (bps), for the price that hits it. */
   targetBps: number;
+  /** Its price holds its tax at this rate (0057; plate-cost PlateItemInput): worked on the price before tax. */
+  taxInsideBps?: number | null;
 }
 
 export interface WhatIfChanges {
   /** New prices to try, as a pack per ingredient. */
   packs: ReadonlyMap<string, Pack>;
-  /** New menu prices to try (the item's own price, before tax). */
+  /** New menu prices to try (the item's own price, as on the menu: before tax, or holding it for a price that includes it). */
   basePrices: ReadonlyMap<string, number>;
 }
 
@@ -122,7 +124,13 @@ export function whatIfWeekCents(unitsLast28: number, before: { priceMc: number; 
 /** One dish, before and with the changes (see the file comment). */
 export function whatIfDish(dish: WhatIfDishInput, prices: WhatIfPrices, changes: WhatIfChanges, stepCents: number): WhatIfDish {
   const newBase = changes.basePrices.get(dish.id) ?? dish.basePriceCents;
-  const input = { basePriceCents: dish.basePriceCents, recipe: dish.recipe, groups: dish.groups, mix: dish.mix };
+  const input = {
+    basePriceCents: dish.basePriceCents,
+    recipe: dish.recipe,
+    groups: dish.groups,
+    mix: dish.mix,
+    ...(typeof dish.taxInsideBps === 'number' ? { taxInsideBps: dish.taxInsideBps } : {}),
+  };
   const before = plateCost(input, priceOfPrices(prices.before));
   const after = prices.after === prices.before && newBase === dish.basePriceCents ? before : plateCost({ ...input, basePriceCents: newBase }, priceOfPrices(prices.after));
   const priceChanged = newBase !== dish.basePriceCents;
@@ -144,7 +152,10 @@ export function whatIfDish(dish: WhatIfDishInput, prices: WhatIfPrices, changes:
           before.typicalPriceMc - before.typicalCostMc,
         )
       : null,
-    priceToHitCents: after.hasRecipe && after.missingLines === 0 ? priceToHitTarget(after.typicalCostMc, dish.targetBps, after.groupsPriceMc, stepCents) : null,
+    priceToHitCents:
+      after.hasRecipe && after.missingLines === 0
+        ? priceToHitTarget(after.typicalCostMc, dish.targetBps, after.groupsPriceMc, stepCents, dish.taxInsideBps)
+        : null,
     changed,
   };
 }

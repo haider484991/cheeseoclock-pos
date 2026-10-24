@@ -94,6 +94,12 @@ export interface PlateItemInput {
   recipe: readonly RecipeLine[];
   groups: readonly PlateGroup[];
   mix?: PickMix | null;
+  /**
+   * Its price holds its tax (menu_items.price_includes_tax, 0057) at this rate (its tax category's,
+   * bps): what it earns and its food cost are worked on the price less the tax inside it. Absent or
+   * null: the tax is added on top, the price is before tax.
+   */
+  taxInsideBps?: number | null;
 }
 
 /** Below this many units sold in the window, the observed mix is not trusted. */
@@ -180,10 +186,13 @@ export interface PlateCost {
   typicalCostCents: number;
   minCostCents: number;
   maxCostCents: number;
-  /** base price + the usual paid picks of the required groups (ex-tax, as on the menu). */
+  /**
+   * base price + the usual paid picks of the required groups, before tax: as on the menu, or for a
+   * price that holds its tax (`taxInsideBps`) less the tax inside it.
+   */
   typicalPriceMc: number;
   typicalPriceCents: number;
-  /** Σ over the required groups of their usual price (what the base price does not include). */
+  /** Σ over the required groups of their usual price as on the menu (what the base price does not include). */
   groupsPriceMc: number;
   profitCents: number;
   foodCostBps: number | null;
@@ -328,9 +337,19 @@ function partsOf(t: Typical): PartCost[] {
   return [t.base, ...t.groups.flatMap((g) => g.options.map((oc) => oc.cost))];
 }
 
+/**
+ * A price (millicents) before tax: as it is, or for a price that holds its tax at `taxInsideBps`
+ * less the tax inside it (round(price × 10,000 ÷ (10,000 + rate)), pos-domain lineTaxOf's rule).
+ */
+export function priceBeforeTaxMc(priceMc: number, taxInsideBps?: number | null): number {
+  if (taxInsideBps === undefined || taxInsideBps === null) return priceMc;
+  return divRound(BigInt(priceMc) * 10_000n, BigInt(10_000 + taxInsideBps));
+}
+
 /** A dish's plate cost at today's prices (see the file comment). */
 export function plateCost(item: PlateItemInput, priceOf: PriceOf): PlateCost {
   const t = typicalPlate(item, priceOf, []);
+  const priceMc = priceBeforeTaxMc(t.priceMc, item.taxInsideBps);
   let missingLines = 0;
   let estimateLines = 0;
   const missingIngredientIds = new Set<string>();
@@ -360,12 +379,14 @@ export function plateCost(item: PlateItemInput, priceOf: PriceOf): PlateCost {
       }
       if (required || o.priceDeltaCents <= 0) continue;
       const cost = optionPart(item.recipe, o, [], priceOf);
+      // A paid extra on a price that holds its tax holds its own share of it too.
+      const extraMc = priceBeforeTaxMc(o.priceDeltaCents * 1000, item.taxInsideBps);
       paidExtras.push({
         option: o,
         groupName: g.name,
         cost,
-        marginCents: o.priceDeltaCents - cost.costCents,
-        foodCostBps: shareBps(cost.costMc, o.priceDeltaCents * 1000),
+        marginCents: mcToCents(extraMc) - cost.costCents,
+        foodCostBps: shareBps(cost.costMc, extraMc),
       });
     }
   }
@@ -378,11 +399,11 @@ export function plateCost(item: PlateItemInput, priceOf: PriceOf): PlateCost {
     typicalCostCents: mcToCents(t.costMc),
     minCostCents: mcToCents(t.minMc),
     maxCostCents: mcToCents(t.maxMc),
-    typicalPriceMc: t.priceMc,
-    typicalPriceCents: mcToCents(t.priceMc),
+    typicalPriceMc: priceMc,
+    typicalPriceCents: mcToCents(priceMc),
     groupsPriceMc: t.groupsPriceMc,
-    profitCents: mcToCents(t.priceMc - t.costMc),
-    foodCostBps: shareBps(t.costMc, t.priceMc),
+    profitCents: mcToCents(priceMc - t.costMc),
+    foodCostBps: shareBps(t.costMc, priceMc),
     missingLines,
     missingIngredientIds: [...missingIngredientIds],
     estimateLines,
@@ -423,11 +444,21 @@ export function foodCostFlag(
  * The menu price that brings a dish to its target (spec 4.3, shown with
  * profit.view later): P* = ceil_to_step(TPC ÷ T − Σ_g P_g). Null for a zero
  * target. Rs 609.42 at 30% → Rs 2,031.40 → Rs 2,040 with Rs 10 steps.
+ * `taxInsideBps`: the price holds its tax at that rate (0057), so the price
+ * to type is the one whose part before tax hits the target:
+ * ceil_to_step(TPC × (1 + rate) ÷ T − Σ_g P_g).
  */
-export function priceToHitTarget(typicalCostMc: number, targetBps: number, groupsPriceMc: number, stepCents: number): number | null {
+export function priceToHitTarget(
+  typicalCostMc: number,
+  targetBps: number,
+  groupsPriceMc: number,
+  stepCents: number,
+  taxInsideBps?: number | null,
+): number | null {
   if (!(targetBps > 0) || !(stepCents > 0)) return null;
-  // needed (mc) = TPC × 10,000 ÷ T − Σ P_g, then up to the next whole step.
-  const neededNum = BigInt(typicalCostMc) * 10_000n - BigInt(groupsPriceMc) * BigInt(targetBps);
+  // needed (mc) = TPC × 10,000 ÷ T − Σ P_g (× (10,000 + rate) ÷ 10,000 for a price holding its tax), then up to the next whole step.
+  const gross = BigInt(10_000 + (taxInsideBps ?? 0));
+  const neededNum = BigInt(typicalCostMc) * gross - BigInt(groupsPriceMc) * BigInt(targetBps);
   const neededDen = BigInt(targetBps);
   const stepMc = BigInt(stepCents) * 1000n;
   if (neededNum <= 0n) return 0;

@@ -185,7 +185,16 @@ function CostRow({
           </span>
         )}
       </td>
-      <td className="py-2 text-right font-mono" title={r.priceCents !== r.basePriceCents ? `Menu price ${formatCents(r.basePriceCents)} plus the usual paid picks` : undefined}>
+      <td
+        className="py-2 text-right font-mono"
+        title={
+          r.priceIncludesTax
+            ? `Before tax: the menu price ${formatCents(r.basePriceCents)} includes its tax`
+            : r.priceCents !== r.basePriceCents
+              ? `Menu price ${formatCents(r.basePriceCents)} plus the usual paid picks`
+              : undefined
+        }
+      >
         {formatCents(r.priceCents)}
       </td>
       <td className="py-2 text-right font-mono" title={range}>

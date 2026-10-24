@@ -1566,6 +1566,10 @@ function changeLines(b: EscPosBuilder, width: PrinterWidth, lines: ReadonlyArray
     b.bold(true).doubleHeight(true);
     b.wrappedText(`${it.quantity} x ${it.name}`, width);
     b.bold(false).doubleHeight(false);
+    // What a deal is made of, before its choices, as on the order's ticket.
+    if (it.contents) {
+      for (const ln of wrap(`Includes: ${it.contents}`, width - 4)) b.text(`    ${ln}`).newline();
+    }
     for (const m of it.modifiers.filter((n) => isLeaveOutChoice(n))) {
       b.bold(true);
       for (const ln of wrap(m.toUpperCase(), width - 4)) b.text(`    ${ln}`).newline();

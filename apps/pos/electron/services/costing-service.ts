@@ -25,6 +25,7 @@ import {
   mcToCents,
   mulDivRound,
   plateCost,
+  priceBeforeTaxMc,
   priceChangeBps,
   priceToHitTarget,
   resolveAlertSettings,
@@ -96,6 +97,8 @@ interface MenuItemRow {
   categoryId: string;
   basePriceCents: number;
   isActive: boolean;
+  /** Its price holds its tax (menu_items.price_includes_tax, 0057): its tax category's rate. Absent: tax on top. */
+  taxInsideBps?: number;
 }
 
 export interface MenuData {
@@ -160,16 +163,21 @@ export function loadMenu(db: AppDatabase): MenuData {
   const items = (
     db
       .prepare(
-        `SELECT id, name, category_id, base_price_cents, is_active FROM menu_items
-          WHERE deleted_at IS NULL ORDER BY sort_order, name`,
+        `SELECT mi.id, mi.name, mi.category_id, mi.base_price_cents, mi.is_active,
+                CASE WHEN mi.price_includes_tax = 1 THEN tc.rate_bps END AS tax_inside
+           FROM menu_items mi
+           LEFT JOIN tax_categories tc ON tc.id = mi.tax_category_id
+          WHERE mi.deleted_at IS NULL ORDER BY mi.sort_order, mi.name`,
       )
-      .all() as Array<{ id: string; name: string; category_id: string; base_price_cents: number; is_active: number }>
+      .all() as Array<{ id: string; name: string; category_id: string; base_price_cents: number; is_active: number; tax_inside: number | null }>
   ).map((r) => ({
     id: r.id,
     name: r.name,
     categoryId: r.category_id,
     basePriceCents: r.base_price_cents,
     isActive: r.is_active === 1,
+    // A price that holds its tax (0057) is costed on its part before tax.
+    ...(r.tax_inside !== null && r.tax_inside !== undefined ? { taxInsideBps: Number(r.tax_inside) } : {}),
   }));
 
   // The lines that can still apply: a live ingredient (the stock SQL joins
@@ -375,9 +383,15 @@ function plateOf(ctx: Ctx, item: MenuItemRow, recipe?: RecipeLine[]): PlateCost 
       recipe: recipe ?? ctx.menu.recipes.get(item.id) ?? [],
       groups: ctx.menu.groups.get(item.id) ?? [],
       mix: mixOf(ctx, item.id),
+      ...taxInsideOf(item),
     },
     ctx.priceOf,
   );
+}
+
+/** The item's tax-inside rate for plate-cost (0057), or nothing: every other item. */
+function taxInsideOf(item: MenuItemRow): { taxInsideBps?: number } {
+  return item.taxInsideBps !== undefined ? { taxInsideBps: item.taxInsideBps } : {};
 }
 
 function flagOf(ctx: Ctx, item: MenuItemRow, pc: PlateCost): FoodCostFlag {
@@ -398,6 +412,7 @@ function rowOf(ctx: Ctx, item: MenuItemRow, pc: PlateCost): MenuCostRow {
     isActive: item.isActive,
     basePriceCents: item.basePriceCents,
     priceCents: pc.typicalPriceCents,
+    ...(item.taxInsideBps !== undefined ? { priceIncludesTax: true as const } : {}),
     costCents: pc.typicalCostCents,
     minCostCents: pc.minCostCents,
     maxCostCents: pc.maxCostCents,
@@ -545,7 +560,9 @@ export function getItemCostSheet(db: AppDatabase, menuItemId: string, now = new 
     row: rowOf(ctx, item, pc),
     // profit.view's (costing spec 4.3): the costing handler leaves it out for anyone else (itemCostSheetForLogin).
     priceToHitCents:
-      t.nonFood || !pc.hasRecipe || pc.missingLines > 0 ? null : priceToHitTarget(pc.typicalCostMc, t.bps, pc.groupsPriceMc, ctx.priceStepCents),
+      t.nonFood || !pc.hasRecipe || pc.missingLines > 0
+        ? null
+        : priceToHitTarget(pc.typicalCostMc, t.bps, pc.groupsPriceMc, ctx.priceStepCents, item.taxInsideBps),
     always: lineViews(ctx, pc.base.lines, pc.typicalCostMc),
     alwaysCostCents: pc.base.costCents,
     groups: pc.groups.map((g) => ({
@@ -582,7 +599,8 @@ export function getItemCostSheet(db: AppDatabase, menuItemId: string, now = new 
           hasRecipe: x.cost.lines.length > 0,
           missingLines: x.cost.missingLines,
           costMc: x.cost.costMc,
-          priceMc: x.option.priceDeltaCents * 1000,
+          // On its part before tax, as its margin and food cost (a price that holds its tax, 0057).
+          priceMc: priceBeforeTaxMc(x.option.priceDeltaCents * 1000, item.taxInsideBps),
         },
         { ...t, amberBps: ctx.targets.amberBps },
       ),
@@ -929,6 +947,7 @@ export function getWhatIf(db: AppDatabase, req: WhatIfRequest, now = new Date())
         mix: mixOf(ctx, item.id),
         unitsLast28: soldLast28(ctx, item.id),
         targetBps: t.bps,
+        ...taxInsideOf(item),
       },
       prices,
       changes,
@@ -1047,6 +1066,7 @@ export function plateAt(ctx: CostingContext, item: MenuItemRow, priceOf: PriceOf
       recipe: ctx.menu.recipes.get(item.id) ?? [],
       groups: ctx.menu.groups.get(item.id) ?? [],
       mix,
+      ...taxInsideOf(item),
     },
     priceOf,
   );

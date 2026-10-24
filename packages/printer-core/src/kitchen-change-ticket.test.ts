@@ -115,6 +115,36 @@ describe('the kitchen CHANGE slip', () => {
     expect(text(change, { queuedAt: new Date(NOW.getTime() - 5 * 60_000) })).toContain('LATE - sent 19:47');
   });
 
+  it('a deal says what it is made of, under it and before its choices, as on the ticket; other lines print nothing more', () => {
+    const deal = {
+      name: 'Test Burger Deal',
+      quantity: 1,
+      modifiers: ['No onion', 'Cola'],
+      notes: null,
+      drink: false,
+      contents: '1 Test Crispy Burger + 1 Regular Fries + 345ml Drink',
+    };
+    const t = text({ ...change, added: [deal], removed: [{ ...deal, modifiers: [], name: 'Test Pizza Deal', contents: '2 Large test pizzas' }] });
+    const at = (s: string) => {
+      const i = t.indexOf(s);
+      expect(i, s).toBeGreaterThanOrEqual(0);
+      return i;
+    };
+    expect(at('1 x Test Burger Deal')).toBeLessThan(at('Includes: 1 Test Crispy Burger'));
+    expect(at('Includes: 1 Test Crispy Burger')).toBeLessThan(at('345ml Drink'));
+    expect(at('Includes: 1 Test Crispy Burger')).toBeLessThan(at('NO ONION'));
+    expect(at('NO ONION')).toBeLessThan(at('+ Cola'));
+    // What not to make says it too.
+    expect(at('REMOVE - DO NOT MAKE')).toBeLessThan(at('Includes: 2 Large test pizzas'));
+    // Wrapped under the line, indented, inside the paper.
+    for (const ln of t.split('\n').filter((l) => /Includes:|345ml/.test(l))) {
+      expect(ln.startsWith('    ')).toBe(true);
+      expect(ln.length).toBeLessThanOrEqual(48);
+    }
+    // A line with no contents (and a slip frozen before there were any) prints no Includes.
+    expect(text()).not.toContain('Includes:');
+  });
+
   it('is not the order ticket: the ticket itself is unchanged', () => {
     const ticket = escPosToText(renderKitchenTicket(order(), { now: NOW }));
     expect(ticket).not.toContain('ORDER CHANGED');

@@ -299,6 +299,11 @@ export interface KitchenChangeLine {
   notes: string | null;
   /** A drink (the bar, or a Drinks category): left off when this till leaves drinks off its tickets. */
   drink: boolean;
+  /**
+   * What a deal is made of, as the order's ticket prints it ("Includes: …", v0.7.52): its
+   * snapshot line's dealContents. Absent on every other line, and on a slip frozen before v0.7.53.
+   */
+  contents?: string;
 }
 
 /**

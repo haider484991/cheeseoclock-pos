@@ -80,6 +80,21 @@ function run(dish: WhatIfDishInput, c: WhatIfChanges) {
 }
 
 describe('What-if (costing spec 4.9)', () => {
+  it('a price that includes its tax (0057): the same week as the same price before tax, and the price to hit holds the tax', () => {
+    const c = change([['cheese', 1_000, 150_000]]);
+    const plain = run(PIZZA, c);
+    // Rs 1,150 with 15% inside it is the Rs 1,000 pizza before tax.
+    const inside = run({ ...PIZZA, basePriceCents: 115_000, taxInsideBps: 1_500 }, c);
+    expect(inside.before.typicalPriceCents).toBe(100_000);
+    expect(inside.weekCents).toBe(plain.weekCents);
+    // Rs 148 ÷ 0.3 × 1.15 = Rs 567.33 → Rs 570 in Rs 10 steps.
+    expect(inside.priceToHitCents).toBe(57_000);
+    // A new menu price tried on it is a price holding its tax too: Rs 1,265 is Rs 1,100 before tax.
+    const tried = run({ ...PIZZA, basePriceCents: 115_000, taxInsideBps: 1_500 }, change([], [['pizza', 126_500]]));
+    expect(tried.after.typicalPriceCents).toBe(110_000);
+    expect(tried.weekCents).toBe(run(PIZZA, change([], [['pizza', 110_000]])).weekCents);
+  });
+
   it('a dearer cheese flows through the Cheese Mix into every pizza made with it', () => {
     const c = change([['cheese', 1_000, 150_000]]);
     const prices = whatIfPrices(INGREDIENTS, BATCHES, c.packs);

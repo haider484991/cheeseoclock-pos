@@ -1575,7 +1575,14 @@ function kitchenChangeOf(
 ): KitchenChange {
   const line = (snap: OrderSnapshot, c: OrderEditChangeLine): KitchenChangeLine => {
     const it = snap.items.find((i) => i.id === c.lineId);
-    return { name: c.menuItemName, quantity: c.quantity, modifiers: c.modifiers, notes: c.notes, drink: it ? isDrinkLine(it) : false };
+    return {
+      name: c.menuItemName,
+      quantity: c.quantity,
+      modifiers: c.modifiers,
+      notes: c.notes,
+      drink: it ? isDrinkLine(it) : false,
+      ...(it?.dealContents ? { contents: it.dealContents } : {}),
+    };
   };
   const editNo = Number(
     (db.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'orders' AND entity_id = ? AND action = 'order_edit'`).get(orderId) as {
