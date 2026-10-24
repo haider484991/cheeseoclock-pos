@@ -36,6 +36,7 @@ import type { CartLine } from './cart';
 import type { PublicMenu } from './public-menu';
 import { withFooterCredit } from './__fixtures__/footer-credit';
 import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
+import { withDomainVerification } from './__fixtures__/domain-verification';
 import { goldenMenu } from './__fixtures__/golden-menu';
 import { MARKED_DEALS, dealsMarkedRoutes, goldenMenuDealsMarked, htmlWithDealsMarked } from './__fixtures__/no-discount';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
@@ -335,7 +336,8 @@ describe('the value deals marked: every page as v0.7.30 but the /menu chip', () 
     });
 
     it(`(${state}) every page’s title, description, canonical, Open Graph and Twitter blocks, and the root layout’s`, () => {
-      expect(now.metadata[state]).toEqual(golden.metadata[state]);
+      // The root layout's block gains Meta's domain-verification tag (2026-10-25, __fixtures__/domain-verification).
+      expect(now.metadata[state]).toEqual(withDomainVerification(golden.metadata[state]));
     });
 
     it(`(${state}) GET /api/menu gains only the three deals’ noDiscount`, () => {

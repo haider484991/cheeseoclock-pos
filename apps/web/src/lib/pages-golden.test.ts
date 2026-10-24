@@ -34,6 +34,8 @@
  *    under one line — the golden's /menu pages (b, c) and its four checkout
  *    states were swapped for the new ones, nothing else (the last test here
  *    spells out what came in).
+ *  - 2026-10-25: the root layout's metadata carries Meta's domain-verification
+ *    tag for cheeseoclock.net (__fixtures__/domain-verification.ts).
  * Apart from those, states (b) and (c) are the golden byte for byte.
  */
 import { createHash } from 'node:crypto';
@@ -46,6 +48,7 @@ import { goldenMenu } from './__fixtures__/golden-menu';
 import { MENU_PRICED_ROUTES, htmlWithMenuUnknown } from './__fixtures__/menu-unknown';
 import { FOOTER_CREDIT, withFooterCredit } from './__fixtures__/footer-credit';
 import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
+import { withDomainVerification } from './__fixtures__/domain-verification';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
 
 const db = vi.hoisted(() => ({
@@ -385,7 +388,8 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     });
 
     it(`(${state}) every page’s title, description, canonical, Open Graph and Twitter blocks, and the root layout’s`, () => {
-      expect(now.metadata[state]).toEqual(golden.metadata[state]);
+      // The root layout's block gains Meta's domain-verification tag (2026-10-25, __fixtures__/domain-verification).
+      expect(now.metadata[state]).toEqual(withDomainVerification(golden.metadata[state]));
     });
 
     it(`(${state}) the share images, the manifest, robots.txt and the sitemap`, () => {

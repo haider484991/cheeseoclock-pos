@@ -12,6 +12,7 @@ import {
 import { JsonLd, restaurantNode, webSiteNode, SITE_URL } from '@/lib/seo';
 import { MetaPixel } from '@/components/MetaPixel';
 import { ShopContactProvider } from '@/components/ordering/ShopContext';
+import { META_DOMAIN_VERIFICATION_METADATA } from '@/lib/meta-domain';
 import { META_PIXEL_ID } from '@/lib/meta-pixel';
 import { shopContactOf } from '@/lib/shop-facts';
 import { getCopyFacts, getMenuFacts, getShopFacts, getSiteFacts } from '@/lib/site-facts';
@@ -75,6 +76,8 @@ export async function generateMetadata(): Promise<Metadata> {
       description: copyText(SITE_SHORT_DESCRIPTION, facts),
     },
     robots: { index: true, follow: true },
+    // Meta domain verification for cheeseoclock.net (lib/meta-domain): in <head> on every page.
+    verification: META_DOMAIN_VERIFICATION_METADATA,
   };
 }
 
