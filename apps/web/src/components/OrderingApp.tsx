@@ -227,6 +227,9 @@ export function OrderingApp({
         // Keep the last known state; submitting is still guarded server-side.
       }
     }
+    // At once as well: the page itself is kept for up to a minute (app/menu/page.tsx), so what it was served may
+    // be that old.
+    void check();
     const id = setInterval(() => {
       if (document.visibilityState === 'visible') void check();
     }, 60_000);

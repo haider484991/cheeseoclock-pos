@@ -934,7 +934,7 @@ describe('every page follows the owner’s details', () => {
 // ===========================================================================
 
 describe('after the review: nothing today’s is cached over the owner’s, and every sentence stays true', () => {
-  it('a database error with nothing read yet: every page Next keeps throws (the last good page stays) — never today’s details and no prices kept for an hour; /menu still renders; after one good read, that one', async () => {
+  it('a database error with nothing read yet: every page Next keeps throws (the last good page stays) — never today’s details and no prices kept for an hour; after one good read, that one (and /menu, kept since 24 Oct, keeps its last good page while its menu can’t be read)', async () => {
     const m = goldenMenu();
     await publish(m, { settings: settingsBlock(m), shop: ownerShop() });
     // A cold server (nothing read yet): fresh modules.
@@ -964,14 +964,18 @@ describe('after the review: nothing today’s is cached over the owner’s, and 
         ['/_not-found', () => fresh.notFound.default()],
         ['/manifest.webmanifest', () => fresh.manifest.default()],
       ];
-      for (const [route, render] of kept) await expect(render(), route).rejects.toThrow(/could not read the owner’s settings and menu/);
-      // /menu is dynamic (never kept): today's details, as before, rather than fail.
-      await expect(fresh.menu.default()).resolves.toBeTruthy();
+      // /menu is kept too since 24 Oct 2026 (ISR, "the website's API is so slow"): it throws as the others do.
+      for (const [route, render] of [...kept, ['/menu', () => fresh.menu.default()] as [string, () => Promise<unknown>]]) {
+        await expect(render(), route).rejects.toThrow(/could not read the owner’s settings and menu/);
+      }
       // One good read, then a failure: the pages render from that read (the owner's), as before.
       db.fail = null;
       expect((await fresh.facts.getShopFacts()).profile.name).toBe('Test Kitchen');
       db.fail = new Error('connection refused');
       for (const [route, render] of kept) await expect(render(), route).resolves.toBeTruthy();
+      // /menu reads its menu (with the photos' stamps) itself: unreadable, it throws, so its last good page stays
+      // rather than "Menu coming right up" being kept for a minute.
+      await expect(fresh.menu.default()).rejects.toThrow('connection refused');
       expect((await fresh.facts.getShopFacts()).profile.name).toBe('Test Kitchen');
       expect(await fresh.manifest.default()).toMatchObject({ short_name: 'Test Kitchen' });
     } finally {

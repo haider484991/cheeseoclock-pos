@@ -1,4 +1,5 @@
 import { sql } from './db';
+import { probeThenCreate } from './schema-on-demand';
 
 /**
  * Columns added to web_orders for pickup orders. Created on demand as well as
@@ -10,7 +11,8 @@ let ready: Promise<void> | null = null;
 
 export function ensureWebOrderColumns(): Promise<void> {
   if (!ready) {
-    ready = (async () => {
+    // The newest column answers for the lot (schema-on-demand): one read per instance, the ALTERs only when it is missing.
+    ready = probeThenCreate(() => sql()`SELECT discount_parts_json FROM web_orders LIMIT 0`, async () => {
       await sql()`
         ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS fulfilment TEXT NOT NULL DEFAULT 'delivery'
       `;
@@ -30,7 +32,7 @@ export function ensureWebOrderColumns(): Promise<void> {
       await sql()`
         ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS discount_parts_json TEXT
       `;
-    })().catch((e) => {
+    }).catch((e) => {
       // Let the next call retry rather than caching the failure forever.
       ready = null;
       throw e;

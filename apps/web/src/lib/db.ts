@@ -21,5 +21,24 @@ if (process.env.NODE_ENV !== 'production' && process.env['DEV_NEON_ENDPOINT']) {
 export function sql() {
   const url = process.env['DATABASE_URL'];
   if (!url) throw new Error('DATABASE_URL is not configured');
+  logRegionsOnce(url);
   return neon(url, { fetchOptions: { cache: 'no-store' } });
+}
+
+/**
+ * Once per server instance, the runtime log says where the database and this function run (24 Oct 2026:
+ * every query is a round trip between them, so they belong in the same region). Only the region names, never
+ * the address or anything else in DATABASE_URL.
+ */
+let regionsLogged = false;
+function logRegionsOnce(url: string): void {
+  if (regionsLogged || process.env.NODE_ENV !== 'production') return;
+  regionsLogged = true;
+  let database = 'unknown';
+  try {
+    database = /\.([a-z]{2}-[a-z]+-\d)\.aws\.neon\.tech$/i.exec(new URL(url).hostname)?.[1] ?? 'unknown';
+  } catch {
+    // Not a URL: say nothing more about it.
+  }
+  console.warn(`regions: database ${database}, function ${process.env['VERCEL_REGION'] ?? 'unknown'}`);
 }

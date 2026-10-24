@@ -19,10 +19,9 @@ export const revalidate = 0;
  * key = no word, as from an older website: the page keeps what it was served).
  */
 export async function GET(): Promise<Response> {
-  // A /menu visitor after a deploy, as well as a till heartbeat: once per server instance, the
+  // A /menu visitor after a deploy, as well as a till heartbeat: once per deployment, the
   // kept pages the build rendered without the database are made stale (lib/deploy-refresh.ts).
-  refreshPagesAfterDeployOnce();
-  const [status, closedNotice] = await Promise.all([getStoreStatus(), readClosedNotice()]);
+  const [status, closedNotice] = await Promise.all([getStoreStatus(), readClosedNotice(), refreshPagesAfterDeployOnce()]);
   return Response.json(
     {
       ok: true,
@@ -39,6 +38,9 @@ export async function GET(): Promise<Response> {
         ...(closedNotice === undefined ? {} : { closedNotice }),
       },
     },
-    { headers: { 'Cache-Control': 'no-store' } },
+    // Shared by every open page for a few seconds (24 Oct 2026: each page asked the origin in Washington, ~1 s from
+    // Karachi). The checkout asks the database itself, so a page a few seconds behind never takes an order the
+    // till isn't watching.
+    { headers: { 'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=20' } },
   );
 }

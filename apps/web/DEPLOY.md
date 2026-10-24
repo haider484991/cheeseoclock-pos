@@ -298,7 +298,7 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   handler). `error.tsx` runs in the browser: the root layout hands it the
   owner's name and numbers (`ShopContactProvider`). Check with a build that
   the route table is unchanged (`○ /`, `○ /_not-found`, `● /delivery/[area]`,
-  `ƒ /menu`, `ƒ /track/[id]`), with no `DATABASE_URL`, and with one that
+  `○ /menu` (ISR, 60 s, since 24 Oct 2026), `ƒ /track/[id]`), with no `DATABASE_URL`, and with one that
   answers (a Neon branch, or a local stand-in) so the reads are made during
   the build. A `DATABASE_URL` that can't be reached now FAILS the build by
   design (see "A database the website can't read" below).
@@ -336,8 +336,10 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   with a `DATABASE_URL`) whose database can't be reached fails, and the
   live site stays on the last deploy — redeploy once Neon answers. A read
   that fails after one succeeded renders from that one (as before); no
-  `DATABASE_URL` at all builds today's site (without menu prices); `/menu`
-  and `/track` (dynamic) still render from today's details rather than fail.
+  `DATABASE_URL` at all builds today's site (without menu prices); `/track`
+  (dynamic) still renders from today's details rather than fail. `/menu` is
+  kept as well since 24 Oct 2026 and fails the same way (its own menu read
+  too, so a failed read never keeps "Menu coming right up").
 - **Prices, deals and tax from the menu (sweep B2).** No menu price is typed
   in the website's code any more: the home page's featured pizzas, burger and
   value deals (the owner's Home page card; today's five signature pizzas, the
@@ -728,3 +730,26 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
 - Vercel Hobby: 100GB bandwidth/mo, serverless functions included
 - Neon Free: 0.5GB storage, auto-suspends when idle (first request after idle
   takes ~1s extra — fine for a menu site)
+
+## Speed (24 Oct 2026: "the website's API is so slow")
+
+Measured from Karachi before the fix: `/menu` 1.3–2.6 s to first byte (rendered on every visit),
+`/api/store-status` 0.85–2.2 s (no-store), landing pages 2.8 s right after any new server
+instance (x-vercel-cache REVALIDATED). The functions run in `iad1` (Washington); the CDN edge
+that answers Karachi is `bom1` (Mumbai).
+
+- **Kept pages are refreshed once per deployment** (`lib/deploy-refresh.ts`, table
+  `site_deploy_refresh`), not once per server instance: every new instance used to wipe every
+  kept page again.
+- **`/menu` is kept (ISR, 60 s)** and refreshed by every till publish; the page asks
+  `/api/store-status` as soon as it opens, and the checkout checks the till on the server.
+- **`/api/store-status` is shared at the CDN for 10 s** (`s-maxage=10, stale-while-revalidate=20`).
+- **Tables made on demand read first** (`lib/schema-on-demand.ts`): store status, web order
+  columns and the rate limiter used to run 2–5 DDL statements one after another on each new
+  instance's first request; now one read (or one probe), and DDL only when Postgres says
+  something is missing.
+- **Where things run:** each instance logs `regions: database <neon region>, function <vercel
+  region>` once. If the database is not in or next to `iad1`, set the functions' region next to
+  it (Vercel → Settings → Functions, or `regions` in a `vercel.json`): every query is a round trip
+  between the two.
+

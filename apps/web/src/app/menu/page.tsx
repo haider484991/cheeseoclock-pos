@@ -9,7 +9,7 @@ import { JsonLd, menuNode, webPageNode } from '@/lib/seo';
 import { getStoreStatus } from '@/lib/store-status';
 import { publicMenu, withDealsForSale } from '@/lib/public-menu';
 import { lineOrderUrl, shopFactsFromBlock, shopHoursLine, whatsappLinesOf } from '@/lib/shop-facts';
-import { getShopFacts, parseStoredSettings, parseStoredShop } from '@/lib/site-facts';
+import { getShopFacts, parseStoredSettings, parseStoredShop, requireStoredFacts } from '@/lib/site-facts';
 import { closedNoticeInForce, type PublishedMenu } from '@cheeseoclock/shared-types';
 
 /** The description names the shop (the owner's name; today's with none stored). */
@@ -22,9 +22,15 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export const dynamic = 'force-dynamic';
-export const fetchCache = 'force-no-store';
-export const revalidate = 0;
+/**
+ * Kept by Next and the CDN (ISR), like the home page (24 Oct 2026: "the website's API is so slow" — rendered
+ * on every visit, /menu took 1.3–2.6 s from Karachi). A till's publish refreshes it at once (api/bridge/menu
+ * revalidates every page), and otherwise it is at most a minute old: whether the kitchen is taking orders, the
+ * pick-up % and the closed notice are asked again by the page itself as soon as it opens (OrderingApp), and the
+ * checkout checks them on the server whatever the page showed.
+ */
+export const dynamic = 'force-static';
+export const revalidate = 60;
 
 /**
  * Local preview only: `next dev` with DEV_MENU_FILE pointing at a published-
@@ -46,11 +52,17 @@ async function loadMenu(): Promise<PublishedMenu | null> {
     return rows[0]?.menu_json ?? null;
   } catch (e) {
     console.error('menu load failed', e);
+    // A kept page must not keep "Menu coming right up" for a minute because one read failed: throwing leaves the
+    // last good page in place (site-facts requireStoredFacts). No database at all (a build without one): the
+    // page's own words, as before, until the first heartbeat refreshes it.
+    if (process.env['DATABASE_URL']) throw e;
     return null;
   }
 }
 
 export default async function MenuPage() {
+  // As the other kept pages: the database unreadable with nothing read yet keeps the last good page.
+  await requireStoredFacts();
   const [menu, store] = await Promise.all([loadMenu(), getStoreStatus()]);
   const accepting = store.acceptingOrders;
   const pickupAvailable = store.pickupAvailable;
@@ -61,8 +73,8 @@ export default async function MenuPage() {
   // with this menu, else the built-in areas (as before any block).
   const block = parseStoredSettings(menu?.settings ?? null);
   const deliveryFacts = factsFromBlock(block);
-  // The owner's closed notice, worked out here per request (this page is dynamic): its last day
-  // ends on time. null = the page's own closed words, as before.
+  // The owner's closed notice as it stands at this render (the page asks again as it opens, so its last day
+  // ends on time). null = the page's own closed words, as before.
   const closedNotice = closedNoticeInForce(block?.closedNotice, Date.now());
   // Sent whole to the browser: the block's areas and pick-up only, never its device id or stamps — and no Buy 1 Get 1
   // deal while the owner has them switched off.

@@ -7,6 +7,7 @@ import {
   type WebsiteCategoryPercent,
 } from '@cheeseoclock/shared-types';
 import { sql } from './db';
+import { probeThenCreate, withSchema } from './schema-on-demand';
 
 /**
  * Whether the website may take orders right now.
@@ -193,7 +194,8 @@ export function evaluateStatus(
 let tableReady: Promise<void> | null = null;
 function ensureStatusTable(): Promise<void> {
   if (!tableReady) {
-    tableReady = (async () => {
+    // The newest column answers for the lot (schema-on-demand): one read, and the DDL only when it is missing.
+    tableReady = probeThenCreate(() => sql()`SELECT category_discount FROM store_status LIMIT 0`, async () => {
       await sql()`
         CREATE TABLE IF NOT EXISTS store_status (
           id               INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -218,7 +220,7 @@ function ensureStatusTable(): Promise<void> {
       await sql()`
         ALTER TABLE store_status ADD COLUMN IF NOT EXISTS category_discount BOOLEAN NOT NULL DEFAULT false
       `;
-    })().catch((e) => {
+    }).catch((e) => {
       // Let the next call retry rather than caching the failure forever.
       tableReady = null;
       throw e;
@@ -245,15 +247,15 @@ export async function getStoreStatus(): Promise<StoreStatus> {
     };
   }
   try {
-    await ensureStatusTable();
     // One read with the stored settings block's pick-up offer, so the two
     // can't disagree (fail-closed: if it can't be read, the shop is closed).
-    const rows = (await sql()`
+    // The read goes first; the table is made only if it is missing (schema-on-demand).
+    const rows = (await withSchema(ensureStatusTable, () => sql()`
       SELECT s.accepting_orders, s.updated_at, s.pickup, s.pickup_discount_pct, s.delivery_discount, s.category_discount,
              (SELECT m.menu_json -> 'settings' -> 'pickup' FROM site_menu m WHERE m.id = 1) AS settings_pickup
         FROM store_status s
        WHERE s.id = 1
-    `) as Array<{
+    `)) as Array<{
       accepting_orders: boolean;
       updated_at: string | Date;
       pickup: boolean;

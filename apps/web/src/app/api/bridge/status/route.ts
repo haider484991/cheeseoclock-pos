@@ -46,7 +46,7 @@ export async function PUT(req: Request): Promise<Response> {
     });
     // The first heartbeat after a deploy: the pages the build rendered without the database are
     // made stale, so the next visit shows the menu's prices and the owner's details (deploy-refresh).
-    refreshPagesAfterDeployOnce();
+    await refreshPagesAfterDeployOnce();
     return Response.json({ ok: true, data: status });
   } catch (e) {
     console.error('PUT /api/bridge/status failed', e);

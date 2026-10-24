@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { sql } from './db';
+import { probeThenCreate } from './schema-on-demand';
 
 /**
  * Flood protection for the public COD order endpoint.
@@ -64,7 +65,8 @@ export function clientIpHash(req: Request): string | null {
 let tableReady: Promise<void> | null = null;
 function ensureRateTable(): Promise<void> {
   if (!tableReady) {
-    tableReady = (async () => {
+    // One read per instance; the DDL only when the table is missing (schema-on-demand).
+    tableReady = probeThenCreate(() => sql()`SELECT 1 FROM order_rate_events LIMIT 0`, async () => {
       await sql()`
         CREATE TABLE IF NOT EXISTS order_rate_events (
           id         BIGSERIAL PRIMARY KEY,
@@ -76,7 +78,7 @@ function ensureRateTable(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_order_rate_events_ip
           ON order_rate_events(ip_hash, created_at)
       `;
-    })().catch((e: unknown) => {
+    }).catch((e: unknown) => {
       tableReady = null; // let the next request retry
       throw e;
     });

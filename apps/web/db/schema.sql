@@ -32,6 +32,14 @@ ALTER TABLE store_status ADD COLUMN IF NOT EXISTS delivery_discount BOOLEAN NOT 
 -- …and that it bills an order's discount parts (heartbeat 'category_discount', v0.7.50).
 ALTER TABLE store_status ADD COLUMN IF NOT EXISTS category_discount BOOLEAN NOT NULL DEFAULT false;
 
+-- One row per deployment whose kept pages were refreshed after the deploy
+-- (src/lib/deploy-refresh.ts): the first server instance claims it, so the
+-- others never wipe the pages again. Also created on demand.
+CREATE TABLE IF NOT EXISTS site_deploy_refresh (
+  deployment_id TEXT PRIMARY KEY,
+  refreshed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Orders placed on the website. The POS bridge polls status='new', imports
 -- each into the local SQLite (source='web'), acks with the POS order number,
 -- then pushes status updates as the order moves across the Live Orders board.

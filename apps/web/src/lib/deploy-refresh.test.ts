@@ -80,15 +80,55 @@ describe('refreshing the kept pages after a deploy', () => {
     expect(calls.revalidate).toEqual([]);
   });
 
-  it('a refresh that throws (outside a Next request) never breaks the heartbeat', () => {
+  it('a refresh that throws (outside a Next request) never breaks the heartbeat', async () => {
     const boom = () => {
       throw new Error('outside a request');
     };
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(refreshPagesAfterDeployOnce(boom)).toBe(false);
-    expect(refreshPagesAfterDeployOnce(boom)).toBe(false); // and it is not tried again on this instance
+    expect(await refreshPagesAfterDeployOnce(boom)).toBe(false);
+    expect(await refreshPagesAfterDeployOnce(boom)).toBe(false); // and it is not tried again on this instance
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
+  });
+
+  describe('on Vercel: once per deployment, not once per server instance', () => {
+    beforeEach(async () => {
+      process.env['COC_BUILT_WITH_DB'] = '0';
+      await (db.pg as unknown as PGlite).exec('DROP TABLE IF EXISTS site_deploy_refresh');
+    });
+    afterEach(() => {
+      delete process.env['VERCEL_DEPLOYMENT_ID'];
+    });
+
+    it('the first instance refreshes; a later instance of the same deployment leaves the pages alone', async () => {
+      process.env['VERCEL_DEPLOYMENT_ID'] = 'dpl_one';
+      expect((await heartbeat()).status).toBe(200);
+      expect(calls.revalidate).toEqual([['/', 'layout']]);
+      forgetDeployRefresh(); // a new instance of the same deployment
+      expect((await heartbeat()).status).toBe(200);
+      const storeStatus = await import('@/app/api/store-status/route');
+      forgetDeployRefresh();
+      expect((await storeStatus.GET()).status).toBe(200);
+      expect(calls.revalidate).toEqual([['/', 'layout']]);
+    });
+
+    it('the next deployment refreshes again (its table made on demand)', async () => {
+      process.env['VERCEL_DEPLOYMENT_ID'] = 'dpl_one';
+      await heartbeat();
+      forgetDeployRefresh();
+      process.env['VERCEL_DEPLOYMENT_ID'] = 'dpl_two';
+      await heartbeat();
+      expect(calls.revalidate).toEqual([['/', 'layout'], ['/', 'layout']]);
+    });
+
+    it('a claim that fails refreshes anyway, as every instance did before', async () => {
+      process.env['VERCEL_DEPLOYMENT_ID'] = 'dpl_one';
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const pages: string[] = [];
+      expect(await refreshPagesAfterDeployOnce((p) => pages.push(p), () => Promise.reject(new Error('neon down')))).toBe(true);
+      expect(pages).toEqual(['/']);
+      warn.mockRestore();
+    });
   });
 
   it('next.config.mjs tells the server whether the build had the database', () => {
