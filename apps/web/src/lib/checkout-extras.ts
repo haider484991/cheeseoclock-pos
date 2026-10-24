@@ -68,9 +68,10 @@ export function cleanSocial(raw: unknown): string | null {
 }
 
 /**
- * The order's notes: the map pin, then the social handle, then what the customer (and the checkout's own
- * reminders) wrote — all in one line, under `max`. When it does not fit, the end is cut: the pin and the handle
- * are first, so it is the customer's words that give way. Null when there is nothing to say.
+ * The order's notes: the shop's call-first warning, the map pin, then the social handle, then what the customer
+ * (and the checkout's own reminders) wrote — all in one line, under `max`. When it does not fit, the end is cut:
+ * the warning, the pin and the handle are first, so it is the customer's words that give way. Null when there is
+ * nothing to say.
  */
 export function composeNotes(
   parts: {
@@ -83,11 +84,17 @@ export function composeNotes(
      * name (the owner made it optional), "Buy 1 Get 1: ask to see the post".
      */
     buy1Get1?: boolean;
+    /**
+     * The shop's "CALL TO CONFIRM BEFORE COOKING" warning (lib/call-first, 24 Oct 2026): it leads everything, so the
+     * cap never cuts it and it is the first thing the till shows.
+     */
+    callFirst?: string | null;
   },
   max: number = ORDER_NOTES_MAX,
 ): string | null {
   const deal = parts.buy1Get1 === true;
   const head = [
+    parts.callFirst || null,
     deal ? buy1Get1NoteLine(parts.social) : null,
     parts.pin ? pinLine(parts.pin) : null,
     parts.social && !deal ? `Social: ${parts.social}` : null,

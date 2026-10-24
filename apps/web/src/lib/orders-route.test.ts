@@ -20,6 +20,7 @@ import {
   type WebOrderItem,
 } from '@cheeseoclock/shared-types';
 import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery-charge';
+import { normalizePhone } from './format';
 import type { CapiEvent } from './meta-capi';
 
 const db = vi.hoisted(() => ({
@@ -121,15 +122,32 @@ async function publish(m: PublishedMenu) {
   );
 }
 
+/**
+ * A website order delivered to this number two days ago: the shop knows it (lib/call-first), so its next order carries
+ * no "CALL TO CONFIRM BEFORE COOKING" warning. Outside the flood limiter's 15 minutes, and never pulled by a till.
+ */
+async function trustNumber(typed: string) {
+  await db.pg.query(
+    `INSERT INTO web_orders (id, status, customer_name, customer_phone, address_line, items_json,
+                             subtotal_cents, tax_cents, total_cents, created_at)
+     VALUES ($1, 'delivered', 'Regular', $2, 'House 1, Street 1', '[]', 0, 0, 0, now() - interval '2 days')`,
+    [crypto.randomUUID(), normalizePhone(typed)],
+  );
+}
+
 let ip = 0;
-async function place(body: Record<string, unknown>) {
+/** Places an order from a fresh number, one the shop has delivered to before unless `newCustomer`. */
+async function place(body: Record<string, unknown>, opts: { newCustomer?: boolean } = {}) {
+  ++ip;
+  const phone = typeof body['customerPhone'] === 'string' ? body['customerPhone'] : `0300 12345${String(ip).padStart(2, '0')}`;
+  if (!opts.newCustomer) await trustNumber(phone);
   const req = new Request('https://site.test/api/orders', {
     method: 'POST',
     // A fresh phone and client address per call keep the flood limiter out of the way.
-    headers: { 'content-type': 'application/json', 'x-forwarded-for': `10.0.0.${++ip}` },
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': `10.0.0.${ip}` },
     body: JSON.stringify({
       customerName: 'Test Customer',
-      customerPhone: `0300 12345${String(ip).padStart(2, '0')}`,
+      customerPhone: phone,
       addressLine: 'House 12, Street 4',
       items: [{ posItemId: 'fajita-l', quantity: 1, modifierIds: [] }],
       ...body,
@@ -791,6 +809,83 @@ describe('POST /api/orders — location pin and social handle (5 Oct 2026)', () 
     const row = await stored(r.json.data!.orderId);
     expect(row.notes).toBe('Social: @ahmed_k. Collecting at 9');
     expect(row.notes).not.toMatch(/maps\.google/);
+  });
+});
+
+describe('POST /api/orders — "CALL TO CONFIRM BEFORE COOKING" (user, 24 Oct 2026, lib/call-first)', () => {
+  const NEW = 'CALL TO CONFIRM BEFORE COOKING: new number';
+  const PIN = { lat: 24.80835364, lng: 67.06845187, accuracyM: 24.6 };
+  const PIN_LINE = 'Map pin: https://maps.google.com/?q=24.808354,67.068452 (about 25 m)';
+
+  beforeEach(async () => {
+    // The flood limiter's site-wide count is every order the tests above placed in the last 15 minutes. None of
+    // them matters here.
+    await db.pg.query('DELETE FROM web_orders', []);
+  });
+
+  async function setStatus(id: string, status: string) {
+    const res = await bridgeOrderStatus.POST(
+      bridge(`/api/bridge/orders/${id}/status`, { method: 'POST', body: { status } }),
+      { params: { id } },
+    );
+    expect(res.status).toBe(200);
+  }
+
+  it('order #4 as it came in: a new number and "ABC Road" lead the notes with both reasons; the order still goes through', async () => {
+    const r = await place(
+      { zoneId: 'dha-6', customerName: 'Rashid', customerPhone: '+923340020300', addressLine: 'ABC Road House No 99' },
+      { newCustomer: true },
+    );
+    expect(r.status).toBe(200);
+    expect((await stored(r.json.data!.orderId)).notes).toBe(`${NEW}; check the address ("ABC")`);
+  });
+
+  it('a new number with a real address: the one reason, then the customer’s words; the totals are untouched', async () => {
+    const known = await place({ zoneId: 'dha-6', notes: 'Ring twice' });
+    const r = await place({ zoneId: 'dha-6', notes: 'Ring twice' }, { newCustomer: true });
+    const row = await stored(r.json.data!.orderId);
+    expect(row.notes).toBe(`${NEW}. Ring twice`);
+    expect((await stored(known.json.data!.orderId)).notes).toBe('Ring twice');
+    expect(row.total_cents).toBe((await stored(known.json.data!.orderId)).total_cents);
+  });
+
+  it('the checkout’s own example number reads as made up', async () => {
+    const r = await place({ zoneId: 'dha-6', customerPhone: '0300 1234567' }, { newCustomer: true });
+    expect((await stored(r.json.data!.orderId)).notes).toBe(`${NEW}; check the number`);
+  });
+
+  it('once the till marks an order to the number delivered, its next order has no warning, whatever the address says', async () => {
+    const phone = '0321 7654301';
+    const first = await place({ zoneId: 'dha-6', customerPhone: phone }, { newCustomer: true });
+    expect((await stored(first.json.data!.orderId)).notes).toBe(NEW);
+    await setStatus(first.json.data!.orderId, 'delivered');
+    const next = await place({ zoneId: 'dha-6', customerPhone: phone, addressLine: 'ABC Road House No 99' }, { newCustomer: true });
+    expect((await stored(next.json.data!.orderId)).notes).toBeNull();
+  });
+
+  it('a cancelled order earns no trust: the next one from that number is flagged again', async () => {
+    const phone = '0321 7654302';
+    const first = await place({ zoneId: 'dha-6', customerPhone: phone }, { newCustomer: true });
+    await setStatus(first.json.data!.orderId, 'cancelled');
+    const next = await place({ zoneId: 'dha-6', customerPhone: phone }, { newCustomer: true });
+    expect((await stored(next.json.data!.orderId)).notes).toBe(NEW);
+  });
+
+  it('a pick-up from a new number: the warning, with no address to judge', async () => {
+    await heartbeat(['pickup']);
+    const r = await place({ fulfilment: 'pickup', addressLine: undefined, notes: 'Collecting at 9' }, { newCustomer: true });
+    expect(r.status).toBe(200);
+    expect((await stored(r.json.data!.orderId)).notes).toBe(`${NEW}. Collecting at 9`);
+  });
+
+  it('leads the pin and the handle, and the till’s cap never cuts it — the customer’s words give way', async () => {
+    const r = await place(
+      { zoneId: 'dha-6', locationPin: PIN, social: '@ahmed_k', notes: 'x'.repeat(500) },
+      { newCustomer: true },
+    );
+    const notes = (await stored(r.json.data!.orderId)).notes!;
+    expect(notes.startsWith(`${NEW}. ${PIN_LINE}. Social: @ahmed_k. x`)).toBe(true);
+    expect(notes.length).toBeLessThanOrEqual(490);
   });
 });
 

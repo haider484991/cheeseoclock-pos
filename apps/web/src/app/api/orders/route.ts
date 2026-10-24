@@ -8,6 +8,7 @@ import {
   outsideZoneMessage,
   zonePausedMessage,
 } from '@/lib/delivery-facts';
+import { callFirstLine } from '@/lib/call-first';
 import { composeNotes, cleanSocial, parsePin } from '@/lib/checkout-extras';
 import { feeItemIdsOf, zoneFeeItemFor } from '@/lib/delivery-zones';
 import { formatCents, normalizePhone } from '@/lib/format';
@@ -156,6 +157,23 @@ interface StoredTotals {
   discount_cents: number;
   tax_cents: number;
   total_cents: number;
+}
+
+/**
+ * The number has had a website order delivered (lib/call-first): the shop knows it is real. Fails open — a lookup
+ * that throws counts as trusted, so a bad moment in the database never puts a warning on a regular's order, nor
+ * stops one.
+ */
+async function hasDeliveredOrder(phone: string): Promise<boolean> {
+  try {
+    const rows = (await sql()`
+      SELECT 1 FROM web_orders WHERE customer_phone = ${phone} AND status = 'delivered' LIMIT 1
+    `) as unknown[];
+    return rows.length > 0;
+  } catch (e) {
+    console.error('delivered-order lookup failed — no call-first warning', e);
+    return true;
+  }
 }
 
 async function findExisting(id: string): Promise<StoredTotals | null> {
@@ -452,14 +470,22 @@ export async function POST(req: Request): Promise<Response> {
         orderNotes = orderNotes ? `${reminder}. ${orderNotes}` : reminder;
       }
     }
-    // The pin (a delivery's only) and the social handle go first, then the customer's own words. The till
-    // caps order notes at 500 and prefixes "[web] " — composeNotes stays under it (ORDER_NOTES_MAX 490) or the
+    // A number the shop has never delivered to, or a made-up-looking address or number: the notes lead with
+    // "CALL TO CONFIRM BEFORE COOKING" (lib/call-first, 24 Oct 2026). Never a reason to refuse.
+    const callFirst = callFirstLine({
+      trusted: await hasDeliveredOrder(phone),
+      phone,
+      address: pickup ? null : input.addressLine!.trim(),
+    });
+    // The warning, the pin (a delivery's only) and the social handle go first, then the customer's own words. The
+    // till caps order notes at 500 and prefixes "[web] " — composeNotes stays under it (ORDER_NOTES_MAX 490) or the
     // import fails validation and retries until it gives up; the customer's words are what gives way.
     orderNotes = composeNotes({
       pin: pickup ? null : parsePin(input.locationPin),
       social: cleanSocial(input.social),
       notes: orderNotes,
       buy1Get1,
+      callFirst,
     });
 
     // A pick-up's %, or (v0.7.37) the owner's % off a delivery's food — 0 unless the stored block

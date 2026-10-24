@@ -27,6 +27,7 @@ import {
 import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery-charge';
 import { getArea, renderArea } from './areas';
 import { DEFAULT_FACTS } from './delivery-facts';
+import { normalizePhone } from './format';
 
 const db = vi.hoisted(() => ({
   pg: null as unknown as { query: (t: string, v: unknown[]) => Promise<{ rows: unknown[] }> },
@@ -162,14 +163,25 @@ async function heartbeat(features?: string[], pickupDiscountPercent?: number) {
 }
 
 let ip = 0;
+/**
+ * Places an order from a fresh number the shop has delivered to before (a website order two days ago), so no
+ * "CALL TO CONFIRM BEFORE COOKING" warning joins the notes (lib/call-first; its own tests are in orders-route.test.ts).
+ */
 async function place(body: Record<string, unknown>) {
+  const phone = `0300 22345${String(++ip).padStart(2, '0')}`;
+  await db.pg.query(
+    `INSERT INTO web_orders (id, status, customer_name, customer_phone, address_line, items_json,
+                             subtotal_cents, tax_cents, total_cents, created_at)
+     VALUES ($1, 'delivered', 'Regular', $2, 'House 1, Street 1', '[]', 0, 0, 0, now() - interval '2 days')`,
+    [crypto.randomUUID(), normalizePhone(phone)],
+  );
   const res = await orders.POST(
     new Request('https://site.test/api/orders', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-forwarded-for': `10.1.0.${++ip}` },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': `10.1.0.${ip}` },
       body: JSON.stringify({
         customerName: 'Test Customer',
-        customerPhone: `0300 22345${String(ip).padStart(2, '0')}`,
+        customerPhone: phone,
         addressLine: 'House 1, Street 1',
         items: [{ posItemId: 'test-pizza', quantity: 1, modifierIds: [] }],
         ...body,
