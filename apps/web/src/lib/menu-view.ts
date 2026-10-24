@@ -372,8 +372,9 @@ export function shopPhotoFor(baseName: string): string | null {
 }
 
 /**
- * The deals' photos (public/images/deals): each deal's food exactly as the printed A4 deal menu draws it (24 Oct
- * 2026, cut out of that menu), keyed by the deal's name made plain (dealPhotoKey). The till's older names count too
+ * The deals' photos (public/images/deals): each deal's food from the printed A4 deal menu's cut-outs (24 Oct 2026;
+ * redrawn the same day so a two-pizza deal shows two different pizzas, at the sizes it holds — the main session's
+ * deal-art folder), keyed by the deal's name made plain (dealPhotoKey). The till's older names count too
  * ("Signature Cripsy Deal"), so the photo is there before and after the owner renames them. A deal with none here
  * gets no stand-in.
  */
@@ -389,6 +390,11 @@ const DEAL_PHOTOS: Record<string, string> = {
   'signature crispy': '/images/deals/signature-crispy.webp',
   'cheese dipped': '/images/deals/cheese-dipped.webp',
   'large free medium': '/images/deals/buy-1-get-1.webp',
+  // The till's older pizza deals, still on sale (24 Oct 2026, the user: "same pizza showing in double type pizzas …
+  // single pizza in the double pizzas deals"): two different pizzas each, the same size where the deal has two of it.
+  'big two': '/images/deals/big-two.webp',
+  'family feast': '/images/deals/family-feast.webp',
+  'perfect pair': '/images/deals/perfect-pair.webp',
   // Buy 1 Get 1's other two: the same cut-outs, laid out here.
   'large free burger or side': '/images/deals/large-free-burger.webp',
   'medium free side': '/images/deals/medium-free-side.webp',
@@ -546,6 +552,8 @@ export function dealWorthCents(
   // Box, Pizzas & Nuggets…): no saving shown, rather than one smaller than the real one (Pizzas & Nuggets showed a
   // saving counted from its pizzas and drink only).
   if (/\b(?:burgers?|nuggets?|fries|dips?|wings?|sides?)\b/i.test(deal.description ?? '')) return null;
+  // …or small drinks ("2 × 345 ml drinks", Cheese Partners): only a deal's 1 litre drink is priced below.
+  if (/\d\s*ml\b|\d\s*[×x]\s*\d/i.test(deal.description ?? '')) return null;
   const all = menu.categories.flatMap((c) => c.items);
   // Like with like (0057): a deal whose price includes its tax is weighed against what its contents cost with their
   // tax, when their own prices add it on the bill.

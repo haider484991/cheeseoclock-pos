@@ -242,6 +242,9 @@ describe('value deals', () => {
     expect(dealWorthCents(m, pizzasAndNuggets)).toBeNull();
     const megaBox = { ...familyFeast, name: 'Mega Cheese Box', description: 'Large + Medium regular pizza + Signature Crispy burger + Fries, 1 litre drink' };
     expect(dealWorthCents(m, megaBox)).toBeNull();
+    // Cheese Partners: its two small drinks can't be priced one by one either.
+    const cheesePartners = { ...familyFeast, name: 'Cheese Partners', description: 'Medium 9" regular pizza + 2 × 345 ml drinks' };
+    expect(dealWorthCents(m, cheesePartners)).toBeNull();
   });
 
   it('weighs a tax-included deal against its contents with their tax (0057)', () => {
@@ -421,7 +424,8 @@ describe('deals: photos, contents and one-tap add (24 Oct 2026)', () => {
     expect(dealPhotoKey('Large + Free Medium')).toBe('large free medium');
     expect(dealPhotoFor('Cheese Dipped Deal')).toBe('/images/deals/cheese-dipped.webp');
     expect(dealPhotoFor('Mega Cheese Box')).toBe('/images/deals/mega-cheese-box.webp');
-    expect(dealPhotoFor('Family Feast')).toBeNull();
+    expect(dealPhotoFor('Family Feast')).toBe('/images/deals/family-feast.webp');
+    expect(dealPhotoFor('Margherita Deal')).toBeNull();
   });
 
   it('gives deal cards their photo, and a burger of the same name in its own section none of a deal’s', () => {

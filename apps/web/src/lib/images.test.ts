@@ -27,7 +27,7 @@ describe('menuImageSrcSet', () => {
     const names = [
       'Mega Cheese Box', 'Double Large', 'Pizzas & Nuggets', 'Loaded Combo', 'Large & Chilled', 'Cheese Partners',
       'Burger Duo', 'Classic Crispy Deal', 'Signature Cripsy Deal', 'Cheese Dipped Deal', 'Large + Free Medium',
-      'Large + Free Burger or Side', 'Medium + Free Side',
+      'Large + Free Burger or Side', 'Medium + Free Side', 'Big Two', 'Family Feast', 'Perfect Pair',
     ];
     for (const name of names) {
       const src = dealPhotoFor(name);
@@ -36,7 +36,7 @@ describe('menuImageSrcSet', () => {
         expect(existsSync(new URL(`../../public${file}`, import.meta.url)), file).toBe(true);
       }
     }
-    expect(dealPhotoFor('Big Two')).toBeNull();
+    expect(dealPhotoFor('Margherita')).toBeNull();
   });
 
   it('has a small copy on disk for every photo the site shows', () => {
