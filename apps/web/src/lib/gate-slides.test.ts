@@ -1,6 +1,7 @@
+import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { PublishedMenuCategory, PublishedMenuItem } from '@cheeseoclock/shared-types';
-import { GATE_SLIDES_MAX, gateSlides } from './gate-slides';
+import { BUY_1_GET_1_PHOTO, FALLBACK_PHOTO, GATE_SLIDES_MAX, gatePhotoFor, gateSlides } from './gate-slides';
 
 let n = 0;
 function item(name: string, rupees: number, over: Partial<PublishedMenuItem> & { priceIncludesTax?: boolean } = {}): PublishedMenuItem {
@@ -71,7 +72,6 @@ describe('gateSlides', () => {
     for (const s of gateSlides(MENU, ON)) {
       expect(s.hook.en.length, s.name).toBeGreaterThan(8);
       expect(s.hook.ur.length, s.name).toBeGreaterThan(8);
-      expect(s.cutouts.length).toBeGreaterThan(0);
       expect(JSON.stringify(s)).not.toMatch(/pepsi|coke|coca/i);
     }
   });
@@ -106,5 +106,37 @@ describe('gateSlides', () => {
   it('nothing without a menu, or without deals', () => {
     expect(gateSlides(null, ON)).toEqual([]);
     expect(gateSlides({ categories: [MENU.categories[0]!] }, ON)).toEqual([]);
+  });
+});
+
+describe('every slide shows its own deal’s picture, and the picture is there', () => {
+  /** A picture's file in public/ (the site serves public/x as /x). */
+  const fileOf = (src: string) => new URL(`../../public${src}`, import.meta.url);
+
+  it('each deal on the 24 Oct menu has its own picture: the small one the deal cards use', () => {
+    const slides = gateSlides(MENU, ON);
+    expect(Object.fromEntries(slides.map((s) => [s.name, s.photo]))).toMatchObject({
+      'Mega Cheese Box': '/images/deals/sm/mega-cheese-box.webp',
+      'Double Large': '/images/deals/sm/double-large.webp',
+      'Pizzas & Nuggets': '/images/deals/sm/pizzas-and-nuggets.webp',
+      'Cheese Partners': '/images/deals/sm/cheese-partners.webp',
+      'Burger Duo': '/images/deals/sm/burger-duo.webp',
+      'Buy 1 Get 1 FREE': BUY_1_GET_1_PHOTO,
+    });
+  });
+
+  it('the deals sold before 24 Oct show their two pizzas, not one', () => {
+    for (const [name, file] of [['Big Two', 'big-two'], ['Family Feast', 'family-feast'], ['Perfect Pair', 'perfect-pair']] as const) {
+      expect(gatePhotoFor(name), name).toBe(`/images/gate/deals/${file}.webp`);
+    }
+    expect(gatePhotoFor('Midnight Feast')).toBe(FALLBACK_PHOTO);
+  });
+
+  it('no slide points at a file the site does not have (a 404 is a broken slide)', () => {
+    const old = { categories: [cat('Value Deals', [item('Big Two', 3600), item('Family Feast', 3100), item('Perfect Pair', 2600), item('Midnight Feast', 2500)])] };
+    const photos = new Set([...gateSlides(MENU, ON), ...gateSlides(old, ON)].map((s) => s.photo));
+    photos.add(FALLBACK_PHOTO);
+    photos.add(BUY_1_GET_1_PHOTO);
+    for (const src of photos) expect(existsSync(fileOf(src)), src).toBe(true);
   });
 });

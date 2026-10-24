@@ -451,6 +451,10 @@ function DealSlides({
 
   const slide = slides[at % count]!;
   const price = priceWords(slide.priceCents, slide.from, lang);
+  // A long hook ("Dopahar ki bhook? Ek ki price mein do.") steps down a size, so the price row stays on the card.
+  const hookLength = t(slide.hook).length;
+  const long = hookLength > 26;
+  const hookSize = hookLength > 32 ? 'text-[19px]' : long ? 'text-[21px]' : 'text-[23px]';
 
   return (
     <div
@@ -472,24 +476,26 @@ function DealSlides({
       {/* The warm spotlight behind the food (solid rings, as the printed deal menu). */}
       <div aria-hidden className="absolute -right-10 top-1/2 h-[260px] w-[260px] -translate-y-1/2 rounded-full bg-[#33271B]" />
       <div aria-hidden className="absolute -right-2 top-1/2 h-[200px] w-[200px] -translate-y-1/2 rounded-full bg-[#281F16]" />
-      <div key={slide.key} aria-hidden className="absolute right-0 top-0 h-full w-[48%] animate-fade-in">
-        {slide.cutouts.map((c, i) => (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            key={`${c.src}-${i}`}
-            src={c.src}
-            alt=""
-            loading={at === 0 ? 'eager' : 'lazy'}
-            decoding="async"
-            className="absolute drop-shadow-[0_8px_14px_rgba(0,0,0,0.55)]"
-            style={{ left: `${c.left}%`, top: `${c.top}%`, width: `${c.width}%`, transform: `rotate(${c.rotate}deg)` }}
-          />
-        ))}
+      {/* The deal's own picture (everything in it, as the deal menu draws it), large on the right, behind the words' edge. */}
+      <div key={slide.key} aria-hidden className="absolute right-1 top-0 flex h-full w-[58%] items-center animate-fade-in">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={slide.photo}
+          alt=""
+          loading={at === 0 ? 'eager' : 'lazy'}
+          decoding="async"
+          className="w-full drop-shadow-[0_8px_14px_rgba(0,0,0,0.55)]"
+        />
       </div>
-      <div key={`${slide.key}-words`} className="relative flex h-full w-[60%] flex-col justify-between p-3.5 animate-fade-in" aria-live="polite">
+      {/* The words sit on the card's own dark, fading out over the picture's edge, so a hook never runs over the food. */}
+      <div
+        key={`${slide.key}-words`}
+        className="relative flex h-full w-[62%] flex-col justify-between bg-[linear-gradient(90deg,#1A160F_0%,#1A160F_78%,rgba(26,22,15,0)_100%)] p-3.5 pr-5 animate-fade-in"
+        aria-live="polite"
+      >
         <div>
-          <p className="font-display text-[23px] leading-[1.02] tracking-wide text-cream">{t(slide.hook)}</p>
-          <p className="mt-1.5 line-clamp-2 text-[11.5px] leading-snug text-cream/70">{t(slide.line)}</p>
+          <p className={`font-display ${hookSize} leading-[1.02] tracking-wide text-cream`}>{t(slide.hook)}</p>
+          <p className={`mt-1.5 ${long ? 'line-clamp-1' : 'line-clamp-2'} text-[11.5px] leading-snug text-cream/70`}>{t(slide.line)}</p>
         </div>
         <div>
           <p className="truncate font-cond text-[12px] font-extrabold uppercase tracking-wide text-cheese">{slide.name}</p>
