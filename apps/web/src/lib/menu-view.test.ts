@@ -5,6 +5,7 @@ import {
   dealContents,
   dealPhotoFor,
   dealPhotoKey,
+  linkNamesDeal,
   dealWorthCents,
   groupLabel,
   isDealSection,
@@ -426,6 +427,23 @@ describe('deals: photos, contents and one-tap add (24 Oct 2026)', () => {
     expect(dealPhotoFor('Mega Cheese Box')).toBe('/images/deals/mega-cheese-box.webp');
     expect(dealPhotoFor('Family Feast')).toBe('/images/deals/family-feast.webp');
     expect(dealPhotoFor('Margherita Deal')).toBeNull();
+  });
+
+  it('an ad’s ?deal= link finds its deal however it spells it, and nothing else', () => {
+    for (const link of ['classic-crispy', 'classic-crispy-deal', 'Classic Crispy Deal']) expect(linkNamesDeal(link, 'Classic Crispy Deal'), link).toBe(true);
+    // The till's typo and the menu file's spelling, both ways round.
+    for (const link of ['signature-crispy', 'signature-crispy-deal', 'signature-cripsy-deal']) {
+      expect(linkNamesDeal(link, 'Signature Cripsy Deal'), link).toBe(true);
+      expect(linkNamesDeal(link, 'Signature Crispy Deal'), link).toBe(true);
+    }
+    expect(linkNamesDeal('pizzas-and-nuggets', 'Pizzas & Nuggets')).toBe(true);
+    expect(linkNamesDeal('large-and-chilled', 'Large & Chilled')).toBe(true);
+    expect(linkNamesDeal('large-free-medium', 'Large + Free Medium')).toBe(true);
+    // Another deal, a part of a name, or nothing at all: no card.
+    expect(linkNamesDeal('classic-crispy', 'Signature Cripsy Deal')).toBe(false);
+    expect(linkNamesDeal('double', 'Double Large')).toBe(false);
+    expect(linkNamesDeal('deal', 'Classic Crispy Deal')).toBe(false);
+    expect(linkNamesDeal('', 'Burger Duo')).toBe(false);
   });
 
   it('gives deal cards their photo, and a burger of the same name in its own section none of a deal’s', () => {

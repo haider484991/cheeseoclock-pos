@@ -29,6 +29,7 @@ import { taxBpsOf } from '@/lib/tax-words';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
 import {
   anchorFor,
+  linkNamesDeal,
   buildMenuView,
   cartDeals,
   dealContents,
@@ -432,8 +433,11 @@ export function OrderingApp({
       document.getElementById(id)?.scrollIntoView({ block: 'start', behavior: 'instant' });
     }
     const want = new URLSearchParams(window.location.search).get('deal');
-    const slug = want ? anchorFor(want) : '';
-    if (slug && sections.some((s) => isDealSection(s.name) && s.cards.some((c) => anchorFor(c.name) === slug))) {
+    const card = want
+      ? sections.filter((s) => isDealSection(s.name)).flatMap((s) => s.cards).find((c) => linkNamesDeal(want, c.name))
+      : undefined;
+    const slug = card ? anchorFor(card.name) : '';
+    if (slug) {
       document.getElementById(`deal-${slug}`)?.scrollIntoView({ block: 'center', behavior: 'instant' });
       setLitDeal(slug);
       const t = setTimeout(() => setLitDeal(null), 2600);

@@ -411,6 +411,16 @@ export function dealPhotoKey(name: string): string {
     .trim();
 }
 
+/**
+ * An ad's or a banner's "/menu?deal=…" names this deal, however the link spells it (24 Oct 2026): "classic-crispy" or
+ * "classic-crispy-deal", the till's "Cripsy" or "Crispy", "&" or "and" — so a link keeps finding its card through a
+ * till rename.
+ */
+export function linkNamesDeal(link: string, name: string): boolean {
+  const key = dealPhotoKey(link);
+  return key !== '' && key === dealPhotoKey(name);
+}
+
 export function dealPhotoFor(name: string): string | null {
   return DEAL_PHOTOS[dealPhotoKey(name)] ?? null;
 }
