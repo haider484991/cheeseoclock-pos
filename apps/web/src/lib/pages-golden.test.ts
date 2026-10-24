@@ -473,7 +473,8 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     // The /menu page in each state: no database → the WhatsApp fallback; a menu → the ordering app, open and closed.
     expect(golden.html[golden.pages['a']!['/menu']!]).toContain('Menu coming right up');
     expect(golden.html[golden.pages['b']!['/menu (open)']!]).toContain('The Menu');
-    expect(golden.html[golden.pages['b']!['/menu (closed)']!]).toContain('We’re not taking online orders right now');
+    // (24 Oct 2026: closed is one slim line under the header, the shop's hours in it, WhatsApp beside it.)
+    expect(golden.html[golden.pages['b']!['/menu (closed)']!]).toContain('Online orders closed (open daily · 1 pm – 1 am)');
     // The cleaner menu (20 Oct 2026: "too much information" in its header): the golden took the four /menu pages in —
     // one line of facts, the money off as chips, Buy 1 Get 1 as one line that opens to its rules, and the allergy
     // words after the last section; no "Order online · …" line and no tagline above the title.
@@ -504,6 +505,10 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
         expect(menuHtml, `${state} ${route}`).toContain('Master-crafted premium sauces');
         expect(menuHtml, `${state} ${route}`).toContain('Creamy, crispy &amp; authentic burgers');
         expect(menuHtml, `${state} ${route}`).not.toContain('Delivery Rs 200');
+        // The first screen (24 Oct 2026): a compact header — the title and the hook on one line — and, on a wide
+        // screen, the shop's pizza linking down to the value deals.
+        expect(menuHtml, `${state} ${route}`).toContain('src="/images/promise/pizza-peel-wide.webp"');
+        expect(menuHtml, `${state} ${route}`).toContain('href="#value-deals"');
       }
     }
     for (const [k, html] of Object.entries(golden.checkout)) {

@@ -75,8 +75,9 @@ import {
   writeStored,
   type LastOrder,
 } from '@/lib/device-memory';
+import { karachiClock, nextOpening, openByHours } from '@/lib/cheese-time';
 import { menuImageSrcSet } from '@/lib/images';
-import { DEALS_PRICE_PROMISE, OFFER_FINE_PRINT, OFFER_FINE_PRINT_TAX_INCLUDED, cardOffer, discountOnEveryOrder, offerSectionOf, regularPizzaPrices, type OfferPrice } from '@/lib/offers';
+import { DEALS_PRICE_PROMISE, OFFER_FINE_PRINT, OFFER_FINE_PRINT_TAX_INCLUDED, OFFER_HEADLINE, cardOffer, discountOnEveryOrder, offerSectionOf, regularPizzaPrices, type OfferPrice } from '@/lib/offers';
 import { onLocationChoice, readLocationChoice, type LocationChoice } from '@/lib/location-choice';
 import { pixel, type PixelLine } from '@/lib/meta-pixel';
 import { funnel, type AddHow } from '@/lib/funnel';
@@ -350,6 +351,11 @@ export function OrderingApp({
   // The Buy 1 Get 1 deals' own section, once the till has published one: the banner's button jumps there, and the
   // cards' strips say the free item comes in a deal.
   const buy1Get1Anchor = useMemo(() => sections.find((s) => isBuy1Get1Category(s.name))?.anchor ?? null, [sections]);
+  // The value deals' own section (24 Oct 2026): the header's pizza photo on a wide screen links down to it.
+  const valueDealsAnchor = useMemo(
+    () => sections.find((s) => isDealSection(s.name) && !isBuy1Get1Category(s.name))?.anchor ?? null,
+    [sections],
+  );
 
   const [cart, setCart] = useState<CartLine[]>([]);
   // `preset`: the choices the sheet starts with (a deal's first options; a one-tap line being changed).
@@ -657,7 +663,11 @@ export function OrderingApp({
         offerDealsAnchor={buy1Get1Anchor}
         offerWindow={dealRules.on ? dealWindow : null}
         ownPercentChips={ownPercentChips(pickupCats, deliveryCats, canPickup, categoryNames)}
+        valueDealsAnchor={valueDealsAnchor}
       />
+
+      {/* One slim line right under the header (24 Oct 2026), so the deals still start on the first screen. */}
+      {!open && <ClosedBanner notice={notice} />}
 
       {lastOrder && (
         <ReturningBanner
@@ -668,14 +678,13 @@ export function OrderingApp({
         />
       )}
 
-      {!open && <ClosedBanner notice={notice} />}
-
       <CategoryRail sections={railSections} />
 
       <div className="mx-auto max-w-6xl px-4 lg:grid lg:grid-cols-[1fr_22rem] lg:gap-8">
         <div>
-          {sections.map((s) => (
-            <section key={s.id} id={s.anchor} className="scroll-mt-36 pt-8" aria-labelledby={`${s.anchor}-title`}>
+          {sections.map((s, si) => (
+            // The first section sits close under the rail (24 Oct 2026: deals on the first screen).
+            <section key={s.id} id={s.anchor} className={`scroll-mt-36 ${si === 0 ? 'pt-4' : 'pt-8'}`} aria-labelledby={`${s.anchor}-title`}>
               <SectionTitle
                 id={`${s.anchor}-title`}
                 name={s.name}
@@ -940,7 +949,10 @@ function MenuHeader({
   offerDealsAnchor = null,
   offerWindow,
   ownPercentChips = [],
+  valueDealsAnchor = null,
 }: {
+  /** The value deals' section (the wide screen's pizza photo links down to it); null = no photo. */
+  valueDealsAnchor?: string | null;
   canPickup: boolean;
   pickupPct: number;
   /** The % off a delivery's food (v0.7.37); 0 = none. */
@@ -975,48 +987,81 @@ function MenuHeader({
   chips.push(...ownPercentChips);
   return (
     <div className="bg-ink text-cream">
-      <div className="mx-auto max-w-6xl px-4 pb-5 pt-6 md:pb-7 md:pt-8">
-        <div className="md:flex md:items-end md:justify-between md:gap-8">
-          <div>
-            <h1 className="font-display text-5xl uppercase leading-none tracking-wide md:text-6xl">The Menu</h1>
-            <p className="mt-2 font-cond text-xl font-extrabold uppercase leading-tight tracking-wide text-cheese">{MENU_HOOK}</p>
-            <p lang="ur-Latn" className="mt-0.5 text-sm font-semibold text-cream/70">
-              {MENU_HOOK_ROMAN_URDU}
-            </p>
+      {/* 24 Oct 2026 (the user: "nothing is showing any conversion attractiveness and value deals need to scroll"): a
+          compact header, so the deals' photos and prices are on the first screen of a phone; on a wide screen the
+          right half is the shop's own pizza, a link down to the deals. */}
+      <div className="mx-auto max-w-6xl px-4 py-4 md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] md:gap-8 md:py-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,30rem)]">
+        <div className="min-w-0 md:self-center">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 className="font-display text-[2rem] uppercase leading-none tracking-wide md:text-5xl">The Menu</h1>
+            <p className="font-cond text-base font-extrabold uppercase leading-tight tracking-wide text-cheese md:text-xl">{MENU_HOOK}</p>
           </div>
+          <p lang="ur-Latn" className="mt-1 text-[0.8rem] font-semibold text-cream/70 md:text-sm">
+            {MENU_HOOK_ROMAN_URDU}
+          </p>
           <ul
             aria-label="Hours and payment"
-            className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-cond text-[0.95rem] font-semibold leading-snug text-cream/80 md:mt-0 md:justify-end md:pb-1"
+            className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-cond text-sm font-semibold leading-snug text-cream/80 md:text-[0.95rem]"
           >
             <HeaderFact icon="clock">{hoursChip}</HeaderFact>
             <HeaderFact icon="cash">Cash on delivery</HeaderFact>
             {/* No delivery fee or area list here (user, 24 Oct 2026: "taking space"): the fee shows once the area is
                 chosen or found — on the cart bar and at the checkout. */}
           </ul>
+          {announcement && (
+            <p className="mt-3 flex w-fit max-w-2xl items-start gap-2 rounded-2xl border border-cheese/50 bg-cheese/10 px-3 py-2 font-cond text-base font-bold leading-snug text-cheese">
+              <span aria-hidden>★</span>
+              <span>{announcement}</span>
+            </p>
+          )}
+          {(chips.length > 0 || (offerWindow !== null && offerDealsAnchor)) && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 font-cond text-sm font-bold uppercase tracking-wide">
+              {chips.length > 0 && (
+                <ul aria-label="Money off online" className="contents">
+                  {chips.map((words) => (
+                    <li key={words} className={chip}>
+                      {words}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {/* Buy 1 Get 1 as one chip that jumps to its deals (its rules sit with them). */}
+              {offerWindow !== null && offerDealsAnchor && (
+                <a
+                  href={`#${offerDealsAnchor}`}
+                  aria-label={`${OFFER_HEADLINE}, ${offerWindow}: see the deals`}
+                  className="rounded-full bg-red-600 px-3 py-1 text-white transition-colors hover:bg-red-700"
+                >
+                  {OFFER_HEADLINE} · {offerWindow} <span aria-hidden>↓</span>
+                </a>
+              )}
+            </div>
+          )}
+          {/* No Buy 1 Get 1 deals on the menu yet: the line opens to the offer's rules, as before. */}
+          {offerWindow !== null && !offerDealsAnchor && (
+            <div className="mt-3 max-w-xl">
+              <OfferTeaser prices={offerPrices} where={offerWhere} window={offerWindow} dealsAnchor={null} />
+            </div>
+          )}
         </div>
-        {announcement && (
-          <p className="mt-4 flex w-fit max-w-2xl items-start gap-2 rounded-2xl border border-cheese/50 bg-cheese/10 px-4 py-2.5 font-cond text-lg font-bold leading-snug text-cheese">
-            <span aria-hidden>★</span>
-            <span>{announcement}</span>
-          </p>
-        )}
-        {(chips.length > 0 || offerWindow !== null) && (
-          <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            {chips.length > 0 && (
-              <ul aria-label="Money off online" className="flex flex-wrap gap-2 font-cond text-sm font-bold uppercase tracking-wide">
-                {chips.map((words) => (
-                  <li key={words} className={chip}>
-                    {words}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {offerWindow !== null && (
-              <div className="lg:w-[26rem] lg:shrink-0">
-                <OfferTeaser prices={offerPrices} where={offerWhere} window={offerWindow} dealsAnchor={offerDealsAnchor} />
-              </div>
-            )}
-          </div>
+        {valueDealsAnchor && (
+          <a
+            href={`#${valueDealsAnchor}`}
+            className="group relative hidden min-h-[13rem] overflow-hidden rounded-3xl md:block"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/images/promise/pizza-peel-wide.webp"
+              alt="A pizza on a wooden peel with fresh basil"
+              loading="lazy"
+              decoding="async"
+              className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 group-hover:scale-105"
+            />
+            <span aria-hidden className="absolute inset-0 bg-gradient-to-t from-ink/70 via-transparent to-transparent" />
+            <span className="absolute bottom-3 left-3 rounded-full bg-cheese px-4 py-2 font-cond text-base font-extrabold uppercase tracking-wide text-ink shadow-soft-md">
+              Value deals <span aria-hidden>↓</span>
+            </span>
+          </a>
         )}
       </div>
     </div>
@@ -1202,7 +1247,7 @@ function SectionTitle({
 }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1 border-b-[3px] border-ink pb-2">
-      <h2 id={id} className="font-display text-4xl uppercase leading-none tracking-wide text-ink md:text-5xl">
+      <h2 id={id} className="font-display text-3xl uppercase leading-none tracking-wide text-ink md:text-5xl">
         {name}
       </h2>
       {note && <p className="font-cond text-sm font-bold uppercase tracking-wider text-ink-muted">{note}</p>}
@@ -1730,35 +1775,54 @@ function CheeseDrip() {
  * the POS is switched off. The menu stays browsable and WhatsApp still works,
  * so an interested customer is redirected rather than turned away. The
  * owner's closed notice (v0.7.30), while there is one, replaces the
- * explanation; the heading and the WhatsApp buttons stay.
+ * explanation; the WhatsApp button stays.
+ *
+ * One slim line since 24 Oct 2026 (the user: the big block took the first screen from the deals): when the kitchen
+ * opens next by the shop's hours ("Kitchen opens at 1 pm", read on the phone's clock after the page opens — the
+ * page itself is kept for a minute), or that online orders are paused while it is open by its hours.
  */
 function ClosedBanner({ notice }: { notice: string | null }) {
   const shop = useShopFacts();
+  const [opens, setOpens] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    const c = karachiClock(new Date());
+    setOpens(openByHours(shop.hours, c.day, c.now) ? null : nextOpening(shop.hours, c.day, c.now));
+  }, [shop]);
+  // Served (before the clock is read): closed, with the shop's hours as they are set (the day names keep capitals).
+  const lead =
+    opens === undefined
+      ? `Online orders closed (${shopHoursInSentence(shop)})`
+      : opens === null
+        ? 'Online orders are paused right now'
+        : `Kitchen opens ${opens}`;
+  const line = whatsappLinesOf(shop)[0];
   return (
-    <div className="mx-auto mt-5 max-w-6xl px-4">
-      <div className="rounded-2xl border-2 border-ink bg-cheese p-4 text-ink">
-        <p className="font-display text-2xl uppercase tracking-wide">We&rsquo;re not taking online orders right now</p>
-        {notice ? (
-          <p className="mt-1 text-sm font-medium">{notice}</p>
-        ) : (
-          <p className="mt-1 text-sm font-medium">
-            The kitchen isn&rsquo;t accepting website orders at the moment ({shopHoursInSentence(shop)}). You can
-            still build your order here and send it to us on WhatsApp from &ldquo;View order&rdquo; — we reply fast.
-          </p>
+    <div role="status" className="border-b border-ink/10 bg-cheese text-ink">
+      <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-2">
+        <p className="min-w-0 flex-1 text-[0.85rem] leading-snug">
+          {notice ? (
+            <span className="line-clamp-2 font-semibold">{notice}</span>
+          ) : (
+            <>
+              <b className="font-cond text-[0.95rem] font-extrabold uppercase tracking-wide">{lead}</b>
+              <span className="font-medium"> · build your order now and send it on WhatsApp</span>
+            </>
+          )}
+        </p>
+        {line && (
+          <a
+            href={lineOrderUrl(shop, line)}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`WhatsApp ${line.display}`}
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-[#1FA855] px-3.5 py-2 font-cond text-sm font-extrabold uppercase tracking-wide text-white transition-transform hover:scale-105"
+          >
+            <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4 fill-current">
+              <path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1-.2.2-.6.8-.8 1-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.4.8 3.2.7.5-.1 1.5-.6 1.8-1.2.2-.6.2-1.1.1-1.2l-.4-.3z" />
+            </svg>
+            WhatsApp
+          </a>
         )}
-        <div className="mt-3 flex flex-wrap gap-2">
-          {whatsappLinesOf(shop).map((l) => (
-            <a
-              key={l.url}
-              href={lineOrderUrl(shop, l)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rounded-full bg-ink px-5 py-2.5 font-cond font-bold uppercase tracking-wide text-cheese transition-transform hover:scale-105"
-            >
-              WhatsApp {l.display}
-            </a>
-          ))}
-        </div>
       </div>
     </div>
   );

@@ -78,8 +78,8 @@ const DEALS_MENU = publicMenu({
   store: STORE,
 });
 
-/** Today's closed explanation on /menu (no notice). */
-const TODAY_CLOSED = 'The kitchen isn’t accepting website orders at the moment';
+/** Today's closed line on /menu as served (no notice; 24 Oct 2026: one slim line, the hours in it). */
+const TODAY_CLOSED = 'Online orders closed (open daily · 1 pm – 1 am)';
 
 function app(over: Partial<AppProps> = {}): string {
   const props: AppProps = {
@@ -94,12 +94,11 @@ function app(over: Partial<AppProps> = {}): string {
 }
 
 describe('/menu as served', () => {
-  it('closed with the owner’s notice: the banner says the notice instead of the explanation; its heading and WhatsApp stay', () => {
+  it('closed with the owner’s notice: the line says the notice instead of the shop’s words; WhatsApp stays', () => {
     const html = app({ closedNotice: 'Test closed for a holiday until Monday' });
     expect(html).toContain('Test closed for a holiday until Monday');
     expect(html).not.toContain(TODAY_CLOSED);
-    expect(html).toContain('not taking online orders right now');
-    expect(html).toMatch(/wa\.me|whatsapp/i);
+    expect(html).toMatch(/aria-label="WhatsApp 0300 9367865"[^>]*>/);
   });
 
   it('closed with no notice: today’s words', () => {
