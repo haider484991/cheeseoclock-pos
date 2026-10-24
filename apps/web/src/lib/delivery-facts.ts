@@ -206,6 +206,17 @@ export function feeRangeOfFees(fees: readonly number[]): string {
   return min === max ? formatCents(min) : `${formatCents(min)}–${formatCents(max).replace(/^Rs\s*/, '')}`;
 }
 
+/**
+ * The longest an order takes from the kitchen to the door, in minutes, by the area's group (the user, 24 Oct 2026:
+ * "40 mints is max from prep to delvered in dha clifton"; the farther areas — Abysinya, Brooks Chowrangi — get ten
+ * more). Shown once the area is known: the cart bar and the checkout ("within 40 min").
+ */
+export const DELIVERY_MAX_MINUTES = { near: 40, far: 50 } as const;
+
+export function deliveryMaxMinutes(zone: Pick<FactZone, 'group' | 'name'>): number {
+  return /\b(dha|clifton)\b/i.test(`${zone.group} ${zone.name}`) ? DELIVERY_MAX_MINUTES.near : DELIVERY_MAX_MINUTES.far;
+}
+
 /** The fee range the site advertises: the areas on now; '' while every one is paused (no fee is named for an area switched off). */
 export function deliveryFeeRange(facts: SiteFacts): string {
   return feeRangeOfFees(activeZones(facts).map((z) => z.feeCents));

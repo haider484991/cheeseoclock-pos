@@ -481,7 +481,8 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
       for (const route of ['/menu (open)', '/menu (closed)']) {
         const menuHtml = golden.html[golden.pages[state]![route]!]!;
         const header = menuHtml.slice(menuHtml.indexOf('The Menu</h1>'), menuHtml.indexOf('aria-label="Menu sections"'));
-        expect(header, `${state} ${route}`).toContain('<ul aria-label="Hours, payment and delivery"');
+        // (24 Oct 2026: hours and payment only — the delivery fee went to the cart bar and the checkout.)
+        expect(header, `${state} ${route}`).toContain('<ul aria-label="Hours and payment"');
         expect(header, `${state} ${route}`).toContain('<details class="group');
         expect(header, `${state} ${route}`).not.toContain('Hygienically Made');
         expect(menuHtml, `${state} ${route}`).not.toContain('Order online · ');
@@ -499,6 +500,10 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
         expect(menuHtml, `${state} ${route}`).toContain('lang="ur-Latn"');
         expect(menuHtml, `${state} ${route}`).toContain('id="deal-big-two"');
         expect(menuHtml, `${state} ${route}`).toContain('aria-label="Choose options for Big Two');
+        // The owner's brand lines: the pizzas' three under the first pizza section's title, the burgers' one on theirs.
+        expect(menuHtml, `${state} ${route}`).toContain('Master-crafted premium sauces');
+        expect(menuHtml, `${state} ${route}`).toContain('Creamy, crispy &amp; authentic burgers');
+        expect(menuHtml, `${state} ${route}`).not.toContain('Delivery Rs 200');
       }
     }
     for (const [k, html] of Object.entries(golden.checkout)) {

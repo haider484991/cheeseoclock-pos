@@ -6,14 +6,24 @@ import { useRouter } from 'next/navigation';
 import { formatCents } from '@/lib/format';
 import {
   copyText,
-  deliveryChip,
   deliveryFeeRange,
+  deliveryMaxMinutes,
   deliveryOptionNote,
   findFactZone,
   type SiteFacts,
 } from '@/lib/delivery-facts';
 import { feeItemIdsOf, zoneFeeItemFor } from '@/lib/delivery-zones';
-import { MENU_FOOT_LINE, MENU_HEADER_HOURS, MENU_HOOK, MENU_HOOK_ROMAN_URDU, MENU_OFFER_WHERE } from '@/lib/page-copy';
+import {
+  BURGER_PROMISE,
+  MENU_FOOT_LINE,
+  MENU_HEADER_HOURS,
+  MENU_HOOK,
+  MENU_HOOK_ROMAN_URDU,
+  MENU_OFFER_WHERE,
+  PIZZA_PROMISE,
+  PIZZA_PROMISE_KICKER,
+  PIZZA_PROMISE_ROMAN_URDU,
+} from '@/lib/page-copy';
 import { DEFAULT_SHOP_FACTS, lineOrderUrl, orderWhatsappUrl, shopHoursInSentence, whatsappLinesOf, type ShopFacts } from '@/lib/shop-facts';
 import { taxBpsOf } from '@/lib/tax-words';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
@@ -327,6 +337,15 @@ export function OrderingApp({
     () => new Set(sections.filter((s) => !isDealSection(s.name) && isSmallSection(s.cards)).map((s) => s.id)),
     [sections],
   );
+  // Where the brand promise stands (24 Oct 2026): the pizza lines under the first pizza section's title, the burger
+  // line under the burgers' — never in a deals section.
+  const promiseSections = useMemo(() => {
+    const food = sections.filter((s) => !isDealSection(s.name));
+    return {
+      pizza: food.find((s) => /pizza/i.test(s.name))?.id ?? null,
+      burger: food.find((s) => /burger/i.test(s.name))?.id ?? null,
+    };
+  }, [sections]);
   // The Buy 1 Get 1 deals' own section, once the till has published one: the banner's button jumps there, and the
   // cards' strips say the free item comes in a deal.
   const buy1Get1Anchor = useMemo(() => sections.find((s) => isBuy1Get1Category(s.name))?.anchor ?? null, [sections]);
@@ -619,7 +638,6 @@ export function OrderingApp({
         pickupPct={pickupPct}
         deliveryPct={deliveryPct}
         notOnDeals={notOnDeals}
-        deliveryChip={deliveryChip(deliveryFacts)}
         hoursChip={copyText(MENU_HEADER_HOURS, { ...deliveryFacts, shop })}
         announcement={deliveryFacts.announcement}
         offerPrices={offerPrices}
@@ -659,6 +677,8 @@ export function OrderingApp({
                     : null
                 }
               />
+              {s.id === promiseSections.pizza && <PizzaPromise />}
+              {s.id === promiseSections.burger && <BurgerPromise />}
               {/* Deals two to a row on a phone too (24 Oct 2026), like the printed deal menu's grid: photos, not a long scroll. */}
               <div
                 className={`mt-4 grid gap-3 ${
@@ -725,17 +745,19 @@ export function OrderingApp({
         </aside>
       </div>
 
-      {/* Cart — mobile bottom bar. Since 24 Oct 2026 it says what delivery adds (the area's fee once known, else the
-          range), so the total never jumps by a charge the customer was not shown. */}
+      {/* Cart — mobile bottom bar. Since 24 Oct 2026, once the area is known (chosen, remembered on this phone, or
+          found by the location pop-up) it says what delivery adds, so the total never jumps by a charge the customer
+          was not shown; with no area yet, the checkout asks for it and shows the fee there (user: no fee range on
+          the menu, it takes space). */}
       {cartCount > 0 && (
-        <div className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t border-ink/10 bg-paper/95 px-3 pt-2 backdrop-blur lg:hidden">
-          <p className="mb-1.5 truncate text-center font-cond text-xs font-bold uppercase tracking-wide text-ink-muted">
-            {pickup
-              ? `Pick-up · ${shop.profile.address.street}`
-              : zone
-                ? `Delivery to ${zone.name} · ${formatCents(zone.feeCents)} in the total`
-                : `+ delivery ${feeRange} · choose your area next`}
-          </p>
+        <div className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t border-ink/10 bg-paper/95 px-3 pt-3 backdrop-blur lg:hidden">
+          {(pickup || zone) && (
+            <p className="-mt-1 mb-1.5 truncate text-center font-cond text-xs font-bold uppercase tracking-wide text-ink-muted">
+              {zone
+                ? `${zone.name} · ${formatCents(zone.feeCents)} delivery · within ${deliveryMaxMinutes(zone)} min`
+                : `Pick-up · ${shop.profile.address.street}`}
+            </p>
+          )}
           <button
             type="button"
             onClick={openCheckout}
@@ -896,7 +918,6 @@ function MenuHeader({
   pickupPct,
   deliveryPct = 0,
   notOnDeals,
-  deliveryChip,
   hoursChip,
   announcement,
   offerPrices,
@@ -911,7 +932,6 @@ function MenuHeader({
   deliveryPct?: number;
   /** The menu marks value deals (lib/menu-view menuHasNoDiscountItems): the % chip says they are left out. */
   notOnDeals: boolean;
-  deliveryChip: string;
   /** The hours (page-copy MENU_HEADER_HOURS): with the days unless the shop opens every day. */
   hoursChip: string;
   /** The owner's announcement while it is on (plain text, never markup), else null: nothing shows. */
@@ -950,15 +970,13 @@ function MenuHeader({
             </p>
           </div>
           <ul
-            aria-label="Hours, payment and delivery"
+            aria-label="Hours and payment"
             className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-cond text-[0.95rem] font-semibold leading-snug text-cream/80 md:mt-0 md:justify-end md:pb-1"
           >
             <HeaderFact icon="clock">{hoursChip}</HeaderFact>
             <HeaderFact icon="cash">Cash on delivery</HeaderFact>
-            {/* The till's area names as places ("Brooks Churangi"), as the old all-capitals chip showed them. */}
-            <HeaderFact icon="pin" className="capitalize">
-              {deliveryChip}
-            </HeaderFact>
+            {/* No delivery fee or area list here (user, 24 Oct 2026: "taking space"): the fee shows once the area is
+                chosen or found — on the cart bar and at the checkout. */}
           </ul>
         </div>
         {announcement && (
@@ -996,7 +1014,7 @@ function HeaderFact({
   className = '',
   children,
 }: {
-  icon: 'clock' | 'cash' | 'pin';
+  icon: 'clock' | 'cash';
   className?: string;
   children: React.ReactNode;
 }) {
@@ -1022,12 +1040,6 @@ function HeaderFact({
           <>
             <rect x="2.5" y="6" width="19" height="12" rx="2" />
             <circle cx="12" cy="12" r="2.5" />
-          </>
-        )}
-        {icon === 'pin' && (
-          <>
-            <path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z" />
-            <circle cx="12" cy="10" r="2.5" />
           </>
         )}
       </svg>
@@ -1246,7 +1258,8 @@ function VariantButtons({
     <div className={sized ? 'grid grid-cols-2 gap-2' : 'flex flex-wrap items-center gap-2'}>
       {card.variants.map((v, i) => {
         const inCart = qtyByItem.get(v.item.posItemId) ?? 0;
-        const hasChoices = v.item.modifierGroups.length > 0;
+        // "›" only when a tap opens the sheet (a choice that matters, lib/menu-view quickPicks); "+" adds at once.
+        const hasChoices = quickPicks(v.item) === null;
         const was = v.item.basePriceCents;
         // A size the till marked "no discount" keeps its menu price.
         const now = v.item.noDiscount === true ? was : (cuts?.[i]?.nowCents ?? was);
@@ -1579,6 +1592,107 @@ const DealCard = memo(function DealCard({
     </article>
   );
 });
+
+/**
+ * The brand promise above the pizzas (24 Oct 2026, the owner's three lines as the A4 deal menu prints them): one dark
+ * card, the shop's own photo of a pizza's golden crust, the lines in big type beside gold medallions — and one line in
+ * Roman Urdu. Premium means quiet: no price, no button, nothing else.
+ */
+function PizzaPromise() {
+  return (
+    <aside aria-label={PIZZA_PROMISE_KICKER} className="mt-4 overflow-hidden rounded-3xl bg-ink text-cream shadow-soft-md sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+      <div className="relative aspect-[16/9] sm:aspect-auto">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/images/promise/pizza-crust.webp"
+          srcSet="/images/promise/sm/pizza-crust.webp 480w, /images/promise/pizza-crust.webp 960w"
+          sizes="(min-width: 640px) 45vw, 92vw"
+          alt="A pizza on a wooden board, its golden crust up close"
+          loading="lazy"
+          decoding="async"
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+        <div aria-hidden className="absolute inset-0 bg-gradient-to-t from-ink via-ink/10 to-transparent sm:bg-gradient-to-r sm:from-transparent sm:via-transparent sm:to-ink" />
+      </div>
+      <div className="relative -mt-8 px-5 pb-6 sm:mt-0 sm:px-7 sm:py-7">
+        <p className="font-cond text-xs font-extrabold uppercase tracking-[0.3em] text-cheese">{PIZZA_PROMISE_KICKER}</p>
+        <ul className="mt-3 space-y-3.5">
+          {PIZZA_PROMISE.map((p) => (
+            <li key={p.title} className="flex items-center gap-3.5">
+              <PromiseIcon kind={p.icon} />
+              <span className="min-w-0">
+                <span className="block font-display text-[1.45rem] uppercase leading-none tracking-wide text-cream sm:text-[1.7rem]">{p.title}</span>
+                <span className="mt-1 block text-sm italic text-cheese/90">{p.line}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+        <p lang="ur-Latn" className="mt-4 border-t border-cream/10 pt-3 font-cond text-base font-bold uppercase tracking-wider text-cream/70">
+          {PIZZA_PROMISE_ROMAN_URDU}
+        </p>
+      </div>
+    </aside>
+  );
+}
+
+/** The burgers' promise (24 Oct 2026, the owner's line): the shop's own photo of a crispy fillet in its brioche bun. */
+function BurgerPromise() {
+  return (
+    <aside aria-label={BURGER_PROMISE.title} className="relative mt-4 overflow-hidden rounded-3xl bg-ink text-cream shadow-soft-md">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/images/promise/burger-brioche.webp"
+        srcSet="/images/promise/sm/burger-brioche.webp 480w, /images/promise/burger-brioche.webp 960w"
+        sizes="(min-width: 1024px) 640px, 92vw"
+        alt="A crispy chicken burger with melted cheese in a brioche bun, up close"
+        loading="lazy"
+        decoding="async"
+        className="aspect-[16/9] w-full object-cover sm:aspect-[21/9]"
+      />
+      <div aria-hidden className="absolute inset-0 bg-gradient-to-t from-ink via-ink/20 to-transparent" />
+      <div className="absolute inset-x-0 bottom-0 px-5 pb-5">
+        <p className="font-display text-[1.7rem] uppercase leading-none tracking-wide text-cream drop-shadow sm:text-4xl">{BURGER_PROMISE.title}</p>
+        <p className="mt-1.5 text-sm italic text-cheese">{BURGER_PROMISE.line}</p>
+      </div>
+    </aside>
+  );
+}
+
+/** A gold medallion with the deal menu's drawn icon: a herb leaf (sauces), a wheat ear (dough), a slice (crust). */
+function PromiseIcon({ kind }: { kind: 'sauce' | 'dough' | 'crust' }) {
+  return (
+    <span aria-hidden className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-cheese shadow-[2px_2px_0_0_rgba(250,250,249,0.9)]">
+      <svg viewBox="0 0 24 24" className="h-6 w-6 fill-none stroke-ink" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+        {kind === 'sauce' && (
+          <>
+            <path d="M5 19C5 10.5 10.5 5 19 5c0 8.5-5.5 14-14 14z" />
+            <path d="M5 19L14.5 9.5" />
+            <path d="M9.5 14.5h3.5M12 12V8.8" />
+          </>
+        )}
+        {kind === 'dough' && (
+          <>
+            <path d="M12 22V7" />
+            <ellipse cx="9.4" cy="9" rx="1.5" ry="3" transform="rotate(-28 9.4 9)" />
+            <ellipse cx="14.6" cy="9" rx="1.5" ry="3" transform="rotate(28 14.6 9)" />
+            <ellipse cx="9.4" cy="14" rx="1.5" ry="3" transform="rotate(-28 9.4 14)" />
+            <ellipse cx="14.6" cy="14" rx="1.5" ry="3" transform="rotate(28 14.6 14)" />
+            <ellipse cx="12" cy="4.2" rx="1.4" ry="2.6" />
+          </>
+        )}
+        {kind === 'crust' && (
+          <>
+            <path d="M3.5 6.5c5.5-2.6 11.5-2.6 17 0L12 21.5z" />
+            <path d="M4.6 9c4.9-2 9.9-2 14.8 0" />
+            <circle cx="10" cy="12.5" r="1.3" />
+            <circle cx="13.8" cy="11.8" r="1.1" />
+            <circle cx="12" cy="16" r="1.1" />
+          </>
+        )}
+      </svg>
+    </span>
+  );
+}
 
 /** Melted cheese over the top of a deal card, as on the printed deal menu (drawn here: nothing to load). */
 function CheeseDrip() {

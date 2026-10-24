@@ -113,7 +113,7 @@ describe('/menu as served', () => {
 
   it('the header’s hours chip names the days when the shop is not open every day, as the home page’s chip does; every day, the hours alone as before', () => {
     // The header's line of facts (20 Oct 2026: the cleaner menu) starts with the hours, after their icon.
-    const chip = (html: string) => /<ul aria-label="Hours, payment and delivery"[^>]*><li[^>]*><svg[^]*?<\/svg><span>([^<]*)<\/span><\/li>/.exec(html)?.[1];
+    const chip = (html: string) => /<ul aria-label="Hours and payment"[^>]*><li[^>]*><svg[^]*?<\/svg><span>([^<]*)<\/span><\/li>/.exec(html)?.[1];
     // Today's (open every day): the hours alone, exactly as v0.7.30 printed them.
     expect(chip(app())).toBe('1 pm – 1 am');
     // The owner's made-up hours, closed on Mondays: the days follow, in the home chip's words.
@@ -191,7 +191,10 @@ describe('the cleaner menu (20 Oct 2026: "too much information" in the header)',
   it('the header: the title, one line of facts, the money off as chips — no tagline, no "Order online" line, no allergy words', () => {
     const top = header(open({ deliveryDiscountPercent: 10 }));
     expect(top).toContain('The Menu</h1>');
-    expect(top).toMatch(/<ul aria-label="Hours, payment and delivery"[^]*1 pm – 1 am[^]*Cash on delivery[^]*Delivery Rs 200–250 · DHA &amp; Clifton/);
+    expect(top).toMatch(/<ul aria-label="Hours and payment"[^]*1 pm – 1 am[^]*Cash on delivery/);
+    // No delivery fee or area list in the header (user, 24 Oct 2026: "taking space"): the cart bar and the checkout
+    // say the fee for the area chosen or found.
+    expect(top).not.toContain('Delivery Rs 200–250');
     expect(top).toContain('>10% off every online order</li>');
     expect(DEFAULT_SHOP_FACTS.profile.tagline).not.toBe('');
     expect(top).not.toContain(DEFAULT_SHOP_FACTS.profile.tagline);

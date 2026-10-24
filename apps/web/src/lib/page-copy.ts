@@ -387,6 +387,19 @@ export const MENU_HEADER_HOURS: Copy = { text: '{hours}', when: { everyDay: true
 export const MENU_HOOK = 'Craving cheese? Order in 2 minutes.';
 export const MENU_HOOK_ROMAN_URDU = 'Bhook lagi hai? Garma garam pizza, seedha aap ke ghar.';
 /**
+ * The brand promise, in the owner's words as the A4 deal menu prints them (24 Oct 2026; the user: "these lines are
+ * our brand edge"). The sauces line says the house's sauces — never that every sauce or dip is made in the shop (some
+ * dips are bought-in sachets), and "premium" stays beside "master-crafted".
+ */
+export const PIZZA_PROMISE: ReadonlyArray<{ title: string; line: string; icon: 'sauce' | 'dough' | 'crust' }> = [
+  { title: 'Master-crafted premium sauces', line: 'Made with herbs.', icon: 'sauce' },
+  { title: 'Soft & crispy dough', line: 'Crisp outside, soft inside.', icon: 'dough' },
+  { title: 'Zero-leftover crust', line: 'You won’t leave the crust.', icon: 'crust' },
+];
+export const PIZZA_PROMISE_KICKER = 'Not your ordinary pizza';
+export const PIZZA_PROMISE_ROMAN_URDU = 'Crust bhi nahi bachega.';
+export const BURGER_PROMISE = { title: 'Creamy, crispy & authentic burgers', line: 'Served in premium brioche buns.' };
+/**
  * The Buy 1 Get 1 banner's where-and-when line (lib/offers; owner 5 Oct 2026: "Takeaway - Delivery", "everyday from
  * 1 pm to 7 pm"): "every day" only while the shop opens all seven days — the offer runs only while it is open.
  */

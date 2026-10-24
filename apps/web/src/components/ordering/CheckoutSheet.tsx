@@ -12,7 +12,7 @@ import {
   type CheckoutProblem,
   type OrderErrorBody,
 } from '@/lib/checkout-validation';
-import { checkoutAreaHint, copyText, deliveryAreasText, zoneOptionGroups, type SiteFacts } from '@/lib/delivery-facts';
+import { checkoutAreaHint, copyText, deliveryAreasText, deliveryMaxMinutes, zoneOptionGroups, type SiteFacts } from '@/lib/delivery-facts';
 import {
   STORAGE_KEYS,
   parseDetails,
@@ -329,7 +329,7 @@ export function CheckoutSheet(
                   error={fieldError('zone')}
                   hint={
                     props.zone
-                      ? `Delivery to ${props.zone.name}: ${formatCents(props.zone.feeCents)}`
+                      ? `Delivery to ${props.zone.name}: ${formatCents(props.zone.feeCents)} · at your door within ${deliveryMaxMinutes(props.zone)} minutes`
                       : checkoutAreaHint(props.deliveryFacts, props)
                   }
                 >
