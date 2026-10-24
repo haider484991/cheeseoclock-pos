@@ -34,6 +34,7 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
    | `DATABASE_URL` | the Neon connection string |
    | `BRIDGE_SECRET` | the secret from step 2 |
    | `NEXT_PUBLIC_META_PIXEL_ID` | optional, **Production only**: the Meta (Facebook) Pixel ID — see "Meta Pixel" below, and redeploy after setting it |
+   | `META_CAPI_ACCESS_TOKEN` | optional, **Production only, Sensitive**: the Conversions API token for that pixel — see "Meta Conversions API" below |
 5. Deploy. You'll get `https://cheeseoclock-xxx.vercel.app` — open it, the home
    page should load. `/menu` will show "Menu coming right up" until you publish.
 
@@ -677,21 +678,50 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
     what the customer pays (the server's total: tax, delivery charge and any
     pick-up discount in it), and the event id is the order's id. The shop is cash
     on delivery, so it counts when the order is placed, and an order the shop
-    cancels later stays counted in Meta.
-- **What it never sends.** Name, phone, e-mail, address, delivery area, or any
+    cancels later stays counted in Meta. Just before it, the customer's phone and
+    name go to the pixel as **SHA-256 hashes** ("advanced matching",
+    `lib/meta-user-data.ts`: phone as 92XXXXXXXXXX, first/last name in lowercase,
+    Karachi / Sindh / pk), so Meta can match the order to the ad that was seen.
+  - `Contact` when a WhatsApp or call link is tapped, on any page: "WhatsApp" or
+    "Call", nothing else.
+- **What it never sends.** A phone or name in clear, e-mail, address, delivery area, or any
   note (the order's or an item's). Nothing at all from a tracking page, or from a
   page opened from one: right after checkout its address is
   `/track/<order id>?phone=<the customer's phone>`, and the pixel sends the page
   address with every event. The pixel's own automatic features (button-click and
   form-field capture, automatic advanced matching) and its page counting on
   history changes are switched off in the snippet, so every event is one of the
-  five above.
+  six above.
 - **Check it.** Events Manager → Test events, and open the site from there:
   `PageView` on the home page, `ViewContent` on `/menu`, `AddToCart` for an item,
   `InitiateCheckout` when the cart opens. A `Purchase` is sent only by a placed
   order: place one test pick-up and delete it at the till afterwards (as in the
   smoke test above); open its tracking page and confirm no event appears for it.
-  In the pixel's Settings, leave "Automatic advanced matching" off.
+  In the pixel's Settings, leave "Automatic advanced matching" off (the site sends
+  its own hashed details at the Purchase).
+
+## Meta Conversions API (the server's copy of each Purchase, optional)
+
+- **What it is.** `lib/meta-capi.ts`: when `POST /api/orders` saves a new order it
+  also sends that order's `Purchase` to Meta from the server, with the same event
+  id (the order id) as the browser's, so Meta counts it once. The server's copy
+  arrives even when the browser's is lost (an ad blocker, a closed tab, a phone
+  that drops off the network), and it carries the request's IP address and
+  browser, the pixel's `_fbp` / `_fbc` cookies and the hashed phone and name. It
+  runs after the order is saved, waits 2.5 s at most and never fails an order. A
+  replayed order (same checkout sent twice) is not sent again.
+- **Turn it on.** Events Manager → the pixel → Settings → Conversions API →
+  "Generate access token". Vercel → project `cheeseoclock-pos-web` → Settings →
+  Environment Variables → add `META_CAPI_ACCESS_TOKEN` = that token, for
+  **Production** only, marked **Sensitive** (or `vercel env add
+  META_CAPI_ACCESS_TOKEN production --sensitive` from `apps/web`) → redeploy. It
+  also needs `NEXT_PUBLIC_META_PIXEL_ID`. Without both, nothing is sent. To turn it
+  off, delete the token and redeploy.
+- **Check it.** Events Manager → Test events → copy the code (`TEST…`) → open
+  `https://www.cheeseoclock.net/menu?meta_test_code=TEST…` and place a test pick-up
+  in that tab: its server `Purchase` shows under Test events at once (only that
+  tab's orders carry the code). Afterwards, Overview → Purchase shows "Browser ·
+  Server" and the deduplication rate; delete the test order at the till.
 
 ## Free-tier limits (plenty for launch)
 

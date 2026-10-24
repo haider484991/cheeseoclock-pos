@@ -488,12 +488,13 @@ export function OrderingApp({
     return checkoutKey.current.id;
   }
 
-  function onPlaced({ orderId, phone, totalCents }: PlacedOrder) {
+  function onPlaced({ orderId, phone, name, totalCents }: PlacedOrder) {
     placed.current = true;
     // The Meta Pixel hears of the sale here, once, while the page is still /menu (the tracking address
-    // carries the phone, and is never sent): the server's own total, not one worked out from the cart.
-    // A replayed order comes back with the same id, which the pixel's once-only claim covers.
-    pixel.purchase(orderId, totalCents, pixelLines(cart));
+    // carries the phone, and is never sent): the server's own total, not one worked out from the cart,
+    // and the customer's phone and name hashed (lib/meta-user-data). A replayed order comes back with
+    // the same id, which the pixel's once-only claim covers.
+    pixel.purchase(orderId, totalCents, pixelLines(cart), { phone, name: name ?? null });
     writeStored(
       STORAGE_KEYS.lastOrder,
       serializeLastOrder({ orderId, phone, placedAt: Date.now(), fulfilment, lines: toSavedLines(cart) }),

@@ -10,8 +10,11 @@
  * What goes to Meta, and what never does:
  *  - Only menu item ids, the menu's own item names, quantities, values in PKR and the currency.
  *    The builders below read exactly those fields off what they are given, so a line that also
- *    carries an item note or a choice's name cannot leak it. Never a name, phone, e-mail,
- *    address, delivery area, or the free-text notes (the order's or an item's).
+ *    carries an item note or a choice's name cannot leak it. Never an e-mail, address, delivery
+ *    area, or the free-text notes (the order's or an item's).
+ *  - At a Purchase only, the customer's phone and name as SHA-256 hashes, never in clear
+ *    (lib/meta-user-data, "advanced matching": the same hashes the server sends, lib/meta-capi).
+ *  - A Contact when a WhatsApp or call link is tapped: which of the two, and nothing else.
  *  - Nothing at all from a tracking page. Its address right after checkout is
  *    `/track/<order id>?phone=<the customer's phone>`, the pixel sends the page address with
  *    every event, and it sends the referrer too: so no event fires on /track, or on a page that
@@ -21,6 +24,8 @@
  * Every call is fire-and-forget: it returns whether an event went out and never throws, so a
  * blocked, slow or broken pixel cannot touch browsing, the cart or placing an order.
  */
+
+import { metaUserData, type MetaUserData } from './meta-user-data';
 
 // ---------------------------------------------------------------------------
 // The switch
@@ -185,6 +190,62 @@ export function purchasePayload(
   return basketPayload(lines, totalCents);
 }
 
+/** How a customer reached for the shop outside the website: a WhatsApp chat or a phone call. */
+export type ContactChannel = 'whatsapp' | 'call';
+
+/** Contact: which kind of link was tapped, and nothing else (not the number, not the message it carries). */
+export interface ContactPayload {
+  content_name: 'WhatsApp' | 'Call';
+  content_category: 'Contact';
+}
+
+export function contactPayload(channel: ContactChannel): ContactPayload {
+  return { content_name: channel === 'whatsapp' ? 'WhatsApp' : 'Call', content_category: 'Contact' };
+}
+
+/** The channel a link opens: a WhatsApp chat (wa.me, api.whatsapp.com, whatsapp:), a call (tel:), or null. */
+export function contactChannelOf(href: string | null | undefined): ContactChannel | null {
+  if (typeof href !== 'string') return null;
+  const h = href.trim().toLowerCase();
+  if (h.startsWith('tel:')) return 'call';
+  if (h.startsWith('whatsapp:')) return 'whatsapp';
+  let host: string;
+  try {
+    host = new URL(h).hostname;
+  } catch {
+    return null;
+  }
+  return host === 'wa.me' || host === 'api.whatsapp.com' || host === 'web.whatsapp.com' ? 'whatsapp' : null;
+}
+
+// ---------------------------------------------------------------------------
+// Meta's Test Events
+
+/**
+ * A test code from Events Manager → Test events ("TEST12345"), opened as /menu?meta_test_code=…:
+ * the server then sends that visit's Purchase to the Test events tab (lib/meta-capi), so an order
+ * placed to check the set-up is seen at once. Anything else is no code.
+ */
+const TEST_CODE = /^TEST[A-Z0-9]{1,20}$/;
+
+export function readTestCode(raw: string | null | undefined): string | null {
+  const code = (raw ?? '').trim().toUpperCase();
+  return TEST_CODE.test(code) ? code : null;
+}
+
+/** Where this tab keeps the test code it was opened with (sessionStorage: it ends with the tab). */
+export const TEST_CODE_KEY = 'coc.pixel.testCode';
+
+/** The test code this tab was opened with (MetaPixel.tsx keeps it), or null: no code, no pixel, no storage. */
+export function storedTestCode(): string | null {
+  if (META_PIXEL_ID === null || typeof window === 'undefined') return null;
+  try {
+    return readTestCode(window.sessionStorage.getItem(TEST_CODE_KEY));
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Where it stays silent
 
@@ -326,12 +387,24 @@ export interface Pixel {
   viewItem(item: { id: string; name: string; unitCents: number }): boolean;
   addToCart(lines: readonly PixelLine[]): boolean;
   initiateCheckout(lines: readonly PixelLine[]): boolean;
-  /** The server's total (paisa) and the cart's lines; no total = no event. */
+  /**
+   * The server's total (paisa) and the cart's lines; no total = no event. With the customer's
+   * phone and name, their hashes go first (identify), so the Purchase carries them.
+   */
   purchase(
     orderId: string,
     totalCents: number | null | undefined,
     lines: readonly PixelLine[],
+    customer?: { phone?: string | null; name?: string | null },
   ): boolean;
+  /**
+   * Hands the pixel a customer's hashed details (manual advanced matching): `fbq('init', id, data)`
+   * again, which Meta's script takes once per page, for the pixel it already started without any.
+   * Every event after it on this page carries them.
+   */
+  identify(userData: MetaUserData): boolean;
+  /** A WhatsApp or call link was tapped. */
+  contact(channel: ContactChannel): boolean;
 }
 
 /**
@@ -346,8 +419,10 @@ export interface Pixel {
  * pixel that has not loaded yet does not use it up.
  */
 export function createPixel(deps: PixelDeps): Pixel {
-  const enabled = readPixelId(deps.pixelId) !== null;
+  const pixelId = readPixelId(deps.pixelId);
+  const enabled = pixelId !== null;
   const claimedHere = new Set<string>();
+  let identified = false;
 
   /** The window to send from, or undefined if an event must not go out now. */
   function ready(): PixelWindow | undefined {
@@ -424,10 +499,23 @@ export function createPixel(deps: PixelDeps): Pixel {
     });
   }
 
+  function identify(userData: MetaUserData): boolean {
+    return safely(() => {
+      if (identified || pixelId === null) return false;
+      const win = ready();
+      if (!win) return false;
+      (win.fbq as (...a: unknown[]) => unknown).call(win, 'init', pixelId, { ...userData });
+      identified = true;
+      return true;
+    });
+  }
+
   return {
     enabled,
     track,
     trackPurchaseOnce,
+    identify,
+    contact: (channel) => safely(() => track('Contact', contactPayload(channel))),
     pageView: (pathname) => safely(() => shouldTrackPageView(pathname) && track('PageView')),
     viewMenu: () => safely(() => track('ViewContent', viewMenuPayload())),
     viewItem: (item) => safely(() => track('ViewContent', viewItemPayload(item))),
@@ -441,10 +529,13 @@ export function createPixel(deps: PixelDeps): Pixel {
         const payload = initiateCheckoutPayload(lines);
         return payload.num_items > 0 && track('InitiateCheckout', payload);
       }),
-    purchase: (orderId, totalCents, lines) =>
+    purchase: (orderId, totalCents, lines, customer) =>
       safely(() => {
         const payload = purchasePayload(totalCents, lines);
-        return payload !== null && trackPurchaseOnce(orderId, payload);
+        if (payload === null) return false;
+        const userData = customer ? metaUserData(customer) : null;
+        if (userData !== null) identify(userData);
+        return trackPurchaseOnce(orderId, payload);
       }),
   };
 }

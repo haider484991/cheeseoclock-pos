@@ -5,6 +5,8 @@ import {
   PIXEL_CURRENCY,
   PURCHASE_KEY_PREFIX,
   addToCartPayload,
+  contactChannelOf,
+  contactPayload,
   createPixel,
   initiateCheckoutPayload,
   isTrackingPath,
@@ -14,6 +16,7 @@ import {
   purchaseEventId,
   purchasePayload,
   readPixelId,
+  readTestCode,
   shouldTrackPageView,
   viewItemPayload,
   viewMenuPayload,
@@ -21,6 +24,7 @@ import {
   type PixelStorage,
   type PixelWindow,
 } from './meta-pixel';
+import { metaUserData } from './meta-user-data';
 import { priceOrder } from './pricing';
 
 const ID = '123456789012345';
@@ -714,5 +718,81 @@ describe('the events as the site sends them', () => {
       ['track', 'AddToCart', addToCartPayload([line(PIZZA_EXTRAS)])],
       ['track', 'InitiateCheckout', initiateCheckoutPayload([line(BIG_TWO), line(FAMILY)])],
     ]);
+  });
+});
+
+describe('advanced matching at the Purchase: the customer’s details, hashed', () => {
+  const CUSTOMER = { phone: '0300 1234567', name: 'Ahmed Khan' };
+
+  it('hands the pixel the hashed details first, then sends the Purchase', () => {
+    const { win, calls } = phone();
+    const p = on(win);
+    expect(p.purchase(ORDER_A, 414_000, [line(BIG_TWO)], CUSTOMER)).toBe(true);
+    expect(calls).toEqual([
+      ['init', ID, metaUserData(CUSTOMER)],
+      ['track', 'Purchase', purchasePayload(414_000, [line(BIG_TWO)]), { eventID: purchaseEventId(ORDER_A) }],
+    ]);
+  });
+
+  it('nothing in clear reaches the pixel', () => {
+    const { win, calls } = phone();
+    on(win).purchase(ORDER_A, 414_000, [line(BIG_TWO)], CUSTOMER);
+    const sent = JSON.stringify(calls);
+    for (const clear of ['0300', '923001234567', 'Ahmed', 'ahmed', 'Khan']) expect(sent, clear).not.toContain(clear);
+  });
+
+  it('identifies once per page, and not without a valid phone', () => {
+    const { win, calls } = phone();
+    const p = on(win);
+    p.purchase(ORDER_A, 414_000, [line(BIG_TWO)], CUSTOMER);
+    p.purchase(ORDER_B, 414_000, [line(BIG_TWO)], { phone: '0321 7654321', name: 'Sara' });
+    expect(calls.filter((c) => c[0] === 'init')).toHaveLength(1);
+    const other = phone();
+    on(other.win).purchase(ORDER_A, 414_000, [line(BIG_TWO)], { phone: 'none', name: 'Ahmed' });
+    expect(other.calls.map((c) => c[0])).toEqual(['track']);
+  });
+
+  it('never from a tracking page', () => {
+    const { win, calls } = phone({ location: { pathname: '/track/abc' } });
+    expect(on(win).identify(metaUserData(CUSTOMER)!)).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('Contact: a WhatsApp or call link tapped', () => {
+  it('knows the links', () => {
+    expect(contactChannelOf('https://wa.me/923009367865?text=Hi')).toBe('whatsapp');
+    expect(contactChannelOf('https://api.whatsapp.com/send?phone=923009367865')).toBe('whatsapp');
+    expect(contactChannelOf('whatsapp://send?phone=923009367865')).toBe('whatsapp');
+    expect(contactChannelOf('tel:+923009367865')).toBe('call');
+    expect(contactChannelOf(' TEL:03009367865')).toBe('call');
+    for (const other of ['/menu', 'https://www.instagram.com/cheeseoclock.karachi/', 'https://evilwa.me/x', 'mailto:a@b.c', '', null]) {
+      expect(contactChannelOf(other), String(other)).toBeNull();
+    }
+  });
+
+  it('sends which channel, and nothing else', () => {
+    const { win, calls } = phone();
+    const p = on(win);
+    p.contact('whatsapp');
+    p.contact('call');
+    expect(calls).toEqual([
+      ['track', 'Contact', { content_name: 'WhatsApp', content_category: 'Contact' }],
+      ['track', 'Contact', { content_name: 'Call', content_category: 'Contact' }],
+    ]);
+    expect(contactPayload('whatsapp')).toEqual({ content_name: 'WhatsApp', content_category: 'Contact' });
+  });
+});
+
+describe('readTestCode: Events Manager’s Test events codes only', () => {
+  it('takes TEST and letters or digits, in capitals', () => {
+    expect(readTestCode('TEST12345')).toBe('TEST12345');
+    expect(readTestCode(' test4821 ')).toBe('TEST4821');
+  });
+
+  it('is null for anything else', () => {
+    for (const bad of ['', 'TEST', '12345', 'TEST 123', 'TEST<script>', `TEST${'1'.repeat(30)}`, null, undefined]) {
+      expect(readTestCode(bad), String(bad)).toBeNull();
+    }
   });
 });

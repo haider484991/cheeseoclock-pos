@@ -22,6 +22,7 @@ import {
   writeStored,
 } from '@/lib/device-memory';
 import { formatCents } from '@/lib/format';
+import { storedTestCode } from '@/lib/meta-pixel';
 import { isPickupOnly } from '@/lib/menu-view';
 import { tagUsHint } from '@/lib/offers';
 import { CHECKOUT_PAY_DELIVERY, CHECKOUT_PAY_PICKUP } from '@/lib/page-copy';
@@ -35,6 +36,8 @@ export interface PlacedOrder {
   orderId: string;
   /** As the customer typed it; the tracking page matches it server-side. */
   phone: string;
+  /** As the customer typed it: the Meta Pixel's Purchase carries it hashed (lib/meta-user-data). */
+  name?: string;
   /** What the server priced the order at, paisa (api/orders: totalCents, tax and delivery in it): the Meta Pixel's Purchase value. */
   totalCents?: number;
 }
@@ -148,6 +151,7 @@ export function CheckoutSheet(
     inFlight.current = true;
     setSubmitting(true);
     try {
+      const metaTestCode = storedTestCode();
       const res = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -159,6 +163,7 @@ export function CheckoutSheet(
           ...(pickup ? {} : { addressLine: address.trim(), zoneId: props.zone?.id, ...(pin ? { locationPin: pin } : {}) }),
           notes: notes.trim() || undefined,
           ...(social.trim() ? { social: social.trim() } : {}),
+          ...(metaTestCode ? { metaTestCode } : {}),
           items: props.cart.map((l) => ({
             posItemId: l.item.posItemId,
             quantity: l.quantity,
@@ -188,7 +193,12 @@ export function CheckoutSheet(
         removeStored(STORAGE_KEYS.details);
       }
       // Stays "Placing…" while the tracking page loads.
-      props.onPlaced({ orderId: json.data.orderId, phone: phone.trim(), totalCents: json.data.totalCents });
+      props.onPlaced({
+        orderId: json.data.orderId,
+        phone: phone.trim(),
+        name: name.trim(),
+        totalCents: json.data.totalCents,
+      });
     } catch {
       inFlight.current = false;
       setSubmitting(false);

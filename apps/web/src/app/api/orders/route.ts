@@ -11,6 +11,7 @@ import {
 import { composeNotes, cleanSocial, parsePin } from '@/lib/checkout-extras';
 import { feeItemIdsOf, zoneFeeItemFor } from '@/lib/delivery-zones';
 import { formatCents, normalizePhone } from '@/lib/format';
+import { sendServerPurchase } from '@/lib/meta-capi';
 import { menuWithoutDrinkBrand } from '@/lib/menu-view';
 import { validateModifierSelection, validateOrderable } from '@/lib/order-validation';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
@@ -126,6 +127,11 @@ const PlaceOrderSchema = z
      * order that already exists instead of a second one.
      */
     clientOrderId: z.string().uuid().optional(),
+    /**
+     * A Meta Test events code the page was opened with (lib/meta-pixel readTestCode): this order's
+     * server-side Purchase then shows in Events Manager → Test events. Anything else is ignored.
+     */
+    metaTestCode: z.string().max(40).optional(),
     /** Honeypot — real users never fill this hidden field. */
     website: z.string().max(0).optional(),
   })
@@ -410,6 +416,9 @@ export async function POST(req: Request): Promise<Response> {
       }
     }
 
+    // The food as the Meta Pixel's Purchase lists it (lib/meta-capi): taken before the delivery charge joins the lines.
+    const metaLines = lines.map((l) => ({ id: l.posItemId, quantity: l.quantity, unitCents: l.unitPriceCents }));
+
     let orderNotes = input.notes?.trim() || null;
     const zone = zoneNow;
     if (zone && zone.feeCents > 0) {
@@ -483,7 +492,16 @@ export async function POST(req: Request): Promise<Response> {
       if (existing) return placedResponse(existing, true);
     }
 
+    // Meta hears of the sale from here too (lib/meta-capi; off without its token), with the same event id as
+    // the browser's Purchase so it counts once. It never fails the order and waits CAPI_TIMEOUT_MS at most.
+    const toMeta = sendServerPurchase(req, {
+      orderId: id,
+      totalCents: totals.totalCents,
+      lines: metaLines,
+      customer: { phone, name: input.customerName },
+    }, { testCode: input.metaTestCode ?? null });
     await recordOrderPlaced(clientIpHash(req));
+    await toMeta;
 
     return Response.json({
       ok: true,

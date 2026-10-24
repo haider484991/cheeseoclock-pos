@@ -20,6 +20,7 @@ import {
   type WebOrderItem,
 } from '@cheeseoclock/shared-types';
 import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery-charge';
+import type { CapiEvent } from './meta-capi';
 
 const db = vi.hoisted(() => ({
   pg: null as unknown as { query: (t: string, v: unknown[]) => Promise<{ rows: unknown[] }> },
@@ -1064,5 +1065,77 @@ describe('POST /api/orders — a category’s own % (v0.7.50, WEBSITE DISCOUNT B
     r = await place({ fulfilment: 'pickup', addressLine: undefined, items: [line('fajita-l')] });
     expect(r.json.data).toMatchObject({ discountCents: 20_000 });
     expect(await partsStored(r.json.data!.orderId)).toBeNull();
+  });
+});
+
+describe('POST /api/orders — Meta Conversions API (lib/meta-capi)', () => {
+  const PIXEL = '1794891064972562';
+  const TOKEN = 'EAAtestTOKEN0123456789abcdefABCDEF';
+  const sent: Array<{ url: string; body: { data: CapiEvent[]; test_event_code?: string } }> = [];
+  let answer: () => Promise<Response>;
+
+  beforeEach(() => {
+    sent.length = 0;
+    answer = async () => new Response(JSON.stringify({ events_received: 1 }), { status: 200 });
+    process.env['NEXT_PUBLIC_META_PIXEL_ID'] = PIXEL;
+    process.env['META_CAPI_ACCESS_TOKEN'] = TOKEN;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      sent.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return answer();
+    });
+  });
+
+  afterEach(() => {
+    delete process.env['NEXT_PUBLIC_META_PIXEL_ID'];
+    delete process.env['META_CAPI_ACCESS_TOKEN'];
+    vi.unstubAllGlobals();
+  });
+
+  it('sends the order’s Purchase once: its id, the server’s total, the food (no delivery charge), the hashed phone', async () => {
+    const clientOrderId = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a77';
+    const r = await place({ zoneId: 'dha-6', clientOrderId, customerName: 'Ahmed Khan', metaTestCode: 'TEST4821' });
+    expect(r.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.url).toBe(`https://graph.facebook.com/v26.0/${PIXEL}/events`);
+    expect(sent[0]!.body.test_event_code).toBe('TEST4821');
+    const event = sent[0]!.body.data[0]!;
+    expect(event).toMatchObject({ event_name: 'Purchase', event_id: clientOrderId, action_source: 'website' });
+    expect(event.custom_data).toMatchObject({
+      value: r.json.data!.totalCents / 100,
+      currency: 'PKR',
+      content_ids: ['fajita-l'],
+      order_id: clientOrderId,
+    });
+    expect(event.user_data.ph?.[0]).toMatch(/^[0-9a-f]{64}$/);
+    expect(event.user_data.client_ip_address).toMatch(/^10\.0\.0\./);
+    expect(JSON.stringify(sent)).not.toMatch(/Ahmed|House 12|0300/);
+
+    // The same checkout sent again is the same order: nothing more goes to Meta.
+    const again = await place({ zoneId: 'dha-6', clientOrderId, customerName: 'Ahmed Khan' });
+    expect(again.json.data!.orderId).toBe(clientOrderId);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('takes the order when Meta refuses or is unreachable', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      answer = async () => new Response(JSON.stringify({ error: { code: 190, message: 'bad token' } }), { status: 400 });
+      expect((await place({ zoneId: 'dha-6' })).status).toBe(200);
+      answer = async () => {
+        throw new Error('ENOTFOUND graph.facebook.com');
+      };
+      expect((await place({ zoneId: 'dha-6' })).status).toBe(200);
+      expect(sent).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('sends nothing for a refused order, or without a token', async () => {
+    await place({ zoneId: 'saddar' });
+    expect(sent).toHaveLength(0);
+    delete process.env['META_CAPI_ACCESS_TOKEN'];
+    expect((await place({ zoneId: 'dha-6' })).status).toBe(200);
+    expect(sent).toHaveLength(0);
   });
 });

@@ -3,7 +3,15 @@
 import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import Script from 'next/script';
-import { META_PIXEL_ID, isPrivatePath, metaPixelSnippet, pixel } from '@/lib/meta-pixel';
+import {
+  META_PIXEL_ID,
+  TEST_CODE_KEY,
+  contactChannelOf,
+  isPrivatePath,
+  metaPixelSnippet,
+  pixel,
+  readTestCode,
+} from '@/lib/meta-pixel';
 
 /**
  * The Meta Pixel (lib/meta-pixel): its base snippet, loaded once, and a PageView on the first
@@ -35,6 +43,26 @@ function PixelLoader({ pixelId }: { pixelId: string }) {
     counted.current = pathname;
     pixel.pageView(pathname);
   }, [pathname]);
+  // A tap on any WhatsApp or call link, on any page (footer, buttons, area pages): one listener, so no
+  // page's markup changes. Capture phase, so a link that stops its click still counts.
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      const link = e.target instanceof Element ? e.target.closest('a[href]') : null;
+      const channel = contactChannelOf(link?.getAttribute('href'));
+      if (channel !== null) pixel.contact(channel);
+    }
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, []);
+  // Opened from Events Manager's Test events with ?meta_test_code=TEST…: this tab's order goes to that tab (lib/meta-capi).
+  useEffect(() => {
+    try {
+      const code = readTestCode(new URLSearchParams(window.location.search).get('meta_test_code'));
+      if (code !== null) window.sessionStorage.setItem(TEST_CODE_KEY, code);
+    } catch {
+      // No storage: no test code.
+    }
+  }, []);
   return (
     <Script id="meta-pixel" strategy="afterInteractive">
       {metaPixelSnippet(pixelId)}
