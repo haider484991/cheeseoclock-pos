@@ -129,6 +129,8 @@ interface SettledRow {
   subtotal: number;
   discount: number;
   tax: number;
+  /** The tax inside its tax-included lines (0057); 0 = none. */
+  included: number;
   total: number;
   paidAt: string;
   status: string;
@@ -173,7 +175,8 @@ function readSettled(db: AppDatabase, shiftId: string): SettledRow[] {
     .prepare(
       `SELECT o.id AS id, o.order_number AS orderNumber, o.mode AS mode, o.source AS source,
               (o.rider_keeps_cents IS NOT NULL) AS outside,
-              o.subtotal_cents AS subtotal, o.discount_cents AS discount, o.tax_cents AS tax, o.total_cents AS total,
+              o.subtotal_cents AS subtotal, o.discount_cents AS discount, o.tax_cents AS tax,
+              o.included_tax_cents AS included, o.total_cents AS total,
               o.paid_at AS paidAt, o.status AS status,
               -- The latest live discount row describes the stored discount (as Reports reads it).
               CASE WHEN o.discount_cents > 0 THEN (
@@ -374,9 +377,11 @@ export function readShiftReportFacts(db: AppDatabase, ctx: ShiftCloseContext): S
     orderNumber: o.orderNumber,
     channel: channelOf(o.mode, o.source),
     outside: Number(o.outside) === 1,
-    subtotalCents: Number(o.subtotal),
+    // A tax-included line's tax (0057) is the order's tax too, out of its price: the sales before tax
+    // and the tax still add up to what was billed, and the tax line is the order's whole tax.
+    subtotalCents: Number(o.subtotal) - Number(o.included ?? 0),
     discountCents: Number(o.discount),
-    taxCents: Number(o.tax),
+    taxCents: Number(o.tax) + Number(o.included ?? 0),
     totalCents: Number(o.total),
     deliveryChargeCents: chargeCents.get(o.id) ?? 0,
     discountKind: shiftReportDiscountKind(Number(o.discount), o.discountSource, o.source),

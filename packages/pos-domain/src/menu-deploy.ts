@@ -250,6 +250,8 @@ export interface MenuDeployPlanFacts {
   choiceChanges: ReadonlyArray<MenuDeployPriceMove & { group: string }>;
   /** Existing items the file would move onto another tax category: from → to rate (basis points; null = not known). */
   taxMoves: ReadonlyArray<{ name: string; fromBps: number | null; toBps: number }>;
+  /** Items whose "price includes tax" the file changes (0057): a tax change too. Absent = none. */
+  taxIncludedChanges?: ReadonlyArray<{ name: string; included: boolean }>;
   /** A tax category the file would add (the import makes one when the till has none at the file's rate), or null. */
   newTax: { name: string; rateBps: number } | null;
 }
@@ -297,6 +299,7 @@ export function menuDeployNeedsOwner(f: MenuDeployPlanFacts): string | null {
   const tax = [
     ...f.taxMoves.map((t) => `${t.name} ${t.fromBps === null ? '?' : pct(t.fromBps)} → ${pct(t.toBps)}`),
     ...(f.newTax ? [`a new tax category, ${f.newTax.name} (${pct(f.newTax.rateBps)})`] : []),
+    ...(f.taxIncludedChanges ?? []).map((t) => `${t.name}: ${t.included ? 'tax included in the price' : 'tax added on top'}`),
   ];
   const parts: string[] = [];
   if (jumps.length > 0) parts.push(`move ${plural(jumps.length, 'price', 'prices')} to less than half, more than double or Rs 0 (${listWords(jumps)})`);

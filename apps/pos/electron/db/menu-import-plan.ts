@@ -92,6 +92,8 @@ export interface MenuSnapshot {
     description: string | null;
     isActive: boolean;
     taxCategoryId: string;
+    /** Its price includes the tax (0057); absent / false = added on top. */
+    priceIncludesTax?: boolean;
   }>;
   ingredients: Array<{
     id: string;
@@ -199,9 +201,14 @@ export interface MenuImportOps {
       basePriceCents: number;
       description: string | null;
       sortOrder: number;
+      /** The file's "price includes tax" (0057): only when true. */
+      priceIncludesTax?: true;
     } | null;
-    /** useImportTax: move the item onto the import's tax category (see taxCategoryId / createTaxCategory). */
-    update: { basePriceCents?: number; description?: string; useImportTax?: true } | null;
+    /**
+     * useImportTax: move the item onto the import's tax category (see taxCategoryId / createTaxCategory).
+     * priceIncludesTax: the file's mark where it differs from the till's (0057) — a tax change.
+     */
+    update: { basePriceCents?: number; description?: string; useImportTax?: true; priceIncludesTax?: boolean } | null;
     /** Choice groups to attach (in addition to those already attached). */
     attach: GroupRef[];
     /** Replace the item's recipe with these lines; null = leave the recipe alone. */
@@ -1168,6 +1175,7 @@ export function planMenuImport(
           basePriceCents: item.priceCents,
           description: item.description,
           sortOrder: item.sortOrder,
+          ...(item.priceIncludesTax === true ? { priceIncludesTax: true as const } : {}),
         },
         update: null,
         attach: attachWanted.map((x) => x.ref),
@@ -1206,6 +1214,19 @@ export function planMenuImport(
       } else {
         changes.push(`tax ${was !== undefined ? pct(was) : '?'} → ${pct(file.tax.rateBps)}`);
         update.useImportTax = true;
+        summary.taxChanges++;
+      }
+    }
+    // "Price includes tax" (0057, file version 5): the file's mark, when it says one and it differs.
+    // A tax change, under the owner's tax rule (Settings → Kitchen & stock: keep the till's tax).
+    if (item.priceIncludesTax !== undefined && item.priceIncludesTax !== (row.priceIncludesTax === true)) {
+      const words = (v: boolean) => (v ? 'tax included in the price' : 'tax added on top');
+      if (policy.tax === 'till') {
+        kept.push(`${words(row.priceIncludesTax === true)} (the file says ${words(item.priceIncludesTax)})`);
+        summary.keptOnTill.taxes++;
+      } else {
+        changes.push(`${words(row.priceIncludesTax === true)} → ${words(item.priceIncludesTax)}`);
+        update.priceIncludesTax = item.priceIncludesTax;
         summary.taxChanges++;
       }
     }

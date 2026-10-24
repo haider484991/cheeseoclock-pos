@@ -130,6 +130,14 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
   }
 
   // The order's discounts, one row each, under Subtotal (or under Food on the delivery bill).
+  // The tax already inside the prices of tax-included lines (0057; the deals), under the total as on the paper.
+  const includedTaxRow =
+    (order.includedTaxCents ?? 0) > 0 ? (
+      <div className="flex justify-between text-xs text-stone-500">
+        <span>Tax included in prices</span>
+        <span>{formatCents(order.includedTaxCents ?? 0, { showSymbol: false })}</span>
+      </div>
+    ) : null;
   // An automatic offer the cashier took off, or a discount at Rs 0 that left the value deals
   // alone, takes nothing off: no line (as on the printed bill).
   const discountRows = discounts.filter((d) => !billLeavesOut(d)).map((d) => (
@@ -216,10 +224,12 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
                     <span>{formatCents(bill.foodCents, { showSymbol: false })}</span>
                   </div>
                   {discountRows}
-                  <div className="flex justify-between">
-                    <span>{salesTaxLabel(bill.foodTaxBps)}</span>
-                    <span>{formatCents(bill.foodTaxCents, { showSymbol: false })}</span>
-                  </div>
+                  {!(bill.foodTaxCents === 0 && (order.includedTaxCents ?? 0) > 0) && (
+                    <div className="flex justify-between">
+                      <span>{salesTaxLabel(bill.foodTaxBps)}</span>
+                      <span>{formatCents(bill.foodTaxCents, { showSymbol: false })}</span>
+                    </div>
+                  )}
                   {bill.deliveryTaxCents !== null && bill.deliveryTaxCents !== 0 && (
                     <div className="flex justify-between">
                       <span>{salesTaxLabel(bill.deliveryTaxBps, true)}</span>
@@ -238,6 +248,7 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
                     <span>Customer pays</span>
                     <span>Rs {formatCents(bill.customerPaysCents, { showSymbol: false })}</span>
                   </div>
+                  {includedTaxRow}
                 </>
               ) : (
                 <>
@@ -246,14 +257,17 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
                     <span>{formatCents(order.subtotalCents, { showSymbol: false })}</span>
                   </div>
                   {discountRows}
-                  <div className="flex justify-between">
-                    <span>Tax</span>
-                    <span>{formatCents(order.taxCents, { showSymbol: false })}</span>
-                  </div>
+                  {!(order.taxCents === 0 && (order.includedTaxCents ?? 0) > 0) && (
+                    <div className="flex justify-between">
+                      <span>Tax</span>
+                      <span>{formatCents(order.taxCents, { showSymbol: false })}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between border-t border-stone-300 pt-1 text-base font-bold dark:border-stone-700">
                     <span>Total</span>
                     <span>Rs {formatCents(order.totalCents, { showSymbol: false })}</span>
                   </div>
+                  {includedTaxRow}
                 </>
               )}
             </div>

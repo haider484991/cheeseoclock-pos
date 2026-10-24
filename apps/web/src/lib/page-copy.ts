@@ -192,10 +192,15 @@ export const HOME_FAQ_HOURS: Copy = {
   },
 };
 /** Home FAQ, "How do I pay?". */
-export const HOME_FAQ_PAY: Copy = taxed(
-  '{DoorPayments} on delivery. {Tax} is added on the bill, and the printed receipt from the kitchen is the final amount.',
-  '{DoorPayments} on delivery. The printed receipt from the kitchen is the final amount.',
-);
+export const HOME_FAQ_PAY: Copy = {
+  // Some prices include their tax (0057: the deals): say which, before the tax added on the rest.
+  text: '{DoorPayments} on delivery. Prices marked “tax included” already include it; {tax} is added on the rest, and the printed receipt from the kitchen is the final amount.',
+  when: [{ pricesIncludeTax: true }, { taxAdded: true }],
+  otherwise: taxed(
+    '{DoorPayments} on delivery. {Tax} is added on the bill, and the printed receipt from the kitchen is the final amount.',
+    '{DoorPayments} on delivery. The printed receipt from the kitchen is the final amount.',
+  ),
+};
 /**
  * Home FAQ, "Do you have Crown Crust pizza?" (people search for it, Oct 2026): the till's own description of it,
  * only while it is on the menu — the home page never names a dish the till has taken off.
@@ -383,7 +388,8 @@ export const MENU_OFFER_WHERE: Copy = {
   when: { everyDay: true },
   otherwise: 'Takeaway & delivery · {days}',
 };
-export const MENU_FOOT_LINE: Copy = taxed(
+/** The menu's foot line while every price adds its tax (as before 0057). */
+const MENU_FOOT_LINE_TAX_ADDED: Copy = taxed(
   {
     text: 'Prices in PKR · {tax} added on the bill · pay {doorPayments} on delivery or at the counter',
     when: { samePayments: true },
@@ -395,6 +401,16 @@ export const MENU_FOOT_LINE: Copy = taxed(
     otherwise: 'Prices in PKR · pay {doorPayments} on delivery and {pickupPayments} at the counter',
   },
 );
+export const MENU_FOOT_LINE: Copy = {
+  // Some prices include their tax (0057: the deals): the line says so, and that the tax is added on the rest.
+  text: 'Prices in PKR · prices marked “tax included” include it, {tax} added on the rest · pay {doorPayments} on delivery or at the counter',
+  when: [{ pricesIncludeTax: true }, { taxAdded: true }, { samePayments: true }],
+  otherwise: {
+    text: 'Prices in PKR · prices marked “tax included” include it, {tax} added on the rest · pay {doorPayments} on delivery and {pickupPayments} at the counter',
+    when: [{ pricesIncludeTax: true }, { taxAdded: true }],
+    otherwise: MENU_FOOT_LINE_TAX_ADDED,
+  },
+};
 /** The checkout's last line: how the customer pays (delivery, pick-up). */
 export const CHECKOUT_PAY_DELIVERY: Copy = {
   text: 'You pay the rider in cash. The printed receipt from the kitchen is the final bill.',

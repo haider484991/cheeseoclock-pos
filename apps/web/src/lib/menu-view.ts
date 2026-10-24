@@ -150,7 +150,8 @@ const DRINK_SIZE_SUFFIX = /\s+(\d+(?:[.,]\d+)?\s*(?:ml|l|ltr|litres?|liters?)|ca
  * 345 ml", never its own name. The size is kept as the till wrote it.
  */
 export function drinkChoiceName(name: string): string {
-  const trimmed = name.trim();
+  // A deal's second drink is "2nd: Pepsi 345 ml" (unique across its groups, 24 Oct 2026): read as the drink.
+  const trimmed = name.trim().replace(SLOT_PREFIX, '');
   const size = DRINK_SIZE_SUFFIX.exec(trimmed);
   const flavour = drinkFlavourName(size ? trimmed.slice(0, size.index) : trimmed).trim();
   const label = GENERIC_DRINKS.has(flavour.toLowerCase()) ? flavour : 'Soft drink';
@@ -313,6 +314,16 @@ export function isNoDiscount(item: Pick<PublishedMenuItem, 'noDiscount'>): boole
   return item.noDiscount === true;
 }
 
+/** Its price includes the tax (PublishedMenuItem.taxIncluded, 0057). */
+export function isTaxIncluded(item: Pick<PublishedMenuItem, 'taxIncluded'>): boolean {
+  return item.taxIncluded === true;
+}
+
+/** Does any item on this menu carry its tax inside its price (0057)? The tax sentences then say which. */
+export function menuHasTaxIncluded(menu: { categories: ReadonlyArray<{ items: ReadonlyArray<Pick<PublishedMenuItem, 'taxIncluded'>> }> }): boolean {
+  return menu.categories.some((c) => c.items.some(isTaxIncluded));
+}
+
 /**
  * The menu has an item no discount comes off (a delivery charge never
  * counts): the /menu chip and the checkout's area hint then say
@@ -446,8 +457,14 @@ function buildSections(menu: PublicMenu): MenuSectionView[] {
  */
 export function optionLabel(optionName: string): string {
   const m = /^(?:2nd\s+)?(?:medium|large):\s*(.+)$/i.exec(optionName.trim());
-  return drinkFlavourName(m ? m[1]!.trim() : optionName);
+  return drinkFlavourName(m ? m[1]!.trim() : optionName.trim().replace(SLOT_PREFIX, ''));
 }
+
+/**
+ * The other slot prefixes of the 24 Oct 2026 deals (menu file deals_2026_10_24.py), noise inside their groups:
+ * "Signature: Shawarma Pizza", "Burger: Nashville Authentic (Hot)", "2nd: Pepsi 345 ml", "2nd dip: Ranch".
+ */
+const SLOT_PREFIX = /^(?:signature|burger|2nd(?:\s+dip)?)\s*:\s*/i;
 
 /**
  * "Deal: 2nd Large pizza" → "2nd Large pizza"; "Leave out · Fajita Pizza" →

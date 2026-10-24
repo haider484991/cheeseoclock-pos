@@ -567,8 +567,11 @@ function getSaleRows(db: AppDatabase, range: ReportRange): SaleRow[] {
   return db
     .prepare(
       `SELECT o.created_at AS createdAt, o.mode AS mode, o.source AS source, o.cashier_id AS cashierId,
-              o.subtotal_cents AS subtotal, o.discount_cents AS discount, o.tax_cents AS tax,
-              o.digital_tax_cents AS cardTax,
+              -- A tax-included line's tax (0057) is the order's tax too, taken out of its price: sales
+              -- before tax and the tax still add up to the bill, and the card-rate tax holds its card part.
+              o.subtotal_cents - o.included_tax_cents AS subtotal, o.discount_cents AS discount,
+              o.tax_cents + o.included_tax_cents AS tax,
+              o.digital_tax_cents + o.digital_included_tax_cents AS cardTax,
               -- The latest live discount row describes the stored discount (as getDiscountLines reads it).
               CASE WHEN o.discount_cents > 0 THEN (
                 SELECT d.source FROM order_discounts d
@@ -1468,11 +1471,19 @@ export const FEE_LINE = `(TRIM(oi.menu_item_name) LIKE 'delivery charge%' OR oi.
 function soldLinesOf(db: AppDatabase, orderId: string): TaxedDiscountLine[] {
   const rows = db
     .prepare(
-      `SELECT line_total_cents AS t, menu_item_name AS n, tax_rate_bps_snapshot AS r, no_discount AS nd FROM order_items
+      `SELECT line_total_cents AS t, menu_item_name AS n, tax_rate_bps_snapshot AS r, no_discount AS nd, tax_included AS ti
+         FROM order_items
         WHERE order_id = ? AND deleted_at IS NULL ORDER BY created_at, id`,
     )
-    .all(orderId) as Array<{ t: number; n: string; r: number; nd: number }>;
-  return rows.map((r) => ({ lineTotalCents: Number(r.t), menuItemName: r.n, taxRateBps: Number(r.r), noDiscount: Number(r.nd) === 1 }));
+    .all(orderId) as Array<{ t: number; n: string; r: number; nd: number; ti: number }>;
+  // Its price including the tax (0057) adds none: the stored tax is read as the till worked it.
+  return rows.map((r) => ({
+    lineTotalCents: Number(r.t),
+    menuItemName: r.n,
+    taxRateBps: Number(r.r),
+    noDiscount: Number(r.nd) === 1,
+    ...(Number(r.ti) === 1 ? { taxIncluded: true } : {}),
+  }));
 }
 
 /**
@@ -1556,7 +1567,8 @@ export const FOOD_COST_LINES_SQL = `
   WITH ${REST_ORDERS}
   SELECT ro.id AS orderId, ro.disc AS disc, ro.tax AS tax, ro.tot AS tot, ro.ref AS ref, ro.drow AS drow,
          oi.id AS lineId, oi.menu_item_id AS itemId, oi.menu_item_name AS soldName,
-         oi.quantity AS qty, oi.line_total_cents AS lineTotal, oi.tax_rate_bps_snapshot AS rate, oi.no_discount AS nd, ${FEE_LINE} AS isFee,
+         oi.quantity AS qty, oi.line_total_cents AS lineTotal, oi.tax_rate_bps_snapshot AS rate, oi.no_discount AS nd,
+         oi.tax_included AS ti, ${FEE_LINE} AS isFee,
          ${LINE_COSTS}
     FROM ro
     CROSS JOIN order_items oi
@@ -2219,6 +2231,7 @@ function tallyFoodSales(db: AppDatabase, range: ReportRange, pricing: () => Pric
     lineTotal: number;
     rate: number;
     nd: number;
+    ti: number;
     isFee: number;
     parts: number;
     cost: number;
@@ -2256,7 +2269,13 @@ function tallyFoodSales(db: AppDatabase, range: ReportRange, pricing: () => Pric
       status: lineStatus(parts, r.worst),
       hasRecipeNow: r.itemId !== null && menu.withRecipe.has(r.itemId),
     });
-    o.sold.push({ lineTotalCents: Number(r.lineTotal), menuItemName: r.soldName, taxRateBps: Number(r.rate), noDiscount: Number(r.nd) === 1 });
+    o.sold.push({
+      lineTotalCents: Number(r.lineTotal),
+      menuItemName: r.soldName,
+      taxRateBps: Number(r.rate),
+      noDiscount: Number(r.nd) === 1,
+      ...(Number(r.ti) === 1 ? { taxIncluded: true } : {}),
+    });
   }
   // The lines that took none of the discount: a delivery charge or a value
   // deal its frozen rule left alone, by the name the line was SOLD under and

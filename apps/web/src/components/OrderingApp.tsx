@@ -24,7 +24,9 @@ import {
   isDealSection,
   isPickupOnly,
   cardSizeLabel,
+  isTaxIncluded,
   menuHasNoDiscountItems,
+  menuHasTaxIncluded,
   pickupOnlyNote,
   sectionTitle,
   sizeOrderable,
@@ -58,7 +60,7 @@ import {
   type LastOrder,
 } from '@/lib/device-memory';
 import { menuImageSrcSet } from '@/lib/images';
-import { OFFER_FINE_PRINT, cardOffer, discountOnEveryOrder, offerSectionOf, regularPizzaPrices, type OfferPrice } from '@/lib/offers';
+import { OFFER_FINE_PRINT, OFFER_FINE_PRINT_TAX_INCLUDED, cardOffer, discountOnEveryOrder, offerSectionOf, regularPizzaPrices, type OfferPrice } from '@/lib/offers';
 import { pixel, type PixelLine } from '@/lib/meta-pixel';
 import { trackPath } from '@/lib/order-display';
 import {
@@ -262,7 +264,14 @@ export function OrderingApp({
   // The words under the sections: the food's one tax rate from this menu (charge items left out) and
   // what the rider takes.
   const footLine = useMemo(
-    () => copyText(MENU_FOOT_LINE, { ...deliveryFacts, shop, taxBps: taxBpsOf(menu, feeItemIdsOf(menu)) }),
+    () =>
+      copyText(MENU_FOOT_LINE, {
+        ...deliveryFacts,
+        shop,
+        taxBps: taxBpsOf(menu, feeItemIdsOf(menu)),
+        // Some prices include their tax (0057): the line says which.
+        ...(menuHasTaxIncluded(menu) ? { pricesIncludeTax: true } : {}),
+      }),
     [deliveryFacts, shop, menu],
   );
   const railSections = useMemo(() => sections.map((s) => ({ anchor: s.anchor, name: s.name })), [sections]);
@@ -406,6 +415,8 @@ export function OrderingApp({
     .map((p) => `${categoryNames.get(p.categoryId!) ?? 'Some items'} ${p.percent}%`)
     .join(' · ');
   const { discountCents: discount, taxCents: tax, totalCents: total } = totals;
+  // The tax inside the prices of tax-included items (0057): shown under the total, never added.
+  const includedTax = totals.includedTaxCents ?? 0;
   const cartCount = countLines(cart);
   const pickupOnlyInCart = cart.filter((l) => isPickupOnly(l.item)).map((l) => l.label);
   // Value deals take no pick-up discount (v0.7.34): the words say so only while the menu marks one.
@@ -525,6 +536,7 @@ export function OrderingApp({
     discount,
     zone,
     tax,
+    includedTax,
     total,
     setQty,
     onClear: clearCart,
@@ -584,7 +596,14 @@ export function OrderingApp({
                 id={`${s.anchor}-title`}
                 name={s.name}
                 note={sectionNote(s.name, dealWindow)}
-                fine={isBuy1Get1Category(s.name) ? OFFER_FINE_PRINT : null}
+                fine={
+                  isBuy1Get1Category(s.name)
+                    ? // Deals whose prices include their tax (0057) say so instead of "tax may apply".
+                      s.cards.length > 0 && s.cards.every((c) => c.variants.every((v) => isTaxIncluded(v.item)))
+                      ? OFFER_FINE_PRINT_TAX_INCLUDED
+                      : OFFER_FINE_PRINT
+                    : null
+                }
               />
               <div className={`mt-4 grid gap-3 ${smallSections.has(s.id) ? 'grid-cols-2 sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
                 {s.cards.map((card, i) =>
@@ -1359,6 +1378,8 @@ const DealCard = memo(function DealCard({
         <div className="min-w-0">
           <p className="font-cond text-xs font-extrabold uppercase tracking-[0.22em] text-ink/70">
             {kind === 'buy1get1' ? `Buy 1 Get 1 · ${dealWindow}` : `Value deal ${num}`}
+            {/* Its price includes the tax (0057; the deal menu: "the price you see is the price you pay"). */}
+            {card.variants.every((v) => isTaxIncluded(v.item)) && card.variants.length > 0 ? ' · Tax included' : ''}
           </p>
           <h3 className="mt-1 font-display text-3xl uppercase leading-none tracking-wide">{card.name}</h3>
         </div>

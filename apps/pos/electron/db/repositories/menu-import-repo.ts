@@ -698,6 +698,7 @@ export function applyMenuImport(
             taxCategoryId,
             sortOrder: op.create.sortOrder,
             ...(webAvailability ? { webAvailability } : {}),
+            ...(op.create.priceIncludesTax ? { priceIncludesTax: true } : {}),
           },
           actor,
         ).id;

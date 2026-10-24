@@ -714,6 +714,7 @@ function appendSaleBody(
     appendTotalsRule(b, dup, width);
     b.bold(true).doubleHeight(true).line('TOTAL', `Rs ${money(order.totalCents)}`);
     b.bold(false).doubleHeight(false);
+    appendIncludedTaxLine(b, snapshot);
     appendByCardLine(b, snapshot);
   }
   // What an outside rider keeps and hands in: the shop's copy only.
@@ -825,7 +826,10 @@ function appendDeliveryTotals(
 ): void {
   b.line('Food', money(bill.foodCents));
   appendDiscountLines(b, snapshot);
-  b.line(salesTaxLabel(bill.foodTaxBps), money(bill.foodTaxCents));
+  // Food whose prices all include their tax (0057) adds none: no "Sales tax 0.00" line (its tax prints below).
+  if (!(bill.foodTaxCents === 0 && (snapshot.order.includedTaxCents ?? 0) > 0)) {
+    b.line(salesTaxLabel(bill.foodTaxBps), money(bill.foodTaxCents));
+  }
   if (bill.deliveryTaxCents !== null && bill.deliveryTaxCents !== 0) {
     b.line(salesTaxLabel(bill.deliveryTaxBps, true), money(bill.deliveryTaxCents));
   }
@@ -834,7 +838,29 @@ function appendDeliveryTotals(
   appendTotalsRule(b, dup, width);
   b.bold(true).doubleHeight(true).line('CUSTOMER PAYS', `Rs ${money(bill.customerPaysCents)}`);
   b.bold(false).doubleHeight(false);
+  appendIncludedTaxLine(b, snapshot);
   appendByCardLine(b, snapshot);
+}
+
+/**
+ * The tax already inside the prices of the bill's tax-included lines (0057; the deal menu, 24 Oct
+ * 2026: "THE PRICE YOU SEE IS THE PRICE YOU PAY · TAX INCLUDED"), under the total: "Tax included
+ * (15%)  626.09" — at the rate of the way it was paid when every such line has one ("(8%)" paid by
+ * card), with no rate when the bill was split or the lines differ. Nothing on a bill without one.
+ */
+function appendIncludedTaxLine(b: EscPosBuilder, snapshot: OrderSnapshot): void {
+  const included = snapshot.order.includedTaxCents ?? 0;
+  if (included <= 0) return;
+  const lines = snapshot.items.filter((it) => it.taxIncluded === true);
+  const ownPart = snapshot.order.digitalIncludedTaxCents ?? 0;
+  const rates =
+    ownPart <= 0
+      ? lines.map((it) => it.taxRateBps)
+      : ownPart >= included
+        ? (ownRateWaysOf(lines, snapshot.payments).length > 0 ? ownRatesOf(lines, snapshot.payments) : lines.map((it) => it.digitalRateBps ?? it.taxRateBps))
+        : null;
+  const bps = rates ? oneRateOf(rates) : null;
+  b.line(bps === null ? 'Tax included in prices' : `Tax included (${pctText(bps)}%)`, money(included));
 }
 
 /**
@@ -1227,7 +1253,7 @@ function pctText(bps: number): string {
 
 /** "Tax (16%)" when every line carries the same rate, otherwise "Tax". */
 function taxLabel(snapshot: OrderSnapshot): string {
-  const bps = oneRateOf(snapshot.items.map((it) => it.taxRateBps));
+  const bps = oneRateOf(snapshot.items.filter((it) => it.taxIncluded !== true).map((it) => it.taxRateBps));
   return bps === null ? 'Tax' : `Tax (${pctText(bps)}%)`;
 }
 
@@ -1242,6 +1268,9 @@ function taxLabel(snapshot: OrderSnapshot): string {
  */
 function taxLinesOf(snapshot: OrderSnapshot): Array<[string, number]> {
   const { order } = snapshot;
+  // Every taxed line holds its tax inside its price (0057): none is added, so no "Tax 0.00" line —
+  // appendIncludedTaxLine prints the tax under the total.
+  if (order.taxCents === 0 && (order.includedTaxCents ?? 0) > 0) return [];
   const cardNet = order.digitalNetCents ?? 0;
   const cardTax = order.digitalTaxCents ?? 0;
   if (cardNet <= 0 && cardTax <= 0) return [[taxLabel(snapshot), order.taxCents]];
@@ -1456,6 +1485,13 @@ export function renderKitchenTicket(
     b.bold(true).doubleHeight(true);
     b.wrappedText(`${it.quantity} x ${it.menuItemName}`, width);
     b.bold(false).doubleHeight(false);
+    // What a deal is made of, before its choices (the owner, 24 Oct 2026: "in the kitchen receipt we
+    // don't see … what items are in the deals" — a burger deal asks only for its drink).
+    if (it.dealContents) {
+      for (const ln of wrap(`Includes: ${it.dealContents}`, width - 4)) {
+        b.text(`    ${ln}`).newline();
+      }
+    }
     // What to leave off comes first and loudest: "NO ONION" in bold capitals,
     // then the extras, then the line's allergy / special-request note — a
     // missed leave-out can put an allergic customer in hospital (2026-09-26).

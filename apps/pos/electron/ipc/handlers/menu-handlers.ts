@@ -101,6 +101,23 @@ function checkNoDiscount(payload: { noDiscount?: unknown }, now: boolean | undef
   }
 }
 
+/**
+ * "The price includes the tax" (0057; the owner's deal menu, 24 Oct 2026): yes or no; absent =
+ * unchanged (a new item: no). It changes what the bill and the tax records say, so a value other
+ * than the item's own now (a new item: no) is the owner's alone (settings.manage), as the
+ * never-discounted box is. `now` undefined: no such item (the update says so).
+ */
+function checkPriceIncludesTax(payload: { priceIncludesTax?: unknown }, now: boolean | undefined): void {
+  const v = payload.priceIncludesTax;
+  if (v === undefined) return;
+  if (typeof v !== 'boolean') {
+    throw new IpcGuardError({ code: 'validation_failed', message: 'Say whether the price includes the tax: yes or no' });
+  }
+  if (now !== undefined && v !== now) {
+    requireCapability('settings.manage', 'Only the owner can change whether a price includes the tax.');
+  }
+}
+
 /** The refusal when a manager changes which items are never discounted (a category's box, or an item moved across). */
 const NEVER_DISCOUNTED_OWNER_ONLY = 'Only the owner can change which items are never discounted.';
 
@@ -207,6 +224,7 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
   defineHandler('menu:createItem', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
     checkWebsiteFields(payload);
+    checkPriceIncludesTax(payload, false);
     refuseIf(menuItemNameProblem(payload.name));
     // Never a caller's id: name-based ids are Settings → Delivery areas' own.
     const { id: _id, ...input } = payload as typeof payload & { id?: unknown };
@@ -219,6 +237,10 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
     const s = requireMenuManage();
     checkWebsiteFields(payload);
     checkItemMove(ctx, payload);
+    {
+      const item = findMenuItem(ctx.db, payload.id);
+      checkPriceIncludesTax(payload, item ? item.priceIncludesTax === true : undefined);
+    }
     refuseIf(menuItemEditProblem(ctx.db, payload.id, payload));
     const out = updateMenuItem(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
     menuChanged();

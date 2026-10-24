@@ -54,6 +54,7 @@ import {
   sectionGroupsForItem,
 } from './menuLists';
 import { foodTaxChoices, useMenuWithoutCharges } from './useMenuCharges';
+import { useSessionStore } from '../../stores/sessionStore';
 import { FoodCostChip } from '../costing/CostChip';
 import { COSTING_KEY, useCanSeeCosts, useMenuCosts } from '../costing/costingQueries';
 
@@ -402,6 +403,9 @@ function ItemDialog({
   const [barcode, setBarcode] = useState(existing?.barcode ?? '');
   const [isActive, setIsActive] = useState(existing?.isActive ?? true);
   const [webAvailability, setWebAvailability] = useState<WebAvailability>(existing?.webAvailability ?? 'on');
+  // The price includes its tax (0057): the owner's alone (the main process refuses anyone else).
+  const [priceIncludesTax, setPriceIncludesTax] = useState(existing?.priceIncludesTax === true);
+  const canSetTaxIncluded = useSessionStore((st) => st.can('settings.manage'));
   const [imageUrl, setImageUrl] = useState<string | null>(existing?.imageUrl ?? null);
   const [attachedGroupIds, setAttachedGroupIds] = useState<Set<string>>(
     () => new Set(attachedQ.data?.map((g) => g.id) ?? []),
@@ -452,6 +456,8 @@ function ItemDialog({
           // Sent only when changed (a newer till's value, read here as "on", stays as it is); never for a
           // delivery charge (always on the website).
           ...(!feeFixed && webAvailability !== existing.webAvailability ? { webAvailability } : {}),
+          // Sent only when changed: a manager saving anything else never touches it.
+          ...(priceIncludesTax !== (existing.priceIncludesTax === true) ? { priceIncludesTax } : {}),
         });
         itemId = updated.id;
       } else {
@@ -467,6 +473,7 @@ function ItemDialog({
           barcode: barcode.trim() || null,
           imageUrl,
           webAvailability,
+          ...(priceIncludesTax ? { priceIncludesTax: true } : {}),
         });
         itemId = created.id;
       }
@@ -684,6 +691,28 @@ function ItemDialog({
                 </>
               )}
             </Field>
+
+            {/* The price includes its tax (0057; the owner's deal menu: "the price you see is the price you pay"). */}
+            {!feeFixed && (
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4"
+                  checked={priceIncludesTax}
+                  disabled={!canSetTaxIncluded}
+                  onChange={(e) => setPriceIncludesTax(e.target.checked)}
+                />
+                <span>
+                  <span className="font-medium">Price includes tax</span>
+                  <span className="block text-xs text-stone-500">
+                    {priceIncludesTax
+                      ? 'The bill is this price, cash or card. The tax is inside it and shows on the receipt.'
+                      : 'Tax is added on top of this price on the bill.'}
+                    {!canSetTaxIncluded && ' Only the owner can change this.'}
+                  </span>
+                </span>
+              </label>
+            )}
 
             {/* Its category's "Never discounted" (the owner's, Menu → Categories): read-only here. */}
             {!feeFixed && neverDiscountedIn && (

@@ -122,6 +122,11 @@ export const menuImportItemSchema = z.object({
   /** Choice groups (by name in this file) asked for when this item is sold. */
   modifierGroups: z.array(name).max(10).default([]),
   recipe: z.array(menuImportRecipeLineSchema).default([]),
+  /**
+   * Its price includes the tax (0057; version 5): true = the price is the bill, the tax inside it;
+   * false = added on top. Absent = leave the till's as it is (a new item: added on top).
+   */
+  priceIncludesTax: z.boolean().optional(),
 });
 
 /**
@@ -130,7 +135,7 @@ export const menuImportItemSchema = z.object({
  * a file in a newer format is never downloaded by a till that would refuse it
  * ("update the till"). Raise it together with the union (a test pins them).
  */
-export const MAX_MENU_FILE_VERSION = 4;
+export const MAX_MENU_FILE_VERSION = 5;
 
 export const menuImportFileSchema = z
   .object({
@@ -146,8 +151,11 @@ export const menuImportFileSchema = z
      * 0.7.39): a POS before that would sell them at any hour, with none of
      * the owner's rules (Settings → Money & discounts) — so a till that has
      * not updated yet waits for its update, then takes the file by itself.
+     * 5 = may carry `priceIncludesTax` on its items (POS 0.7.52, migration
+     * 0057): a POS before that would drop it and add the tax on top of a
+     * price that already holds it — so it waits for its update.
      */
-    version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+    version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
     source: z.string().max(300).nullable().default(null),
     /**
      * The tax every item in the file is charged (added on top of the price —

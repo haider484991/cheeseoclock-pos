@@ -130,6 +130,12 @@ export type CopyFacts = SiteFacts & {
    * Server only: never handed to the browser.
    */
   menu?: PriceMenu | null;
+  /**
+   * Some item's price includes its tax (the menu's `taxIncluded`, 0057; the owner's deal menu,
+   * 24 Oct 2026: "THE PRICE YOU SEE IS THE PRICE YOU PAY · TAX INCLUDED"): a sentence saying tax is
+   * added on the bill says which prices already hold it. Absent / false = every price adds it.
+   */
+  pricesIncludeTax?: boolean;
 };
 
 /** The shop's details these facts carry (today's when none). */
@@ -490,6 +496,7 @@ function numberList(ns: readonly number[]): string {
  * `oneTaxRate`: the food has one tax rate above 0 (the menu unknown: today's).
  * `taxAdded`: tax is added on the bill — false only when every food item is
  * at 0% (a sentence that names tax then takes its `otherwise`).
+ * `pricesIncludeTax`: some item's price already includes its tax (0057).
  * `samePayments`: the counter takes exactly what the rider takes ("pay …
  * on delivery or at the counter" names one list for both).
  *
@@ -516,6 +523,7 @@ export type CopyClaim =
   | { nameIsDefault: true }
   | { oneTaxRate: true }
   | { taxAdded: true }
+  | { pricesIncludeTax: true }
   | { samePayments: true }
   | { priced: PriceKey }
   | { onMenu: readonly string[] };
@@ -554,6 +562,7 @@ export function claimHolds(claim: CopyClaim | readonly CopyClaim[], facts: CopyF
   if ('nameIsDefault' in claim) return nameIsDefault(shop);
   if ('oneTaxRate' in claim) return taxBpsIn(facts) !== null;
   if ('taxAdded' in claim) return taxAdded(facts);
+  if ('pricesIncludeTax' in claim) return facts.pricesIncludeTax === true;
   if ('samePayments' in claim) {
     const door = canonicalPayments(shop.website.doorPayments);
     const pickup = canonicalPayments(shop.website.pickupPayments);

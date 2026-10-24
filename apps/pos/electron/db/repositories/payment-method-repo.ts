@@ -2,7 +2,7 @@ import type { AppDatabase } from '../connection.js';
 import { nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
-import { findOrder, orderBillQuote, orderHasPaymentRates } from './order-repo.js';
+import { findOrder, orderBillQuote, orderHasPaymentRates, settleIncludedTaxOf } from './order-repo.js';
 import { findShift } from './shift-repo.js';
 import { recordDrawerOpen } from './drawer-open-repo.js';
 import { getFbrRowByOrder } from './fbr-queue-repo.js';
@@ -134,6 +134,9 @@ interface SettledBill {
   taxCents: number;
   digitalNetCents: number;
   digitalTaxCents: number;
+  /** The tax inside the tax-included lines, and its part at a rate of its own (0057). */
+  includedTaxCents: number;
+  digitalIncludedTaxCents: number;
 }
 
 /** What moving one payment to another way would do: its amount then, and the bill when that changes. */
@@ -184,17 +187,22 @@ function planPaymentChange(db: AppDatabase, input: { orderId: string; paymentId:
   const index = legs.findIndex((l) => l.id === row.id);
   const moved = movedLegAmount(quote, legs, index, input.method);
   if (moved === null) throw new Error(PAYMENT_METHOD_CANT_REWORK);
-  const next = settleLegs(
-    quote,
-    legs.map((l, i) => (i === index ? { method: input.method, amountCents: moved } : l)),
-  );
+  const nextLegs = legs.map((l, i) => (i === index ? { method: input.method, amountCents: moved } : l));
+  const next = settleLegs(quote, nextLegs);
   if (!next.ok) throw new Error(PAYMENT_METHOD_CANT_REWORK);
   // A tax FBR already took (production) is never changed behind its back.
   const fbr = getFbrRowByOrder(db, order.id);
   if (fbr && fbr.status === 'sent' && fbr.modeAtEnqueue === 'production' && (next.totalCents !== order.totalCents || next.taxCents !== order.taxCents)) {
     throw new Error(PAYMENT_METHOD_FBR_SENT);
   }
-  const settled = { totalCents: next.totalCents, taxCents: next.taxCents, digitalNetCents: next.digitalNetCents, digitalTaxCents: next.digitalTaxCents };
+  const settled = {
+    totalCents: next.totalCents,
+    taxCents: next.taxCents,
+    digitalNetCents: next.digitalNetCents,
+    digitalTaxCents: next.digitalTaxCents,
+    // The tax inside the tax-included lines (0057) at the new way's rates: Rs 4,800 by card holds less tax than in cash.
+    ...settleIncludedTaxOf(db, order, quote, nextLegs, next.cashDueCents),
+  };
   return { order, row, amountCents: moved, settled };
 }
 
@@ -274,8 +282,18 @@ export function changePaymentMethod(
     let rebilled: PaymentRebilled | null = null;
     if (settled) {
       db.prepare(
-        `UPDATE orders SET tax_cents = ?, total_cents = ?, digital_net_cents = ?, digital_tax_cents = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
-      ).run(settled.taxCents, settled.totalCents, settled.digitalNetCents, settled.digitalTaxCents, now, order.id);
+        `UPDATE orders SET tax_cents = ?, total_cents = ?, digital_net_cents = ?, digital_tax_cents = ?,
+                           included_tax_cents = ?, digital_included_tax_cents = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+      ).run(
+        settled.taxCents,
+        settled.totalCents,
+        settled.digitalNetCents,
+        settled.digitalTaxCents,
+        settled.includedTaxCents,
+        settled.digitalIncludedTaxCents,
+        now,
+        order.id,
+      );
       const after = findOrder(db, order.id)!;
       enqueueSync(db, { entityType: 'orders', entityId: order.id, op: 'upsert', payload: after });
       writeAudit(db, {
@@ -283,12 +301,21 @@ export function changePaymentMethod(
         entityId: order.id,
         action: 'rebill_payment_method',
         actorUserId: actor.userId,
-        before: { totalCents: order.totalCents, taxCents: order.taxCents, digitalNetCents: order.digitalNetCents ?? 0, digitalTaxCents: order.digitalTaxCents ?? 0 },
+        before: {
+          totalCents: order.totalCents,
+          taxCents: order.taxCents,
+          digitalNetCents: order.digitalNetCents ?? 0,
+          digitalTaxCents: order.digitalTaxCents ?? 0,
+          ...(order.includedTaxCents ? { includedTaxCents: order.includedTaxCents, digitalIncludedTaxCents: order.digitalIncludedTaxCents ?? 0 } : {}),
+        },
         after: {
           totalCents: settled.totalCents,
           taxCents: settled.taxCents,
           digitalNetCents: settled.digitalNetCents,
           digitalTaxCents: settled.digitalTaxCents,
+          ...(settled.includedTaxCents || order.includedTaxCents
+            ? { includedTaxCents: settled.includedTaxCents, digitalIncludedTaxCents: settled.digitalIncludedTaxCents }
+            : {}),
           paymentId: row.id,
           from: row.method,
           to: input.method,

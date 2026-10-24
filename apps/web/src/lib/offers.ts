@@ -34,6 +34,8 @@ export function offerWindow(rules: Buy1Get1Rules = DEFAULT_BUY_1_GET_1_RULES): s
 export const OFFER_HEADLINE = 'Buy 1 Get 1 FREE';
 /** Prominent on the poster, and here. */
 export const OFFER_FINE_PRINT = 'Delivery charges & tax may apply';
+/** The same, when the deals' prices include their tax (0057; the owner's deal menu: "Regular menu pizzas · tax included"). */
+export const OFFER_FINE_PRINT_TAX_INCLUDED = 'Tax included · delivery charges extra';
 export const OFFER_TAG_LINE = 'Tag us on social media and show us the post to get the free item.';
 
 /** A profile link as the hint names it: "Instagram @cheeseoclock.karachi", "Facebook /cheeseoclock.karachi", else the label alone. */

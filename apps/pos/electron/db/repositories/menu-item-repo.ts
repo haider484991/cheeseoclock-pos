@@ -21,6 +21,8 @@ interface Row {
   current_stock: number | null;
   low_stock_threshold: number | null;
   web_availability: string;
+  /** 0057; absent on a row read without it. */
+  price_includes_tax?: number;
   created_at: string;
   updated_at: string;
   synced_at: string | null;
@@ -47,13 +49,15 @@ function rowToItem(row: Row): MenuItem {
     lowStockThreshold: row.low_stock_threshold,
     // A value this version does not know (a newer till's) reads as 'on'.
     webAvailability: webAvailabilityOf(row.web_availability),
+    // The price includes its tax (0057): only when marked, so every other item reads exactly as before.
+    ...(row.price_includes_tax === 1 ? { priceIncludesTax: true } : {}),
   };
 }
 
 const SELECT_COLUMNS = `
   id, category_id, name, description, base_price_cents, sku, barcode, image_url,
   is_active, prep_station, tax_category_id, sort_order, current_stock, low_stock_threshold,
-  web_availability, created_at, updated_at, synced_at, deleted_at, device_id, version
+  web_availability, price_includes_tax, created_at, updated_at, synced_at, deleted_at, device_id, version
 `;
 
 export function listMenuItems(
@@ -116,6 +120,8 @@ export interface CreateMenuItemInput {
   lowStockThreshold?: number | null;
   /** Where it sells on the website; absent = 'on' (the default, as every item before 0045). */
   webAvailability?: WebAvailability;
+  /** The price includes its tax (0057); absent = added on top. */
+  priceIncludesTax?: boolean;
 }
 
 export function createMenuItem(
@@ -141,6 +147,7 @@ export function createMenuItem(
     currentStock: input.currentStock ?? null,
     lowStockThreshold: input.lowStockThreshold ?? null,
     webAvailability: input.webAvailability ?? 'on',
+    ...(input.priceIncludesTax === true ? { priceIncludesTax: true } : {}),
   };
   writeWithSync({
     db,
@@ -156,8 +163,8 @@ export function createMenuItem(
         `INSERT INTO menu_items
            (id, category_id, name, description, base_price_cents, sku, barcode, image_url,
             is_active, prep_station, tax_category_id, sort_order, current_stock, low_stock_threshold,
-            web_availability, created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+            web_availability, price_includes_tax, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       ).run(
         id,
         item.categoryId,
@@ -173,6 +180,7 @@ export function createMenuItem(
         item.currentStock,
         item.lowStockThreshold,
         item.webAvailability,
+        fromBool(item.priceIncludesTax === true),
         now,
         now,
         actor.deviceId,
@@ -199,6 +207,8 @@ export interface UpdateMenuItemInput {
   lowStockThreshold?: number | null;
   /** Where it sells on the website; absent = unchanged. */
   webAvailability?: WebAvailability;
+  /** The price includes its tax (0057); absent = unchanged. */
+  priceIncludesTax?: boolean;
 }
 
 export function updateMenuItem(
@@ -230,11 +240,16 @@ export function updateMenuItem(
       input.lowStockThreshold !== undefined ? input.lowStockThreshold : before.lowStockThreshold,
     webAvailability: input.webAvailability ?? before.webAvailability,
   };
+  const includesTax = input.priceIncludesTax ?? before.priceIncludesTax === true;
+  if (includesTax) after.priceIncludesTax = true;
+  else delete after.priceIncludesTax;
   const now = nowIso();
   // The website column is written only when the caller sets it: an edit of anything else (a
   // price, a menu file import) leaves the stored value as it is — a newer till's value too,
   // which this version reads as 'on'.
   const setsWeb = input.webAvailability !== undefined;
+  // The same for the tax-included mark (0057): written only when the caller sets it.
+  const setsTaxIncluded = input.priceIncludesTax !== undefined;
 
   writeWithSync({
     db,
@@ -250,7 +265,7 @@ export function updateMenuItem(
         `UPDATE menu_items SET
             category_id = ?, name = ?, description = ?, base_price_cents = ?,
             sku = ?, barcode = ?, image_url = ?, is_active = ?, prep_station = ?,
-            tax_category_id = ?, sort_order = ?, current_stock = ?, low_stock_threshold = ?,${setsWeb ? ' web_availability = ?,' : ''}
+            tax_category_id = ?, sort_order = ?, current_stock = ?, low_stock_threshold = ?,${setsWeb ? ' web_availability = ?,' : ''}${setsTaxIncluded ? ' price_includes_tax = ?,' : ''}
             updated_at = ?, version = version + 1
           WHERE id = ?`,
       ).run(
@@ -268,6 +283,7 @@ export function updateMenuItem(
         after.currentStock,
         after.lowStockThreshold,
         ...(setsWeb ? [after.webAvailability] : []),
+        ...(setsTaxIncluded ? [fromBool(includesTax)] : []),
         now,
         input.id,
       );

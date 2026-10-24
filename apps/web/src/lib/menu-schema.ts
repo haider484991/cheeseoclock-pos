@@ -47,6 +47,13 @@ export const ItemSchema = z.object({
    * pick-up.
    */
   noDiscount: z.boolean().optional(),
+  /**
+   * Its price includes the tax on the till (0057, shared-types web-bridge.ts PublishedMenuItem
+   * taxIncluded): sent only as true, absent on every other item, no default — so a menu without it
+   * is stored exactly as before. Without this line the flag would be stripped here and the deal
+   * charged its price plus the tax.
+   */
+  taxIncluded: z.boolean().optional(),
 });
 export const MenuSchema = z.object({
   categories: z.array(

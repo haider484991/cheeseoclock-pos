@@ -96,7 +96,12 @@ export function mapOrderToFbrPayload(
     const lineRateBps =
       (allByCard ? (named ? (paidRates?.[i] ?? line.taxRateBps) : (line.digitalRateBps ?? line.taxRateBps)) : line.taxRateBps) ??
       Math.round((order.taxCents / Math.max(1, subtotal - discount)) * 10_000);
-    const lineTaxCents = Math.round((netCents * lineRateBps) / 10_000);
+    // A price that includes its tax (0057): what is left of it IS the total value; the value before
+    // tax is what the rate makes of it (pos-domain lineTaxOf, kept in step by hand). Every other line:
+    // the tax on top of what is left, as before.
+    const included = line.taxIncluded === true;
+    const valueCents = included ? Math.round((netCents * 10_000) / (10_000 + lineRateBps)) : netCents;
+    const lineTaxCents = included ? netCents - valueCents : Math.round((netCents * lineRateBps) / 10_000);
 
     return {
       hsCode: opts.defaultHsCode,
@@ -104,8 +109,8 @@ export function mapOrderToFbrPayload(
       rate: formatPercent(lineRateBps / 10_000),
       uoM: opts.defaultUoM,
       quantity: line.quantity,
-      totalValues: rupeesFromCents(netCents + lineTaxCents),
-      valueSalesExcludingST: rupeesFromCents(netCents),
+      totalValues: rupeesFromCents(valueCents + lineTaxCents),
+      valueSalesExcludingST: rupeesFromCents(valueCents),
       fixedNotifiedValueOrRetailPrice: rupeesFromCents(line.unitPriceCents),
       salesTaxApplicable: rupeesFromCents(lineTaxCents),
       salesTaxWithheldAtSource: 0,

@@ -24,6 +24,11 @@ import {
  * till's offers engine, rule for rule. An order with none of its lines is
  * priced exactly as before.
  *
+ * A price that includes its tax (0057, the menu's `taxIncluded`: the owner's
+ * deal menu, "THE PRICE YOU SEE IS THE PRICE YOU PAY") adds none to the bill:
+ * its tax is the part of what is left of it the rate makes up
+ * (`includedTaxCents`, shown, never added) — pos-domain lineTaxOf.
+ *
  * pricing.test.ts runs the POS's own functions next to these to keep the two
  * from drifting.
  */
@@ -35,13 +40,18 @@ export interface PricedLine {
   noDiscount?: boolean;
   /** Its menu item's category (the published menu's posCategoryId): a category with its own % (v0.7.50) prices it so. */
   categoryId?: string | null;
+  /** Its price includes the tax (PublishedMenuItem.taxIncluded, 0057): it adds none to the bill. */
+  taxIncluded?: boolean;
 }
 
 export interface OrderTotals {
   subtotalCents: number;
   discountCents: number;
+  /** The tax ADDED to the bill (total = subtotal − discount + tax). */
   taxCents: number;
   totalCents: number;
+  /** The tax already inside the tax-included lines' prices (0057), shown, never added; absent with none. */
+  includedTaxCents?: number;
   /**
    * v0.7.50: the parts the order carries to the till, when a category's own %
    * took something off (shared-types discountPartsToSend). Absent otherwise —
@@ -104,11 +114,13 @@ export function priceOrder(
   const weights = discountWeights(lines);
   const discount = percentDiscountCents(weights.reduce((s, w) => s + w, 0), discountPercent);
   let tax = 0;
+  let included = 0;
   if (subtotal > 0) {
     const shares = allocateDiscount(weights, discount);
     lines.forEach((line, i) => {
-      const net = Math.max(0, line.lineTotalCents - (shares[i] ?? 0));
-      tax += Math.round((net * line.taxRateBps) / 10_000);
+      const t = lineTax(line, shares[i] ?? 0);
+      tax += t.added;
+      included += t.included;
     });
   }
   return {
@@ -116,7 +128,20 @@ export function priceOrder(
     discountCents: discount,
     taxCents: tax,
     totalCents: subtotal - discount + tax,
+    ...(included > 0 ? { includedTaxCents: included } : {}),
   };
+}
+
+/**
+ * One line's tax on what is left of it after its share (pos-domain lineTaxOf): added on top, or —
+ * its price including the tax (0057) — the part of it the rate makes up, added to nothing.
+ */
+function lineTax(line: PricedLine, share: number): { added: number; included: number } {
+  const net = Math.max(0, line.lineTotalCents - share);
+  if (line.taxIncluded === true) {
+    return { added: 0, included: net - Math.round((net * 10_000) / (10_000 + line.taxRateBps)) };
+  }
+  return { added: Math.round((net * line.taxRateBps) / 10_000), included: 0 };
 }
 
 /** The totals of an order whose discount came in parts (v0.7.50): each part spread over its own lines, each line taxed on what is left. */
@@ -137,10 +162,12 @@ function priceByParts(
     });
   }
   let tax = 0;
+  let included = 0;
   if (subtotal > 0) {
     lines.forEach((line, i) => {
-      const net = Math.max(0, line.lineTotalCents - (shares[i] ?? 0));
-      tax += Math.round((net * line.taxRateBps) / 10_000);
+      const t = lineTax(line, shares[i] ?? 0);
+      tax += t.added;
+      included += t.included;
     });
   }
   return {
@@ -148,6 +175,7 @@ function priceByParts(
     discountCents: discount,
     taxCents: tax,
     totalCents: subtotal - discount + tax,
+    ...(included > 0 ? { includedTaxCents: included } : {}),
     discountParts: parts,
   };
 }

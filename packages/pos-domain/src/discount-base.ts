@@ -17,7 +17,11 @@
  *    share floors to 0 and it never takes a leftover paisa), and the discount
  *    never exceeds the base, so the shares still add up to the discount
  *    exactly;
- *  - the tax: per line, on what is left of it (tax-exclusive).
+ *  - the tax: per line, on what is left of it — added on top (tax-exclusive),
+ *    or, for a line whose price includes the tax (`taxIncluded`, a deal on
+ *    the 24 Oct 2026 menu: "the price you see is the price you pay"), the
+ *    part of what is left that is tax, added to nothing: the bill keeps the
+ *    price, at every rate.
  *
  * Which line is a delivery charge is shared-types isDeliveryChargeLine (the
  * name it was sold under), the one test. Since Settings step 3 a caller
@@ -52,6 +56,24 @@ export interface DiscountLine {
 /** A line with the tax rate snapshotted on it (basis points). */
 export interface TaxedDiscountLine extends DiscountLine {
   taxRateBps?: number;
+  /**
+   * order_items.tax_included (0057): its price already holds the tax, frozen
+   * when the line was added; absent = false (every line before 0057).
+   */
+  taxIncluded?: boolean;
+}
+
+/**
+ * One line's tax on what is left of it after its discount share: the tax
+ * ADDED to the bill (tax-exclusive: rate × what is left), and the tax already
+ * INSIDE it (a tax-included line: what is left less what is left before tax;
+ * nothing is added, so the bill keeps the printed price at every rate).
+ */
+export function lineTaxOf(line: TaxedDiscountLine, share: number): { addedCents: number; includedCents: number } {
+  const net = Math.max(0, line.lineTotalCents - share);
+  const rate = line.taxRateBps ?? 0;
+  if (line.taxIncluded === true) return { addedCents: 0, includedCents: computeTax(net, rate, 'inclusive').taxCents as number };
+  return { addedCents: computeTax(net, rate, 'exclusive').taxCents as number, includedCents: 0 };
 }
 
 /**
@@ -171,8 +193,10 @@ export function discountSkipMask(lines: ReadonlyArray<Pick<DiscountLine, 'menuIt
 export interface TaxAfterDiscount {
   /** Each line's share of the discount. */
   shares: number[];
-  /** Σ per-line tax on (line total − its share), tax-exclusive. */
+  /** Σ per-line tax ADDED on (line total − its share): the tax-exclusive lines'. What the bill adds. */
   taxCents: number;
+  /** Σ the tax inside the tax-included lines (lineTaxOf); 0 with none (every order before 0057). */
+  includedTaxCents: number;
 }
 
 /**
@@ -187,12 +211,19 @@ export function taxAfterDiscount(
   scope: DiscountScope,
 ): TaxAfterDiscount {
   const shares = splitDiscount(lines, discountCents, scope);
+  return taxOfShares(lines, shares);
+}
+
+/** Each line taxed on what is left of it after its share (lineTaxOf), added and included summed apart. */
+function taxOfShares(lines: ReadonlyArray<TaxedDiscountLine>, shares: number[]): TaxAfterDiscount {
   let taxCents = 0;
+  let includedTaxCents = 0;
   lines.forEach((line, i) => {
-    const net = Math.max(0, line.lineTotalCents - (shares[i] ?? 0));
-    taxCents += computeTax(net, line.taxRateBps ?? 0, 'exclusive').taxCents as number;
+    const t = lineTaxOf(line, shares[i] ?? 0);
+    taxCents += t.addedCents;
+    includedTaxCents += t.includedCents;
   });
-  return { shares, taxCents };
+  return { shares, taxCents, includedTaxCents };
 }
 
 // ------------------------------------- several offers on one order (0.7.44) --
@@ -247,13 +278,7 @@ export function taxAfterDiscountRows(
   lines: ReadonlyArray<TaxedDiscountLine & { id?: string }>,
   rows: ReadonlyArray<DiscountRowShare>,
 ): TaxAfterDiscount {
-  const shares = splitDiscountRows(lines, rows);
-  let taxCents = 0;
-  lines.forEach((line, i) => {
-    const net = Math.max(0, line.lineTotalCents - (shares[i] ?? 0));
-    taxCents += computeTax(net, line.taxRateBps ?? 0, 'exclusive').taxCents as number;
-  });
-  return { shares, taxCents };
+  return taxOfShares(lines, splitDiscountRows(lines, rows));
 }
 
 // ------------------------------------------------------------ the rule --

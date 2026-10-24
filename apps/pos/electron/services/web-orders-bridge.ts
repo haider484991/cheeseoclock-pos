@@ -1894,6 +1894,9 @@ class WebOrdersBridge {
               // The website's flag, true or false, on a pick-up it priced by its flags (followSite);
               // otherwise absent, so the till's own category decides (a delivery charge is never marked).
               ...(followSite ? { noDiscount: line.noDiscount === true } : {}),
+              // The website priced it with its tax inside (0057): billed so, the customer's price, whatever
+              // the till's item says now. Unmarked: the till's own item decides, as before.
+              ...(line.taxIncluded === true ? { taxIncluded: true } : {}),
             },
             actor,
           );
@@ -2892,7 +2895,8 @@ export function buildPublishedMenuReport(db: AppDatabase): { menu: PublishedMenu
     db
       .prepare(
         `SELECT mi.id, mi.category_id, mi.name, mi.description, mi.base_price_cents,
-                mi.image_url, mi.sort_order, IFNULL(tc.rate_bps, 0) AS rate_bps, mi.web_availability
+                mi.image_url, mi.sort_order, IFNULL(tc.rate_bps, 0) AS rate_bps, mi.web_availability,
+                mi.price_includes_tax
            FROM menu_items mi
            LEFT JOIN tax_categories tc ON tc.id = mi.tax_category_id AND tc.deleted_at IS NULL
           WHERE mi.deleted_at IS NULL AND mi.is_active = 1
@@ -2908,6 +2912,7 @@ export function buildPublishedMenuReport(db: AppDatabase): { menu: PublishedMenu
       sort_order: number;
       rate_bps: number;
       web_availability: string;
+      price_includes_tax: number;
     }>
   ).map((i) => ({
     ...i,
@@ -3000,6 +3005,8 @@ export function buildPublishedMenuReport(db: AppDatabase): { menu: PublishedMenu
           ...(!i.isFee && categoryNeverDiscounted({ name: c.name, noDiscount: noDiscountOf(c.no_discount) })
             ? { noDiscount: true }
             : {}),
+          // Its price includes the tax (0057), only when it does: every other item goes as before.
+          ...(!i.isFee && i.price_includes_tax === 1 ? { taxIncluded: true } : {}),
         })),
     }))
     .filter((c) => c.items.length > 0);

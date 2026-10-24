@@ -301,7 +301,7 @@ describe('migrations: numbered in order, one file per number', () => {
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
-  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), then 0048 (when an order was sent), then 0049 (outside riders), then 0050 (the note count at close), then 0051 (the shift report at close), then 0052 (the card rate), then 0053 (the dashboard’s change indexes), then 0054 (a tax rate for each way of paying), then 0055 (recipes linked to other items), then 0056 (vouchers), by name', () => {
+  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), then 0048 (when an order was sent), then 0049 (outside riders), then 0050 (the note count at close), then 0051 (the shift report at close), then 0052 (the card rate), then 0053 (the dashboard’s change indexes), then 0054 (a tax rate for each way of paying), then 0055 (recipes linked to other items), then 0056 (vouchers), then 0057 (prices that include their tax), by name', () => {
     const numbers = files.map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? NaN));
     expect(numbers).toEqual(numbers.map((_, i) => i + 1));
     // 0040 / 0041 were released in v0.7.22: the drawer log and the test-order
@@ -325,6 +325,7 @@ describe('migrations: numbered in order, one file per number', () => {
       '0054_tax_by_payment_method.sql',
       '0055_recipe_links.sql',
       '0056_vouchers.sql',
+      '0057_price_includes_tax.sql',
     ]);
   });
 

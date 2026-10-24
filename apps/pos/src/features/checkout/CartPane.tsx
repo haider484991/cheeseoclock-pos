@@ -103,6 +103,8 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onVouche
   const subtotalCents = order?.subtotalCents ?? 0;
   const discountCents = order?.discountCents ?? 0;
   const taxCents = order?.taxCents ?? 0;
+  // The tax already inside the prices of tax-included lines (0057; the deals): shown, never added.
+  const includedTaxCents = order?.includedTaxCents ?? 0;
   // The bill by each way of paying whose bill is not the total (0052 the card; 0.7.45 each way its own).
   // Only before it is paid: a paid order's total is the bill as it was settled.
   const byWays = order && order.paidAt === null ? billsByMethod(order) : [];
@@ -472,14 +474,23 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onVouche
               <dd />
             </div>
           )}
-          <div>
-            <dt>Tax</dt>
-            <dd>{formatCents(taxCents, { showSymbol: false })}</dd>
-          </div>
+          {/* Only deals whose prices include their tax: nothing is added, so no "Tax 0" row. */}
+          {!(includedTaxCents > 0 && taxCents === 0) && (
+            <div>
+              <dt>Tax</dt>
+              <dd>{formatCents(taxCents, { showSymbol: false })}</dd>
+            </div>
+          )}
           <div className="is-total">
             <dt>Total</dt>
             <dd>{formatCents(totalCents)}</dd>
           </div>
+          {includedTaxCents > 0 && (
+            <div className="text-xs text-stone-500" data-testid="tax-included">
+              <dt>Tax included in prices</dt>
+              <dd>{formatCents(includedTaxCents, { showSymbol: false })}</dd>
+            </div>
+          )}
           {/* The same bill by card / wallet / bank (0052; 0.7.45 each way at its own rate): one line per bill. */}
           {byWays.map((g) => (
             <div key={g.methods.join('-')} className="text-xs text-stone-500" data-testid="card-total">

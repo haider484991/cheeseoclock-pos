@@ -136,7 +136,7 @@ describe('the split: the delivery charge takes none of it', () => {
 
   it('tax: each line on what is left of it; 100% off leaves the delivery charge and its tax to pay', () => {
     // 10% of the food: tax 16% of (1,080 + 200 + 720) = Rs 320.
-    expect(taxAfterDiscount(ORDER, 20_000, FOOD_ONLY)).toEqual({ shares: [12_000, 0, 8_000], taxCents: 32_000 });
+    expect(taxAfterDiscount(ORDER, 20_000, FOOD_ONLY)).toEqual({ shares: [12_000, 0, 8_000], taxCents: 32_000, includedTaxCents: 0 });
     // 100% of the food: only the delivery charge is left, taxed in full.
     const all = taxAfterDiscount(ORDER, FOOD, FOOD_ONLY);
     expect(all.shares).toEqual([120_000, 0, 80_000]);
@@ -353,7 +353,7 @@ describe('value deals never get a discount', () => {
     expect(tenPct).toBe(15_000);
     expect(splitDiscount(MIXED, tenPct, FOOD_NO_DEALS)).toEqual([15_000, 0, 0]);
     // 15% of Rs 1,350 + Rs 3,600 + Rs 200.
-    expect(taxAfterDiscount(MIXED, tenPct, FOOD_NO_DEALS)).toEqual({ shares: [15_000, 0, 0], taxCents: 20_250 + 54_000 + 3_000 });
+    expect(taxAfterDiscount(MIXED, tenPct, FOOD_NO_DEALS)).toEqual({ shares: [15_000, 0, 0], taxCents: 20_250 + 54_000 + 3_000, includedTaxCents: 0 });
     expect(computeDiscountCents(discountBaseCents(MIXED, FOOD_NO_DEALS), { type: 'flat', value: 300_000 })).toBe(150_000);
     // The mask form (Reports) agrees with the named form.
     expect(splitDiscountByMask(MIXED.map((l) => l.lineTotalCents), tenPct, discountSkipMask(MIXED, FOOD_NO_DEALS))).toEqual([15_000, 0, 0]);

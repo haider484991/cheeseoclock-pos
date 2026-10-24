@@ -440,6 +440,8 @@ export interface IpcContract {
       sortOrder?: number;
       /** Where it sells on the website; absent = 'on' (the default). */
       webAvailability?: WebAvailability;
+      /** The price includes its tax (0057); absent = no. Yes is the owner's alone. */
+      priceIncludesTax?: boolean;
     };
     response: ApiResult<MenuItem>;
   };
@@ -459,6 +461,8 @@ export interface IpcContract {
       sortOrder?: number;
       /** Where it sells on the website; absent = unchanged. A delivery charge is always 'on'. */
       webAvailability?: WebAvailability;
+      /** The price includes its tax (0057); absent = unchanged. A change is the owner's alone. */
+      priceIncludesTax?: boolean;
     };
     response: ApiResult<MenuItem>;
   };

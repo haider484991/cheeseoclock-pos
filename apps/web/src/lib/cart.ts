@@ -120,6 +120,8 @@ export function cartPricedLines(cart: readonly CartLine[]): PricedLine[] {
     lineTotalCents: lineUnitPriceCents(l) * l.quantity,
     taxRateBps: l.item.taxRateBps,
     ...(isNoDiscount(l.item) ? { noDiscount: true } : {}),
+    // Its price includes the tax (0057): it adds none, as on the server and the till.
+    ...(l.item.taxIncluded === true ? { taxIncluded: true } : {}),
   }));
 }
 

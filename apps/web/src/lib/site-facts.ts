@@ -13,6 +13,7 @@ import { DEFAULT_FACTS, factsFromBlock, type CopyFacts, type SiteFacts } from '.
 import { heroSlides, type HeroSlide } from './hero-deals';
 import { resolveHome, type HomeView } from './home-lineup';
 import { DEFAULT_SHOP_FACTS, shopFactsFromBlock, type ShopFacts } from './shop-facts';
+import { menuHasTaxIncluded } from './menu-view';
 import { taxBpsOf } from './tax-words';
 
 /**
@@ -266,7 +267,14 @@ export const getMenuFacts: () => Promise<MenuFacts | null> = dedupe(async () => 
 export const getCopyFacts: () => Promise<CopyFacts> = dedupe(async () => {
   const { site, shop, menu } = await getPageData();
   const feeItemIds = deliveryZoneFeeItemIds(site.zones);
-  return { ...site, shop, taxBps: menu ? taxBpsOf(menu, feeItemIds) : undefined, menu };
+  return {
+    ...site,
+    shop,
+    taxBps: menu ? taxBpsOf(menu, feeItemIds) : undefined,
+    menu,
+    // Some price includes its tax (0057): the sentences about tax say which (absent with none, as before).
+    ...(menu && menuHasTaxIncluded(menu) ? { pricesIncludeTax: true } : {}),
+  };
 });
 
 /**

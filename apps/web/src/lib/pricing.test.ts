@@ -10,7 +10,7 @@ import {
   computeDiscountCents,
 } from '../../../../packages/pos-domain/src/discount';
 import { allocateDiscount as fbrAllocate } from '../../../../packages/fbr-core/src/mapper';
-import { taxAfterDiscountRows } from '../../../../packages/pos-domain/src/discount-base';
+import { taxAfterDiscount, taxAfterDiscountRows } from '../../../../packages/pos-domain/src/discount-base';
 import { assignOfferLines } from '../../../../packages/pos-domain/src/offers';
 import { computeTax } from '../../../../packages/pos-domain/src/tax';
 import { websitePartRule } from '../../../../packages/pos-domain/src/website-offers';
@@ -324,5 +324,49 @@ describe('a category with its own % (v0.7.50, WEBSITE DISCOUNT BY CATEGORY)', ()
     }
     expect(seen.parts).toBeGreaterThan(100);
     expect(seen.onePercent).toBeGreaterThan(20);
+  });
+});
+
+describe('a price that includes its tax (0057): the website bills it as the till does', () => {
+  // The till's own per-line rule, over every discount row (pos-domain taxAfterDiscountRows: lineTaxOf).
+  const till = (lines: PricedLine[], rows: Array<{ amountCents: number; ruleJson: string | null }>) =>
+    taxAfterDiscountRows(
+      lines.map((l) => ({ lineTotalCents: l.lineTotalCents, taxRateBps: l.taxRateBps, noDiscount: l.noDiscount === true, taxIncluded: l.taxIncluded === true })),
+      rows,
+    );
+
+  it('a deal alone: the printed price is the bill, its tax inside', () => {
+    for (const rupees of [4800, 3400, 3500, 2100, 1800, 1300, 1900, 850, 950, 1050, 2000, 1500]) {
+      const lines: PricedLine[] = [{ lineTotalCents: rupees * 100 * 2, taxRateBps: 1500, noDiscount: true, taxIncluded: true }];
+      const t = priceOrder(lines);
+      expect(t.totalCents).toBe(rupees * 100 * 2);
+      expect(t.taxCents).toBe(0);
+      expect(t.includedTaxCents).toBe(till(lines, []).includedTaxCents);
+    }
+  });
+
+  it('a deal, a pizza and the delivery charge, on a pick-up %: the till’s added and included tax', () => {
+    const lines: PricedLine[] = [
+      { lineTotalCents: 480_000, taxRateBps: 1500, noDiscount: true, taxIncluded: true },
+      { lineTotalCents: 200_000, taxRateBps: 1500 },
+      { lineTotalCents: 20_000, taxRateBps: 0, noDiscount: true },
+    ];
+    const t = priceOrder(lines, 10);
+    // 10% of the pizza only: Rs 200; 15% on what is left of it; the deal unchanged at Rs 4,800.
+    expect(t.discountCents).toBe(20_000);
+    // The till's split for a pick-up %: never the value deals, never the delivery charge.
+    const ref = taxAfterDiscount(
+      lines.map((l) => ({ lineTotalCents: l.lineTotalCents, taxRateBps: l.taxRateBps, noDiscount: l.noDiscount === true, taxIncluded: l.taxIncluded === true })),
+      20_000,
+      { alsoOffDeliveryCharge: false, skipsNoDiscountLines: true },
+    );
+    expect(ref.taxCents).toBe(27_000);
+    expect(t.taxCents).toBe(27_000);
+    expect(t.includedTaxCents).toBe(ref.includedTaxCents);
+    expect(t.totalCents).toBe(480_000 + 180_000 + 27_000 + 20_000);
+  });
+
+  it('nothing marked: no includedTaxCents key, the totals as before', () => {
+    expect(priceOrder([{ lineTotalCents: 200_000, taxRateBps: 1500 }])).toEqual({ subtotalCents: 200_000, discountCents: 0, taxCents: 30_000, totalCents: 230_000 });
   });
 });

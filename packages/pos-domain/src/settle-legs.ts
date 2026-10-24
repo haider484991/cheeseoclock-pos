@@ -180,3 +180,43 @@ export function movedLegAmount(
   }
   return null;
 }
+
+/**
+ * The tax inside a bill's tax-included lines (0057; the 24 Oct 2026 deals, "the
+ * price you see is the price you pay") as its payments settle it. Those lines
+ * cost the same every way, but the tax inside them is the paying way's: 15%
+ * of a cash Rs 4,800 is Rs 626.09, 8% of a card one Rs 355.56. settleLegs'
+ * rule again: each part by card, a wallet or a bank buys its amount over its
+ * way's bill of the sale, so it holds that share of the included tax worked
+ * at its way's rates; the cash part holds its share at the cash rates.
+ * `includedAt(way)`: the whole bill's included tax at that way's rates
+ * ('cash' = the lines' own rates). All cash, or all one way: exactly that
+ * way's figure. `digitalIncludedTaxCents` is the part paid a way with a rate
+ * of its own (paysOwnRate) — the receipt's card part and Reports' card-rate
+ * tax, beside digitalTaxCents.
+ */
+export function settledIncludedTax(
+  quote: MethodQuote,
+  legs: ReadonlyArray<SettleLeg>,
+  cashDueCents: number,
+  includedAt: (way: 'cash' | RatedPaymentMethod) => number,
+): { includedTaxCents: number; digitalIncludedTaxCents: number } {
+  const paidBy = new Map<RatedPaymentMethod, number>();
+  for (const leg of legs) {
+    if (isRatedPaymentMethod(leg.method) && leg.amountCents > 0) paidBy.set(leg.method, (paidBy.get(leg.method) ?? 0) + leg.amountCents);
+  }
+  let includedTaxCents = 0;
+  let digitalIncludedTaxCents = 0;
+  for (const [method, amount] of paidBy) {
+    const bill = billByMethod(quote, method);
+    if (bill <= 0) continue;
+    const part = Math.round((amount * includedAt(method)) / bill);
+    includedTaxCents += part;
+    if (paysOwnRate(quote, method)) digitalIncludedTaxCents += part;
+  }
+  if (cashDueCents > 0 && quote.totalCents > 0) {
+    includedTaxCents += Math.round((cashDueCents * includedAt('cash')) / quote.totalCents);
+  }
+  return { includedTaxCents, digitalIncludedTaxCents };
+}
+

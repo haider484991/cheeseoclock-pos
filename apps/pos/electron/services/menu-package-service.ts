@@ -132,12 +132,15 @@ export function menuDeployPlanFacts(plan: Pick<MenuImportPlan, 'ops'>, live: Pic
   const priceChanges: Array<MenuDeployPlanFacts['priceChanges'][number]> = [];
   const choiceChanges: Array<MenuDeployPlanFacts['choiceChanges'][number]> = [];
   const taxMoves: Array<MenuDeployPlanFacts['taxMoves'][number]> = [];
+  const taxIncludedChanges: Array<NonNullable<MenuDeployPlanFacts['taxIncludedChanges']>[number]> = [];
   for (const op of ops.items) {
     const item = op.existingId ? items.get(op.existingId) : undefined;
     if (!item || !op.update) continue;
     const to = op.update.basePriceCents;
     if (to !== undefined && to !== item.basePriceCents) priceChanges.push({ name: item.name, fromCents: item.basePriceCents, toCents: to });
     if (op.update.useImportTax && toBps !== null) taxMoves.push({ name: item.name, fromBps: rate.get(item.taxCategoryId) ?? null, toBps });
+    // "Price includes tax" changed on an item the till has (0057): a tax change, the owner's OK.
+    if (op.update.priceIncludesTax !== undefined) taxIncludedChanges.push({ name: item.name, included: op.update.priceIncludesTax });
   }
   for (const g of ops.modifierGroups) {
     for (const o of g.options) {
@@ -147,7 +150,7 @@ export function menuDeployPlanFacts(plan: Pick<MenuImportPlan, 'ops'>, live: Pic
     }
   }
   const newTax = ops.createTaxCategory ? { name: ops.createTaxCategory.name, rateBps: ops.createTaxCategory.rateBps } : null;
-  return { priceChanges, choiceChanges, taxMoves, newTax };
+  return { priceChanges, choiceChanges, taxMoves, newTax, ...(taxIncludedChanges.length > 0 ? { taxIncludedChanges } : {}) };
 }
 
 export interface MenuPackageServiceDeps {

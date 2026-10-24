@@ -15,6 +15,8 @@ export interface CartProps {
   discount: number;
   zone: FactZone | undefined;
   tax: number;
+  /** The tax already inside the prices of the cart's tax-included items (0057); absent or 0 = none. */
+  includedTax?: number;
   total: number;
   setQty: (key: string, qty: number) => void;
   onClear: () => void;
@@ -312,10 +314,13 @@ export function Totals(props: CartProps) {
           </div>
         </>
       )}
-      <div className="flex justify-between text-ink-muted">
-        <dt>Tax (est.)</dt>
-        <dd className="tabular-nums">{formatCents(props.tax)}</dd>
-      </div>
+      {/* A cart of tax-included items only adds no tax: no "Tax 0" row, the tax inside shows below the total. */}
+      {!((props.includedTax ?? 0) > 0 && props.tax === 0) && (
+        <div className="flex justify-between text-ink-muted">
+          <dt>Tax (est.)</dt>
+          <dd className="tabular-nums">{formatCents(props.tax)}</dd>
+        </div>
+      )}
       <div className="flex justify-between pt-1 font-cond text-xl font-extrabold uppercase text-ink">
         <dt>Total</dt>
         <dd className="tabular-nums">
@@ -323,6 +328,12 @@ export function Totals(props: CartProps) {
           {!pickup && !props.zone && <span className="ml-1 text-xs font-bold text-ink-muted">+ delivery</span>}
         </dd>
       </div>
+      {(props.includedTax ?? 0) > 0 && (
+        <div className="flex justify-between text-xs text-ink-muted">
+          <dt>Tax included in prices</dt>
+          <dd className="tabular-nums">{formatCents(props.includedTax ?? 0)}</dd>
+        </div>
+      )}
     </dl>
   );
 }

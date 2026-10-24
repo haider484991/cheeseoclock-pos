@@ -83,6 +83,13 @@ export interface MenuItem {
   lowStockThreshold: number | null;
   /** Where it sells on the website ('on' until the owner changes it; see WEB_AVAILABILITIES). */
   webAvailability: WebAvailability;
+  /**
+   * The price already includes its tax (menu_items.price_includes_tax, 0057; the owner's deal menu,
+   * 24 Oct 2026: "THE PRICE YOU SEE IS THE PRICE YOU PAY · TAX INCLUDED"): the bill charges exactly
+   * the price whichever way it is paid, and the tax is the part of it the rate makes up. Absent /
+   * false = tax added on top, as every item before 0057.
+   */
+  priceIncludesTax?: boolean;
 }
 
 export type ModifierSelectionType = 'single' | 'multi';

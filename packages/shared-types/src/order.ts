@@ -90,6 +90,16 @@ export interface Order {
    */
   digitalNetCents?: Cents;
   digitalTaxCents?: Cents;
+  /**
+   * The tax already inside the order's tax-included lines (orders.included_tax_cents, 0057):
+   * taxCents is only the tax ADDED on top (total = subtotal − discount + taxCents holds), so
+   * the order's whole tax is taxCents + includedTaxCents. Worked at the cash rates with the
+   * other totals, then as the sale's payments settle it (pos-domain settledIncludedTax).
+   * Absent / 0 with no such line (every order before 0057).
+   */
+  includedTaxCents?: Cents;
+  /** The part of includedTaxCents paid a way with a rate of its own (beside digitalTaxCents); absent / 0 = none. */
+  digitalIncludedTaxCents?: Cents;
   createdAt: string;
   /**
    * When the order first left open (orders.sent_at, migration 0048): Send to
@@ -170,6 +180,11 @@ export interface OrderItem {
    * Absent / false on every line sold before 0.7.34.
    */
   noDiscount?: boolean;
+  /**
+   * Its price includes the tax (order_items.tax_included, 0057): a snapshot of the menu item's
+   * mark when the line was added. Absent / false = tax added on top (every line before 0057).
+   */
+  taxIncluded?: boolean;
 }
 
 export interface OrderItemModifier {
@@ -277,6 +292,12 @@ export interface OrderSnapshot {
        */
       methodRatesBps?: MethodRatesBps | null;
       modifiers: OrderItemModifier[];
+      /**
+       * What a deal is made of, for the kitchen (the owner, 24 Oct 2026: "in the kitchen receipt we
+       * don't see … what items are in the deals"): its menu item's description, for a line of a
+       * never-discounted (deal) category. Absent on every other line and when it has none.
+       */
+      dealContents?: string;
     }
   >;
   discounts: OrderDiscount[];

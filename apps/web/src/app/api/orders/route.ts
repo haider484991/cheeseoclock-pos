@@ -364,11 +364,15 @@ export async function POST(req: Request): Promise<Response> {
       // A value deal (the stored menu's mark, never the browser's): no share of the pick-up %,
       // and the flag on its stored line — the LAST key, so an unmarked line's JSON is today's.
       const marked = item.noDiscount === true;
+      // Its price includes the tax (0057; the stored menu's mark): it adds none, and the till bills it so
+      // (the flag after noDiscount on its stored line, so an unmarked line's JSON is today's).
+      const taxIncluded = item.taxIncluded === true;
       priced.push({
         lineTotalCents: unit * line.quantity,
         taxRateBps: item.taxRateBps,
         ...(marked ? { noDiscount: true } : {}),
         categoryId: categoryOf.get(item.posItemId) ?? null,
+        ...(taxIncluded ? { taxIncluded: true } : {}),
       });
       lines.push({
         posItemId: item.posItemId,
@@ -378,6 +382,7 @@ export async function POST(req: Request): Promise<Response> {
         modifiers: mods,
         notes: line.notes?.trim() || null,
         ...(marked ? { noDiscount: true as const } : {}),
+        ...(taxIncluded ? { taxIncluded: true as const } : {}),
       });
     }
 

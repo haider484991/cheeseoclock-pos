@@ -44,6 +44,14 @@ export interface PublishedMenuItem {
    * byte-for-byte today's. See "NO DISCOUNT ON VALUE DEALS" below.
    */
   noDiscount?: boolean;
+  /**
+   * Its price includes the tax (Menu → the item → Price includes tax, 0057; the owner's deal
+   * menu, 24 Oct 2026: "THE PRICE YOU SEE IS THE PRICE YOU PAY · TAX INCLUDED"): the website
+   * adds no tax for it and shows the price as the bill; `taxRateBps` is the rate inside it.
+   * Sent ONLY as `true`, so a menu with nothing marked is byte-for-byte today's. A website older
+   * than the mark drops it and adds the tax on top: deploy the website before the tills.
+   */
+  taxIncluded?: boolean;
 }
 
 /**
@@ -1094,6 +1102,12 @@ export interface WebOrderItem {
    * takes a share either (WEBSITE DELIVERY DISCOUNT).
    */
   noDiscount?: boolean;
+  /**
+   * Set by the website SERVER from the stored menu item, like noDiscount; sent only as `true`:
+   * the website priced this line with its tax inside the price (0057), adding none. The till
+   * then bills it so too, whatever its own item says now (the customer's price).
+   */
+  taxIncluded?: boolean;
 }
 
 /**

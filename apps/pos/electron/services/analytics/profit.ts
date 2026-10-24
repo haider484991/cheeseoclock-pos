@@ -210,7 +210,7 @@ export const PROFIT_REST_SQL = `
          ro.drow AS drow,
          oi.id AS lineId, oi.created_at AS at,
          oi.menu_item_id AS itemId, oi.menu_item_name AS soldName, oi.quantity AS qty, oi.line_total_cents AS lineTotal,
-         oi.tax_rate_bps_snapshot AS rate, oi.no_discount AS nd,
+         oi.tax_rate_bps_snapshot AS rate, oi.no_discount AS nd, oi.tax_included AS ti,
          ${FEE_LINE} AS isFee,
          (SELECT COALESCE(SUM(c.cost_cents), 0) * 8
                  + COALESCE(MAX(CASE c.status WHEN 'failed' THEN 3 WHEN 'partial' THEN 2 WHEN 'none' THEN 1 WHEN 'full' THEN 0 END), 7)
@@ -454,6 +454,7 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
     lineTotal: number;
     rate: number;
     nd: number;
+    ti: number;
     isFee: number;
     packed: number;
   }>;
@@ -512,7 +513,14 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
         status: c.status,
         hasRecipeNow: r.itemId !== null && menu.withRecipe.has(r.itemId),
       },
-      sold: { lineTotalCents: Number(r.lineTotal), menuItemName: r.soldName, taxRateBps: Number(r.rate), noDiscount: Number(r.nd) === 1 },
+      sold: {
+        lineTotalCents: Number(r.lineTotal),
+        menuItemName: r.soldName,
+        taxRateBps: Number(r.rate),
+        noDiscount: Number(r.nd) === 1,
+        // Its price including the tax (0057) adds none: the stored tax is read as the till worked it.
+        ...(Number(r.ti) === 1 ? { taxIncluded: true } : {}),
+      },
     });
   }
   const orders = [...byOrder.values()];
