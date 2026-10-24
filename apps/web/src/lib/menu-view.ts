@@ -542,11 +542,19 @@ export function dealWorthCents(
   deal: PublishedMenuItem,
 ): number | null {
   if (deal.modifierGroups.length === 0) return null;
+  // Contents this can't price one by one — a burger, nuggets, fries, dips, wings (the 24 Oct deal menu's Mega Cheese
+  // Box, Pizzas & Nuggets…): no saving shown, rather than one smaller than the real one (Pizzas & Nuggets showed a
+  // saving counted from its pizzas and drink only).
+  if (/\b(?:burgers?|nuggets?|fries|dips?|wings?|sides?)\b/i.test(deal.description ?? '')) return null;
   const all = menu.categories.flatMap((c) => c.items);
+  // Like with like (0057): a deal whose price includes its tax is weighed against what its contents cost with their
+  // tax, when their own prices add it on the bill.
+  const asPaid = (it: PublishedMenuItem): number =>
+    isTaxIncluded(deal) && !isTaxIncluded(it) ? Math.round((it.basePriceCents * (10_000 + it.taxRateBps)) / 10_000) : it.basePriceCents;
   const priceOf = new Map<string, number>();
   for (const it of all) {
     const { base, size } = splitSizedName(it.name);
-    if (size) priceOf.set(`${base}|${size}`.toLowerCase(), it.basePriceCents);
+    if (size) priceOf.set(`${base}|${size}`.toLowerCase(), asPaid(it));
   }
 
   let worth = 0;
@@ -575,7 +583,7 @@ export function dealWorthCents(
   if (/\b1\s*lit(?:re|er)\b/i.test(deal.description ?? '')) {
     const drink = all.find((it) => /^1\s*lit(?:re|er)$/i.test(splitSizedName(it.name).size ?? ''));
     if (!drink) return null;
-    worth += drink.basePriceCents;
+    worth += asPaid(drink);
   }
   return worth;
 }

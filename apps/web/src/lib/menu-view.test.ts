@@ -235,6 +235,25 @@ describe('value deals', () => {
     const noDrink = menu([['Pizza', [item('Fajita Pizza — Large', 2000)]]]);
     expect(dealWorthCents(noDrink, bigTwo)).toBeNull();
   });
+
+  it('shows no saving for a deal holding things it cannot price one by one (24 Oct 2026: nuggets, dips, a burger)', () => {
+    // Pizzas & Nuggets: only its pizzas and drink would be counted — "save Rs 250" against a real saving far bigger.
+    const pizzasAndNuggets = { ...familyFeast, name: 'Pizzas & Nuggets', description: 'Large 12" regular pizza + Medium 9" regular pizza + Chicken nuggets + 1 litre drink, 2 dips' };
+    expect(dealWorthCents(m, pizzasAndNuggets)).toBeNull();
+    const megaBox = { ...familyFeast, name: 'Mega Cheese Box', description: 'Large + Medium regular pizza + Signature Crispy burger + Fries, 1 litre drink' };
+    expect(dealWorthCents(m, megaBox)).toBeNull();
+  });
+
+  it('weighs a tax-included deal against its contents with their tax (0057)', () => {
+    // 2 Large at Rs 2,000 + the 1 litre drink at Rs 250, each with its 15% added on the bill = Rs 4,887.50.
+    expect(dealWorthCents(m, { ...bigTwo, taxIncluded: true })).toBe(488_750);
+    // Contents that include their tax too: as they are.
+    const allIncluded = menu([
+      ['Pizza', [item('Fajita Pizza — Large', 2000, { taxIncluded: true }), item('Cheesalious — Large', 2000, { taxIncluded: true })]],
+      ['Drinks', [item('Soft Drink — 1 litre', 250, { taxIncluded: true })]],
+    ]);
+    expect(dealWorthCents(allIncluded, { ...bigTwo, taxIncluded: true })).toBe(425_000);
+  });
 });
 
 describe('labels', () => {
