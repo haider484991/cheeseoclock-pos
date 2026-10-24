@@ -433,7 +433,7 @@ describe('the slider’s markup (components/HeroDealsClient), as the server rend
   it('a burger deal’s own photo and price; an offer’s price before (struck) and after; the first photo loads first', () => {
     const imgs = [...html.matchAll(/<img [^>]*>/g)].map((m) => m[0]);
     expect(imgs).toHaveLength(7);
-    expect(imgs[0]).toContain('src="/images/hero/deal-classic-crispy.webp"');
+    expect(imgs[0]).toContain('src="/images/hero/deal-classic-crispy-cola.webp"');
     expect(imgs.map((i) => /loading="(eager|lazy)"/.exec(i)![1])).toEqual([
       'eager',
       'eager',
