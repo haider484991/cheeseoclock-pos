@@ -640,7 +640,7 @@ describe('menuImportFileSchema', () => {
     expect(orderOf(last, 'dips')).toBe(6);
   });
 
-  it('reads versions 1 to 5 only (4: the Buy 1 Get 1 deals, v0.7.39; 5: prices that include their tax, v0.7.52)', () => {
+  it('reads versions 1 to 6 only (4: the Buy 1 Get 1 deals, v0.7.39; 5: prices that include their tax, v0.7.52; 6: items off the menu and the Buy 1 Get 1 hours, v0.7.53)', () => {
     const file = (version: number) =>
       menuImportFileSchema.safeParse({ format: 'cheeseoclock-menu-import', version, categories: [], ingredients: [], items: [] });
     expect(file(1).success).toBe(true);
@@ -648,7 +648,52 @@ describe('menuImportFileSchema', () => {
     expect(file(3).success).toBe(true);
     expect(file(4).success).toBe(true);
     expect(file(5).success).toBe(true);
-    expect(file(6).success).toBe(false);
+    expect(file(6).success).toBe(true);
+    expect(file(7).success).toBe(false);
+  });
+
+  it('version 6: an item the file takes off the menu is switched off (never deleted), and never made when the till has none', () => {
+    const v6 = (items: unknown[], extra: Record<string, unknown> = {}) =>
+      menuImportFileSchema.parse({ format: 'cheeseoclock-menu-import', version: 6, categories: [{ name: 'Pizza' }], ingredients: [], items, ...extra });
+    const off = (name: string, onSale: boolean) => ({ name, category: 'Pizza', priceCents: 170000, onSale });
+    const plan = planMenuImport(
+      v6([off('Test Big Two', false), off('Test Family Feast', false), off('Test Perfect Pair', true), off('Test Never Here', false)]),
+      shop({
+        items: [
+          item('b2', 'Test Big Two'),
+          item('ff', 'Test Family Feast', { isActive: false }),
+          item('pp', 'Test Perfect Pair', { isActive: false }),
+        ],
+      }),
+    );
+    const row = (name: string) => plan.preview.items.find((r) => r.name === name)!;
+    expect(row('Test Big Two')).toMatchObject({ action: 'update', changes: ['switched off (off the menu)'] });
+    expect(plan.ops.items.find((o) => o.existingId === 'b2')).toMatchObject({ update: { isActive: false }, create: null, recipe: null });
+    // Already off: nothing to do.
+    expect(row('Test Family Feast').action).toBe('same');
+    expect(plan.ops.items.some((o) => o.existingId === 'ff')).toBe(false);
+    // On sale again: switched back on.
+    expect(row('Test Perfect Pair')).toMatchObject({ action: 'update', changes: ['switched back on'] });
+    expect(plan.ops.items.find((o) => o.existingId === 'pp')?.update).toEqual({ isActive: true });
+    // Never on this till: skipped, not made.
+    expect(row('Test Never Here')).toMatchObject({ action: 'skip', reason: 'Off the menu (the file takes it off); this till does not have it' });
+    expect(plan.ops.items.some((o) => o.create?.name === 'Test Never Here')).toBe(false);
+    expect(plan.preview.summary).toMatchObject({ newItems: 0, updatedItems: 2, skipped: 1 });
+    // Absent = as it is.
+    expect(planMenuImport(v6([{ name: 'Test Big Two', category: 'Pizza', priceCents: 170000 }]), shop({ items: [item('b2', 'Test Big Two')] })).ops.items).toEqual([]);
+  });
+
+  it('version 6: the Buy 1 Get 1 hours go with the plan; absent = the till keeps its own', () => {
+    const v6 = (extra: Record<string, unknown>) =>
+      menuImportFileSchema.parse({ format: 'cheeseoclock-menu-import', version: 6, categories: [], ingredients: [], items: [], ...extra });
+    expect(planMenuImport(v6({ buy1Get1Hours: { opensMinute: 720, closesMinute: 1140 } }), shop()).ops.buy1Get1Hours).toEqual({
+      opensMinute: 720,
+      closesMinute: 1140,
+    });
+    expect(planMenuImport(v6({}), shop()).ops.buy1Get1Hours).toBeNull();
+    // Hours that start and end together, or past midnight's last minute, are refused with the file.
+    expect(() => v6({ buy1Get1Hours: { opensMinute: 720, closesMinute: 720 } })).toThrow();
+    expect(() => v6({ buy1Get1Hours: { opensMinute: 720, closesMinute: 1441 } })).toThrow();
   });
 });
 

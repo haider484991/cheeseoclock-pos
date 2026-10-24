@@ -21,6 +21,7 @@ import { MENU_DEPLOY_MAX_ATTEMPTS } from '@cheeseoclock/shared-types';
 import { DatabaseSync } from '../db/costing-shop.fixture.js';
 import { linkOn, openTill, push } from '../db/two-tills.fixture.js';
 import type { AppDatabase } from '../db/connection.js';
+import { readShopSetting } from '../db/business-settings-read.js';
 import { FakeMenuWebsite, madeUpMenu, type Clock } from './menu-deploy-website.fixture.js';
 import { menuRows, orderRungUp, serviceTill } from './menu-package-till.fixture.js';
 
@@ -176,18 +177,18 @@ live('where the till stands decides', () => {
 
   it('a file newer than this till reads: never downloaded, "update the till", said once', async () => {
     const c = setup();
-    c.website.upload(madeUpMenu('v6', { version: 6 }));
+    c.website.upload(madeUpMenu('v7', { version: 7 }));
     for (let i = 0; i < 3; i++) {
       const v = await c.till.service.checkNow();
       expect(v.phase).toBe('too_old');
-      expect(v.message).toContain('format 6; this till reads up to 5');
+      expect(v.message).toContain('format 7; this till reads up to 6');
       expect(v.message).toContain('Update the till');
       tick(c, 3 * MIN);
     }
     expect(c.website.claims()).toHaveLength(0);
     expect(c.website.callsTo(/\/content$/)).toHaveLength(0);
     expect(c.website.reports('too_old')).toHaveLength(1);
-    expect(c.website.reports('too_old')[0]!.body).toMatchObject({ formatVersion: 6, maxFormatVersion: 5 });
+    expect(c.website.reports('too_old')[0]!.body).toMatchObject({ formatVersion: 7, maxFormatVersion: 6 });
     expect(c.till.emits.map((e) => e.notice?.kind).filter(Boolean)).toEqual(['problem']);
   });
 
@@ -635,6 +636,39 @@ live('after a restore, a reset website, a slow backup, a file that cuts prices (
     expect((await c.till.service.checkNow()).phase).toBe('applied');
     expect(c.website.byId(p5.id)!.state).toBe('applied');
     expect(price()).toBe(121_000);
+  });
+
+  it('version 6 (POS 0.7.53), by itself: a price made tax-included, an item taken off the menu and the Buy 1 Get 1 hours — no tap', async () => {
+    const c = setup();
+    c.website.upload(madeUpMenu('one'));
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    const row = (name: string) =>
+      c.till.db.prepare(`SELECT price_includes_tax AS included, is_active AS active FROM menu_items WHERE name = ? AND deleted_at IS NULL`).get(name) as
+        | { included: number; active: number }
+        | undefined;
+    // The owner, 24 Oct 2026: "i am the owner … do it from here" — the deal tax-included, the old deal off, B1G1 from 12 PM.
+    const items = (madeUpMenu('v6')['items'] as Array<Record<string, unknown>>).map((i) =>
+      i['name'] === 'Test Margherita' ? { ...i, priceIncludesTax: true } : { ...i, onSale: false },
+    );
+    const p = c.website.upload(
+      madeUpMenu('v6', {
+        version: 6,
+        items: [...items, { name: 'Test Gone Deal', category: 'Test Pizzas', priceCents: 300_000, onSale: false }],
+        buy1Get1Hours: { opensMinute: 12 * 60, closesMinute: 19 * 60 },
+      }),
+    );
+    tick(c, 3 * MIN);
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    expect(c.website.byId(p.id)).toMatchObject({ state: 'applied', appliedBy: 'till-1' });
+    expect(c.website.reports('waiting_for_owner')).toHaveLength(0);
+    expect(row('Test Margherita')).toEqual({ included: 1, active: 1 });
+    // Switched off, never deleted; one the till never had is not made.
+    expect(row('Test Lemonade')).toEqual({ included: 0, active: 0 });
+    expect(row('Test Gone Deal')).toBeUndefined();
+    // The hours are the file's; on/off and the name question stay the till's.
+    expect(readShopSetting(c.till.db, 'deals.buy1Get1').value).toMatchObject({ on: true, opensMinute: 720, closesMinute: 1140, asksSocial: true });
+    // The website hears the new menu (and its settings block) once more.
+    expect(c.till.steps).toEqual(['backup', 'publish', 'backup', 'publish']);
   });
 
   it('a price RISE past double, a choice cut to Rs 0, and a free choice given a charge each wait for the owner on their own — named; exactly double goes in', async () => {

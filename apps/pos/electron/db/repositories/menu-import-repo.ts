@@ -20,7 +20,7 @@ import { importPriceRowId, rollUpBatches, setSheetPrice } from './ingredient-cos
 import { raiseBatchUnpricedAlerts } from './cost-alert-repo.js';
 import { loadPriceBook } from '../price-book.js';
 import { latestPriceTags } from '../price-history-read.js';
-import { readDeliveryFeeItemIds, readMenuImportPolicy } from '../business-settings-read.js';
+import { readDeliveryFeeItemIds, readMenuImportPolicy, readShopSetting } from '../business-settings-read.js';
 import { setBatchRecipe, clearBatchRecipeLines } from './batch-recipe-repo.js';
 import { setBusinessSetting } from './business-settings-repo.js';
 import { listCombos, deleteCombo } from './combo-repo.js';
@@ -737,6 +737,15 @@ export function applyMenuImport(
         if (db.prepare(`SELECT 1 FROM recipe_links WHERE menu_item_id = ? AND deleted_at IS NULL LIMIT 1`).get(itemId)) {
           setRecipeLinksForItem(db, itemId, [], actor);
         }
+      }
+    }
+
+    // The Buy 1 Get 1 hours (file version 6): saved as the till's own when they differ, keeping whether the deals are
+    // on and the name question (Settings → Money & discounts shows them; the next publish takes them to the website).
+    if (ops.buy1Get1Hours) {
+      const now = readShopSetting(db, 'deals.buy1Get1').value;
+      if (now.opensMinute !== ops.buy1Get1Hours.opensMinute || now.closesMinute !== ops.buy1Get1Hours.closesMinute) {
+        setBusinessSetting(db, 'deals.buy1Get1', { ...now, ...ops.buy1Get1Hours }, actor);
       }
     }
 

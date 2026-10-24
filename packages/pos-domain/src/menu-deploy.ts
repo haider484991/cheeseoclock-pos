@@ -299,8 +299,10 @@ export function menuDeployNeedsOwner(f: MenuDeployPlanFacts): string | null {
   const tax = [
     ...f.taxMoves.map((t) => `${t.name} ${t.fromBps === null ? '?' : pct(t.fromBps)} → ${pct(t.toBps)}`),
     ...(f.newTax ? [`a new tax category, ${f.newTax.name} (${pct(f.newTax.rateBps)})`] : []),
-    ...(f.taxIncludedChanges ?? []).map((t) => `${t.name}: ${t.included ? 'tax included in the price' : 'tax added on top'}`),
   ];
+  // A "price includes tax" change (f.taxIncludedChanges) does NOT hold the file since POS 0.7.53 (the owner, 24 Oct
+  // 2026: "i am the owner … do it from here"): it is the owner's own menu decision sent from the costing PC, and it
+  // still shows among the file's changes in Menu → Import. A move onto another tax category still waits.
   const parts: string[] = [];
   if (jumps.length > 0) parts.push(`move ${plural(jumps.length, 'price', 'prices')} to less than half, more than double or Rs 0 (${listWords(jumps)})`);
   if (tax.length > 0) parts.push(`change the tax (${listWords(tax)})`);

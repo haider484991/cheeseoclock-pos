@@ -127,6 +127,11 @@ export const menuImportItemSchema = z.object({
    * false = added on top. Absent = leave the till's as it is (a new item: added on top).
    */
   priceIncludesTax: z.boolean().optional(),
+  /**
+   * On sale (version 6): false = the file takes the item off the menu — the till switches it off (never deletes it,
+   * and never makes it when it has none); true = switched back on. Absent = as it is.
+   */
+  onSale: z.boolean().optional(),
 });
 
 /**
@@ -135,7 +140,7 @@ export const menuImportItemSchema = z.object({
  * a file in a newer format is never downloaded by a till that would refuse it
  * ("update the till"). Raise it together with the union (a test pins them).
  */
-export const MAX_MENU_FILE_VERSION = 5;
+export const MAX_MENU_FILE_VERSION = 6;
 
 export const menuImportFileSchema = z
   .object({
@@ -154,8 +159,13 @@ export const menuImportFileSchema = z
      * 5 = may carry `priceIncludesTax` on its items (POS 0.7.52, migration
      * 0057): a POS before that would drop it and add the tax on top of a
      * price that already holds it — so it waits for its update.
+     * 6 = may switch items off (`onSale: false`) and set the Buy 1 Get 1
+     * hours (`buy1Get1Hours`), and a "price includes tax" change goes in
+     * without the owner's OK (POS 0.7.53; the owner, 24 Oct 2026: "i am the
+     * owner … do it from here"): a POS before that would ignore both and
+     * hold the file — so it waits for its update.
      */
-    version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
+    version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)]),
     source: z.string().max(300).nullable().default(null),
     /**
      * The tax every item in the file is charged (added on top of the price —
@@ -171,6 +181,14 @@ export const menuImportFileSchema = z
       })
       .nullable()
       .default(null),
+    /**
+     * The Buy 1 Get 1 deals' hours (version 6; Settings → Money & discounts → Buy 1 Get 1 deals): the till saves them
+     * as its own, keeping whether the deals are on and the name question. Absent = the till's hours stay.
+     */
+    buy1Get1Hours: z
+      .object({ opensMinute: z.number().int().min(0).max(1439), closesMinute: z.number().int().min(1).max(1440) })
+      .refine((h) => h.opensMinute !== h.closesMinute, { message: 'The Buy 1 Get 1 hours start and end at the same minute' })
+      .optional(),
     categories: z.array(menuImportCategorySchema).max(100),
     modifierGroups: z.array(menuImportModifierGroupSchema).max(100).default([]),
     ingredients: z.array(menuImportIngredientSchema).max(1000),

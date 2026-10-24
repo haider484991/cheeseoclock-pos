@@ -296,6 +296,8 @@ describe('THE RULE, row by row', () => {
       }),
     ).toBeNull();
     expect(menuDeployNeedsOwner(none)).toBeNull();
+    // "Price includes tax" changes go in by themselves since POS 0.7.53 (the owner: "do it from here").
+    expect(menuDeployNeedsOwner({ ...none, taxIncludedChanges: [{ name: 'Test Deal', included: true }, { name: 'Test Meal', included: false }] })).toBeNull();
     // A 10× rise on its own (the skeptic's run 2) is held, and named.
     expect(menuDeployNeedsOwner({ ...none, priceChanges: [{ name: 'Test Pie', fromCents: 110_000, toCents: 1_100_000 }] })).toBe(
       'it would move 1 price to less than half, more than double or Rs 0 (Test Pie Rs 1,100 → Rs 11,000)',

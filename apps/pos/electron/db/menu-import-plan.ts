@@ -208,7 +208,7 @@ export interface MenuImportOps {
      * useImportTax: move the item onto the import's tax category (see taxCategoryId / createTaxCategory).
      * priceIncludesTax: the file's mark where it differs from the till's (0057) — a tax change.
      */
-    update: { basePriceCents?: number; description?: string; useImportTax?: true; priceIncludesTax?: boolean } | null;
+    update: { basePriceCents?: number; description?: string; useImportTax?: true; priceIncludesTax?: boolean; isActive?: boolean } | null;
     /** Choice groups to attach (in addition to those already attached). */
     attach: GroupRef[];
     /** Replace the item's recipe with these lines; null = leave the recipe alone. */
@@ -243,6 +243,8 @@ export interface MenuImportOps {
   taxCategoryId: string | null;
   /** …or, when the POS has none at the file's rate, the one to create first. */
   createTaxCategory: { name: string; rateBps: number; digitalRateBps?: number | null } | null;
+  /** The file's Buy 1 Get 1 hours (version 6), saved over the till's when they differ; null = the till's stay. */
+  buy1Get1Hours?: { opensMinute: number; closesMinute: number } | null;
 }
 
 export interface MenuImportPlan {
@@ -1144,6 +1146,20 @@ export function planMenuImport(
     }
 
     if (!m.row) {
+      // An item the file takes off the menu (version 6) that this till never had: nothing to make.
+      if (item.onSale === false) {
+        itemPlans.push({
+          ...base,
+          categoryName: categoryNameByKey.get(catKey) ?? item.category,
+          action: 'skip',
+          existingName: null,
+          changes: [],
+          recipeChange: 'none',
+          reason: 'Off the menu (the file takes it off); this till does not have it',
+        });
+        summary.skipped++;
+        return;
+      }
       if (!canCreateItems) {
         itemPlans.push({
           ...base,
@@ -1229,6 +1245,11 @@ export function planMenuImport(
         update.priceIncludesTax = item.priceIncludesTax;
         summary.taxChanges++;
       }
+    }
+    // On sale (version 6): the file takes it off the menu, or puts it back. Switched off, never deleted.
+    if (item.onSale !== undefined && item.onSale !== row.isActive) {
+      changes.push(item.onSale ? 'switched back on' : 'switched off (off the menu)');
+      update.isActive = item.onSale;
     }
 
     const attachedNow = new Set((live.itemGroups.get(row.id) ?? []).map((a) => a.groupId));
@@ -1332,6 +1353,7 @@ export function planMenuImport(
       batches: batchOps,
       taxCategoryId: taxCategory?.id ?? null,
       createTaxCategory,
+      buy1Get1Hours: file.buy1Get1Hours ?? null,
     },
   };
 }
