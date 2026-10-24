@@ -115,7 +115,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             active: z.active,
           }))}
           slides={gateSlides(menu, { buy1Get1: site.buy1Get1 })}
-          shop={{ lat: BUSINESS.latitude, lng: BUSINESS.longitude, address: shop.profile.address.street }}
+          shop={{
+            lat: BUSINESS.latitude,
+            lng: BUSINESS.longitude,
+            address: shop.profile.address.street,
+            // "DHA Phase 6" out of the owner's "Rahat Commercial Area, DHA Phase 6, Karachi"; else that line's first part.
+            pickupArea:
+              shop.profile.address.areaLine.match(/DHA Phase \d+/i)?.[0] ?? shop.profile.address.areaLine.split(',')[0]!.trim(),
+          }}
           pickupOffered={site.pickup?.offered ?? true}
         />
         {/* Film grain over everything — subtle, pointer-transparent. */}

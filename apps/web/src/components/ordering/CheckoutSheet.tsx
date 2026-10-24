@@ -22,6 +22,7 @@ import {
   writeStored,
 } from '@/lib/device-memory';
 import { formatCents } from '@/lib/format';
+import { freshPin, readLocationChoice } from '@/lib/location-choice';
 import { funnel } from '@/lib/funnel';
 import { storedTestCode } from '@/lib/meta-pixel';
 import { isPickupOnly } from '@/lib/menu-view';
@@ -75,11 +76,13 @@ export function CheckoutSheet(
   // Since 5 Oct 2026 (lib/checkout-extras): where a delivery customer pinned themselves, and their Instagram / Facebook
   // handle for the Tag-us offer. Both ride in the order's notes and neither is remembered on the phone; the handle is
   // required with a Buy 1 Get 1 deal in the cart while the owner's rules ask for it (7 Oct 2026), optional otherwise.
-  const [pin, setPin] = useState<LocationPin | null>(null);
+  // A pin the landing location popup took on this phone in the last 2 hours starts it (lib/location-choice freshPin):
+  // never an older one, so the rider is not sent to where the customer was yesterday.
+  const [pin, setPin] = useState<LocationPin | null>(() => freshPin(readLocationChoice()));
   const [social, setSocial] = useState('');
   const [remember, setRemember] = useState(true);
-  // The optional fields' fold (24 Oct 2026): shut to start with; a problem in one of them opens it.
-  const [moreOpen, setMoreOpen] = useState(false);
+  // The optional fields' fold (24 Oct 2026): shut to start with; a problem in one of them opens it, and so does that pin.
+  const [moreOpen, setMoreOpen] = useState(() => freshPin(readLocationChoice()) !== null);
   const [hasSaved, setHasSaved] = useState(saved !== null);
   const [submitting, setSubmitting] = useState(false);
   const [problem, setProblem] = useState<CheckoutProblem | null>(null);

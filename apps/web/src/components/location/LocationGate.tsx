@@ -50,6 +50,8 @@ export interface GateShop {
   lng: number;
   /** The pick-up line: the owner's street address. */
   address: string;
+  /** Where the shop is, in a few words ("DHA Phase 6"): the out-of-range box's pick-up button. */
+  pickupArea: string;
 }
 
 /** Farther than this from the shop, the phone's location is "outside our areas". */
@@ -121,7 +123,7 @@ export function LocationGate({
   const [pin, setPin] = useState<{ pin: LocationPin; at: number } | null>(null);
   const [locating, setLocating] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [status, setStatus] = useState<{ accepting: boolean; pickup: boolean } | null>(null);
+  const [status, setStatus] = useState<{ accepting: boolean; pickupPct: number } | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const asking = useRef(0);
@@ -159,8 +161,10 @@ export function LocationGate({
     let live = true;
     fetch('/api/store-status', { cache: 'no-store' })
       .then((r) => r.json())
-      .then((j: { data?: { acceptingOrders?: unknown; pickupAvailable?: unknown } }) => {
-        if (live && j?.data) setStatus({ accepting: j.data.acceptingOrders === true, pickup: j.data.pickupAvailable === true });
+      .then((j: { data?: { acceptingOrders?: unknown; pickupDiscountPercent?: unknown } }) => {
+        const pct = j?.data?.pickupDiscountPercent;
+        if (live && j?.data)
+          setStatus({ accepting: j.data.acceptingOrders === true, pickupPct: typeof pct === 'number' && pct > 0 && pct < 100 ? pct : 0 });
       })
       .catch(() => {});
     const overflow = document.body.style.overflow;
@@ -179,10 +183,14 @@ export function LocationGate({
 
   if (!open) return null;
 
-  const canPickup = pickupOffered && (status === null || status.pickup);
+  // A preference, not an order: pick-up can be chosen whenever the owner offers it, open or closed (the user,
+  // 24 Oct 2026, couldn't choose it before opening time). The checkout still sells only what the till takes now.
+  const canPickup = pickupOffered;
   const chosen: WebFulfilment = fulfilment === 'pickup' && canPickup ? 'pickup' : 'delivery';
   const zone = zones.find((z) => z.id === zoneId && z.active);
   const far = pin ? kmBetween(pin.pin, shop) : null;
+  /** The phone is outside the delivery areas: no green tick, no pin kept, pick-up offered first. */
+  const outside = far !== null && far > NEAR_KM;
   const ready = chosen === 'pickup' || zone !== undefined;
 
   function close() {
@@ -213,7 +221,11 @@ export function LocationGate({
         if (ask !== asking.current) return;
         setLocating(false);
         const p = parsePin({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracyM: pos.coords.accuracy });
-        if (p) setPin({ pin: p, at: Date.now() });
+        if (p) {
+          setPin({ pin: p, at: Date.now() });
+          // Out of range: no area stays picked as if delivery were fine (one can still be chosen by hand).
+          if (kmBetween(p, shop) > NEAR_KM) setZoneId('');
+        }
         else setProblem(lang === 'en' ? 'We couldn’t use that location: choose your area.' : 'Yeh location kaam nahi aayi: area chun lein.');
       },
       (err) => {
@@ -239,8 +251,8 @@ export function LocationGate({
     saveLocationChoice({
       fulfilment: chosen,
       zoneId: chosen === 'delivery' ? (zone?.id ?? null) : null,
-      pin: chosen === 'delivery' && pin ? pin.pin : null,
-      pinAt: chosen === 'delivery' && pin ? pin.at : null,
+      pin: chosen === 'delivery' && pin && !outside ? pin.pin : null,
+      pinAt: chosen === 'delivery' && pin && !outside ? pin.at : null,
       at,
     });
     if (pixel.enabled) {
@@ -288,14 +300,15 @@ export function LocationGate({
           </button>
         </div>
 
-        {slides.length > 0 && <DealSlides slides={slides} lang={lang} t={t} />}
+        {/* Out of range, the banner steps back so the pick-up way out stays on the first screen. */}
+        {slides.length > 0 && <DealSlides slides={slides} lang={lang} t={t} compact={outside && chosen === 'delivery'} />}
 
         <p className="mt-1.5 text-balance text-center font-cond text-[10.5px] font-bold uppercase leading-snug tracking-[0.1em] text-cheese/80">{BRAND_LINES}</p>
 
         <h2 id={titleId} className="mt-3 font-display text-[26px] leading-none tracking-wide text-cream">
           {t(T.title)}
         </h2>
-        <p className="mt-1 text-[13px] text-cream/60">{t(T.sub)}</p>
+        {!(outside && chosen === 'delivery') && <p className="mt-1 text-[13px] text-cream/60">{t(T.sub)}</p>}
 
         <div className="mt-3 grid grid-cols-2 gap-1 rounded-2xl bg-night p-1" role="radiogroup" aria-label={`${t(T.delivery)} / ${t(T.pickup)}`}>
           {(['delivery', 'pickup'] as const).map((f) => {
@@ -345,27 +358,46 @@ export function LocationGate({
               <button type="button" onClick={locate} disabled={locating} className="font-semibold text-cheese underline-offset-2 hover:underline">
                 📍 {locating ? t(T.locating) : t(T.locate)}
               </button>
-              {zone && (
+              {zone && !outside && (
                 <span className="font-semibold text-emerald-300">
                   ✓ {zone.feeCents > 0 ? `${lang === 'en' ? 'Delivery' : 'Delivery charges'} ${formatCents(zone.feeCents)}` : lang === 'en' ? 'Free delivery' : 'Delivery free'}
                 </span>
               )}
             </div>
-            {far !== null && (
-              <p className="mt-1 text-[12.5px] text-cream/75">
-                {far <= NEAR_KM
-                  ? lang === 'en'
-                    ? `You’re about ${far.toFixed(1)} km from us: we deliver here. Pick your area above.`
-                    : `Aap hum se ${far.toFixed(1)} km door hain: hum yahan deliver karte hain. Upar area chunein.`
-                  : lang === 'en'
-                    ? `You’re about ${Math.round(far)} km away, outside our delivery areas.`
-                    : `Aap ${Math.round(far)} km door hain, hamare delivery areas se bahar.`}
-                {far > NEAR_KM && canPickup && (
-                  <button type="button" onClick={() => setFulfilment('pickup')} className="ml-1 font-semibold text-cheese underline">
-                    {lang === 'en' ? 'Choose pick-up?' : 'Pick-up karein?'}
+            {outside ? (
+              <div role="alert" className="mt-2.5 rounded-xl border-2 border-amber-400 bg-amber-400/10 p-3 motion-safe:animate-pop-in">
+                <p className="font-cond text-[17px] font-extrabold leading-tight text-amber-300">
+                  ⚠️{' '}
+                  {lang === 'en'
+                    ? `You’re outside our delivery range (${Math.round(far!)} km)`
+                    : `Aap hamari delivery range se bahar hain (${Math.round(far!)} km)`}
+                </p>
+                <p className="mt-1 text-[12.5px] leading-snug text-cream/80">
+                  {lang === 'en'
+                    ? 'Collect it from the shop instead, or choose your area by hand if the location is wrong.'
+                    : 'Shop se khud le jayein, ya location ghalat ho to area khud chunein.'}
+                </p>
+                {canPickup && (
+                  <button
+                    type="button"
+                    onClick={() => setFulfilment('pickup')}
+                    className="mt-2.5 w-full rounded-xl bg-amber-400 px-2 py-2.5 font-cond text-[15px] font-extrabold uppercase tracking-wide text-night transition-transform active:scale-[0.99]"
+                  >
+                    🛍️ {lang === 'en' ? 'Pick-up' : 'Pick-up karein'} · {shop.pickupArea}
+                    {status && status.pickupPct > 0
+                      ? ` · ${status.pickupPct}% off ${lang === 'en' ? '(not on deals)' : '(deals ke ilawa)'}`
+                      : ''}
                   </button>
                 )}
-              </p>
+              </div>
+            ) : (
+              far !== null && (
+                <p className="mt-1 text-[12.5px] text-cream/75">
+                  {lang === 'en'
+                    ? `You’re about ${far.toFixed(1)} km from us: we deliver here. Pick your area above.`
+                    : `Aap hum se ${far.toFixed(1)} km door hain: hum yahan deliver karte hain. Upar area chunein.`}
+                </p>
+              )
             )}
             {problem && <p className="mt-1 text-[12.5px] text-cream/75">{problem}</p>}
           </div>
@@ -394,7 +426,17 @@ export function LocationGate({
 }
 
 /** The deals banner: one deal at a time, turning by itself (not with reduced motion), swipe or tap a dot. */
-function DealSlides({ slides, lang, t }: { slides: readonly GateSlide[]; lang: GateLang; t: (w: Words) => string }) {
+function DealSlides({
+  slides,
+  lang,
+  t,
+  compact,
+}: {
+  slides: readonly GateSlide[];
+  lang: GateLang;
+  t: (w: Words) => string;
+  compact: boolean;
+}) {
   const [at, setAt] = useState(0);
   const [paused, setPaused] = useState(false);
   const startX = useRef<number | null>(null);
@@ -412,7 +454,7 @@ function DealSlides({ slides, lang, t }: { slides: readonly GateSlide[]; lang: G
 
   return (
     <div
-      className="relative h-[188px] select-none overflow-hidden rounded-2xl bg-night-card"
+      className={`relative ${compact ? 'h-[148px]' : 'h-[188px]'} select-none overflow-hidden rounded-2xl bg-night-card transition-[height] duration-300`}
       aria-roledescription="carousel"
       aria-label={lang === 'en' ? 'Deals' : 'Deals'}
       onPointerDown={(e) => {
