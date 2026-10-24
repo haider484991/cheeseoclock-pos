@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { shopPhotoFor } from './menu-view';
+import { dealPhotoFor, shopPhotoFor } from './menu-view';
 import { menuImageSrcSet } from './images';
 import { CURATED_DISH_NAMES } from './signatures';
 
@@ -15,6 +15,28 @@ describe('menuImageSrcSet', () => {
     expect(menuImageSrcSet('data:image/png;base64,AAAA')).toBeUndefined();
     expect(menuImageSrcSet('https://example.com/x.webp')).toBeUndefined();
     expect(menuImageSrcSet(null)).toBeUndefined();
+  });
+
+  it('offers the 400px copy of a deal photo', () => {
+    expect(menuImageSrcSet('/images/deals/burger-duo.webp')).toBe(
+      '/images/deals/sm/burger-duo.webp 400w, /images/deals/burger-duo.webp 720w',
+    );
+  });
+
+  it('has both sizes on disk for every deal photo, under the till names old and new', () => {
+    const names = [
+      'Mega Cheese Box', 'Double Large', 'Pizzas & Nuggets', 'Loaded Combo', 'Large & Chilled', 'Cheese Partners',
+      'Burger Duo', 'Classic Crispy Deal', 'Signature Cripsy Deal', 'Cheese Dipped Deal', 'Large + Free Medium',
+      'Large + Free Burger or Side', 'Medium + Free Side',
+    ];
+    for (const name of names) {
+      const src = dealPhotoFor(name);
+      expect(src, name).not.toBeNull();
+      for (const file of [src!, menuImageSrcSet(src)!.split(' ')[0]!]) {
+        expect(existsSync(new URL(`../../public${file}`, import.meta.url)), file).toBe(true);
+      }
+    }
+    expect(dealPhotoFor('Big Two')).toBeNull();
   });
 
   it('has a small copy on disk for every photo the site shows', () => {

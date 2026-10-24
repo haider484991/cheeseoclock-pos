@@ -372,6 +372,44 @@ export function shopPhotoFor(baseName: string): string | null {
 }
 
 /**
+ * The deals' photos (public/images/deals): each deal's food exactly as the printed A4 deal menu draws it (24 Oct
+ * 2026, cut out of that menu), keyed by the deal's name made plain (dealPhotoKey). The till's older names count too
+ * ("Signature Cripsy Deal"), so the photo is there before and after the owner renames them. A deal with none here
+ * gets no stand-in.
+ */
+const DEAL_PHOTOS: Record<string, string> = {
+  'mega cheese box': '/images/deals/mega-cheese-box.webp',
+  'double large': '/images/deals/double-large.webp',
+  'pizzas and nuggets': '/images/deals/pizzas-and-nuggets.webp',
+  'loaded combo': '/images/deals/loaded-combo.webp',
+  'large and chilled': '/images/deals/large-and-chilled.webp',
+  'cheese partners': '/images/deals/cheese-partners.webp',
+  'burger duo': '/images/deals/burger-duo.webp',
+  'classic crispy': '/images/deals/classic-crispy.webp',
+  'signature crispy': '/images/deals/signature-crispy.webp',
+  'cheese dipped': '/images/deals/cheese-dipped.webp',
+  'large free medium': '/images/deals/buy-1-get-1.webp',
+  // Buy 1 Get 1's other two: the same cut-outs, laid out here.
+  'large free burger or side': '/images/deals/large-free-burger.webp',
+  'medium free side': '/images/deals/medium-free-side.webp',
+};
+
+/** "Signature Cripsy Deal" → "signature crispy", "Pizzas & Nuggets" → "pizzas and nuggets", "Large + Free Medium" → "large free medium". */
+export function dealPhotoKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/\bcripsy\b/g, 'crispy')
+    .replace(/\bdeal\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+export function dealPhotoFor(name: string): string | null {
+  return DEAL_PHOTOS[dealPhotoKey(name)] ?? null;
+}
+
+/**
  * The till's category names are short ("Pizza"); the website uses the printed
  * menu's headings so the deals line "choice of pizzas only from the regular
  * menu" points at a section actually called that.
@@ -430,7 +468,7 @@ function buildSections(menu: PublicMenu): MenuSectionView[] {
           key: item.posItemId,
           name: base,
           description: withoutDrinkBrand(item.description),
-          image: item.imageUrl ?? shopPhotoFor(base),
+          image: item.imageUrl ?? (isDealSection(c.name) ? dealPhotoFor(base) : shopPhotoFor(base)),
           variants: [{ size, item, pickupOnly: false }],
           pickupOnly: false,
         });
@@ -558,4 +596,76 @@ export function sheetGroups(item: Pick<PublishedMenuItem, 'modifierGroups'>): Pu
 export function requiredCount(group: PublishedModifierGroup): number {
   if (!group.isRequired) return 0;
   return Math.max(1, group.minSelect);
+}
+
+/**
+ * A deal's contents as ticked lines (the deal cards, 24 Oct 2026): the till writes them with "+" between ("1 Classic
+ * Crispy Deal+ 1 Regular Fries+ 345ml Drink"), sometimes commas. A one-word part stays with the next one ("Large +
+ * Medium regular pizza" is one line). One part only = the words as they are.
+ */
+export function dealContents(description: string | null): string[] {
+  if (!description) return [];
+  const parts = description
+    .replace(/\.\s*$/, '')
+    .split(/(\s*\+\s*|,\s+(?=\S))/);
+  const lines: string[] = [];
+  let carry = '';
+  for (let i = 0; i < parts.length; i += 2) {
+    const part = parts[i]!.trim();
+    if (!part) continue;
+    const text = carry + part;
+    if (!/\s/.test(part) && i + 2 < parts.length) {
+      carry = `${text}${parts[i + 1]!.includes('+') ? ' + ' : ', '}`;
+      continue;
+    }
+    carry = '';
+    lines.push(text);
+  }
+  if (carry) lines.push(carry.replace(/(\s\+|,)\s$/, ''));
+  return lines;
+}
+
+/** A required pick the website may make for the customer: one drink flavour or one dip — cheap to change in the order. */
+const LOW_STAKES_GROUP = /\b(drinks?|dip)\b/i;
+
+/** The till's defaults (isDefault) in every group, as the item sheet starts with them. */
+function defaultPicks(item: Pick<PublishedMenuItem, 'modifierGroups'>): string[] {
+  return item.modifierGroups.flatMap((g) => g.modifiers.filter((m) => m.isDefault).map((m) => m.posModifierId));
+}
+
+/**
+ * One-tap add (24 Oct 2026, "really easy to order"): the choices an item goes in the cart with when the customer
+ * only taps its price — the till's defaults, plus the first option of each required one-of choice that is low stakes
+ * (a drink's flavour, the burger's dip; the till lists Cola and the house dip first). null = a choice that matters
+ * (which pizza, five veggies): the item sheet asks for it.
+ */
+export function quickPicks(item: Pick<PublishedMenuItem, 'modifierGroups'>): string[] | null {
+  const picks = new Set(defaultPicks(item));
+  for (const g of item.modifierGroups) {
+    const need = requiredCount(g);
+    if (need === 0) continue;
+    const chosen = g.modifiers.filter((m) => picks.has(m.posModifierId)).length;
+    if (chosen >= need) continue;
+    if (need !== 1 || g.selectionType !== 'single' || !LOW_STAKES_GROUP.test(g.name)) return null;
+    const first = g.modifiers[0];
+    if (!first) return null;
+    picks.add(first.posModifierId);
+  }
+  return [...picks];
+}
+
+/**
+ * What a deal's sheet starts with (24 Oct 2026): every required one-of choice already on its first option (the
+ * best-selling Fajita, Cola), so "Add" works at once and the customer changes only what they want. Other items start
+ * on the till's defaults, as before.
+ */
+export function presetPicks(item: Pick<PublishedMenuItem, 'modifierGroups'>): string[] {
+  const picks = new Set(defaultPicks(item));
+  for (const g of item.modifierGroups) {
+    if (requiredCount(g) !== 1 || g.selectionType !== 'single') continue;
+    if (g.modifiers.some((m) => picks.has(m.posModifierId))) continue;
+    const first = g.modifiers[0];
+    if (first) picks.add(first.posModifierId);
+  }
+  return [...picks];
 }

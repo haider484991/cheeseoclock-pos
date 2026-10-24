@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import type { PublishedMenu, PublishedMenuItem, PublishedModifierGroup } from '@cheeseoclock/shared-types';
 import {
   buildMenuView,
+  dealContents,
+  dealPhotoFor,
+  dealPhotoKey,
   dealWorthCents,
   groupLabel,
   isDealSection,
   isPickupOnly,
   menuWithoutDrinkBrand,
   optionLabel,
+  presetPicks,
+  quickPicks,
   sheetGroups,
   shopPhotoFor,
   sizeLabel,
@@ -369,5 +374,83 @@ describe('validateOrderable', () => {
 
   it('lets normal food through', () => {
     expect(validateOrderable(item('Fajita Pizza — Large', 2000))).toBeNull();
+  });
+});
+
+describe('deals: photos, contents and one-tap add (24 Oct 2026)', () => {
+  function group(name: string, options: string[], required: boolean, over: Partial<PublishedModifierGroup> = {}): PublishedModifierGroup {
+    return {
+      posGroupId: `g:${name}`,
+      name,
+      selectionType: required ? 'single' : 'multi',
+      minSelect: required ? 1 : 0,
+      maxSelect: required ? 1 : options.length,
+      isRequired: required,
+      sortOrder: 0,
+      modifiers: options.map((o, i) => ({ posModifierId: `m:${name}:${o}`, name: o, priceDeltaCents: 0, isDefault: false, sortOrder: i })),
+      ...over,
+    };
+  }
+  const drink = group('Choose a Drink· 345 ml', ['Cola', 'Diet cola'], true);
+  const dip = group('Choose your dip', ['Signature Orange Dip', 'Ranch'], true);
+  const pizza = group('Deal: Large pizza', ['Large: Fajita Pizza', 'Large: Classic Supreme'], true);
+  const sides = group('Dips on the side', ['Side of Ranch'], false);
+
+  it('finds a deal photo under the till names old and new, never a stand-in', () => {
+    expect(dealPhotoKey('Signature Cripsy Deal')).toBe('signature crispy');
+    expect(dealPhotoKey('Pizzas & Nuggets')).toBe('pizzas and nuggets');
+    expect(dealPhotoKey('Large + Free Medium')).toBe('large free medium');
+    expect(dealPhotoFor('Cheese Dipped Deal')).toBe('/images/deals/cheese-dipped.webp');
+    expect(dealPhotoFor('Mega Cheese Box')).toBe('/images/deals/mega-cheese-box.webp');
+    expect(dealPhotoFor('Family Feast')).toBeNull();
+  });
+
+  it('gives deal cards their photo, and a burger of the same name in its own section none of a deal’s', () => {
+    const view = buildMenuView(menu([
+      ['Value Deals', [item('Cheese Dipped Deal', 1050)]],
+      ['Burgers', [item('Cheese Dipped', 900)]],
+    ]));
+    expect(view.find((s) => s.name === 'Value Deals')!.cards[0]!.image).toBe('/images/deals/cheese-dipped.webp');
+    expect(view.find((s) => s.name === 'Burgers')!.cards[0]!.image).toBeNull();
+  });
+
+  it('ticks a deal’s contents off line by line, a one-word part kept with the next', () => {
+    expect(dealContents('1 Classic Crispy Deal+ 1 Regular Fries+ 345ml Drink')).toEqual(['1 Classic Crispy Deal', '1 Regular Fries', '345ml Drink']);
+    expect(dealContents('Large + Medium regular pizza + Signature Crispy burger + Fries, 1 litre drink, 2 dips')).toEqual([
+      'Large + Medium regular pizza',
+      'Signature Crispy burger',
+      'Fries, 1 litre drink',
+      '2 dips',
+    ]);
+    expect(dealContents('2 Large 12" regular pizzas + 1 litre soft drink.')).toEqual(['2 Large 12" regular pizzas', '1 litre soft drink']);
+    expect(dealContents('Thigh fillet in a brioche bun')).toEqual(['Thigh fillet in a brioche bun']);
+    expect(dealContents(null)).toEqual([]);
+  });
+
+  it('adds in one tap when the only choice it needs is a drink’s flavour or a dip: the first option', () => {
+    expect(quickPicks(item('Classic Crispy Deal', 850, { modifierGroups: [drink] }))).toEqual(['m:Choose a Drink· 345 ml:Cola']);
+    expect(quickPicks(item('Crispy Signature', 800, { modifierGroups: [dip, sides] }))).toEqual(['m:Choose your dip:Signature Orange Dip']);
+    expect(quickPicks(item('Fajita Pizza — Large', 2000, { modifierGroups: [sides] }))).toEqual([]);
+  });
+
+  it('keeps the till’s defaults, and a default already meets a required choice', () => {
+    const withDefault = group('Choose a Drink· 345 ml', ['Cola', 'Orange'], true);
+    withDefault.modifiers[1]!.isDefault = true;
+    expect(quickPicks(item('Deal', 850, { modifierGroups: [withDefault] }))).toEqual(['m:Choose a Drink· 345 ml:Orange']);
+  });
+
+  it('asks in the sheet for a choice that matters: which pizza, five veggies', () => {
+    expect(quickPicks(item('Large & Chilled', 1800, { modifierGroups: [pizza, drink] }))).toBeNull();
+    const veggies = group('Veggie Lovers — Choose 5 veggies', ['Onion', 'Olives'], true, { selectionType: 'multi', minSelect: 1, maxSelect: 5 });
+    expect(quickPicks(item('Veggie Lovers — Large', 2000, { modifierGroups: [veggies] }))).toBeNull();
+  });
+
+  it('starts a deal’s sheet on the first pizza and drink, so Add works at once', () => {
+    expect(presetPicks(item('Large & Chilled', 1800, { modifierGroups: [pizza, drink, sides] }))).toEqual([
+      'm:Deal: Large pizza:Large: Fajita Pizza',
+      'm:Choose a Drink· 345 ml:Cola',
+    ]);
+    const veggies = group('Veggie Lovers — Choose 5 veggies', ['Onion'], true, { selectionType: 'multi', minSelect: 1, maxSelect: 5 });
+    expect(presetPicks(item('Veggie Lovers — Large', 2000, { modifierGroups: [veggies] }))).toEqual([]);
   });
 });

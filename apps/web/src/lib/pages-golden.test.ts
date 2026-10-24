@@ -29,6 +29,11 @@
  *  - 2026-10-14: the home hero starts with the deals slider, worked out from
  *    the menu's deals, when there is a menu with deals — (b) and (c), not
  *    (a) (__fixtures__/hero-deals.ts).
+ *  - 2026-10-24 (the ordering funnel): /menu's hook, deal cards (photo,
+ *    price coin, one button) and the checkout's optional fields folded
+ *    under one line — the golden's /menu pages (b, c) and its four checkout
+ *    states were swapped for the new ones, nothing else (the last test here
+ *    spells out what came in).
  * Apart from those, states (b) and (c) are the golden byte for byte.
  */
 import { createHash } from 'node:crypto';
@@ -482,6 +487,22 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
         expect(menuHtml, `${state} ${route}`).not.toContain('Order online · ');
         expect(menuHtml.indexOf('Allergy? Tell us'), `${state} ${route}`).toBeGreaterThan(menuHtml.lastIndexOf('</section>'));
       }
+    }
+    // The ordering funnel (24 Oct 2026): the golden took the /menu pages and the checkout states in — the hook in
+    // English and Roman Urdu under the title, each deal a dark card with melted cheese on top, its price on a coin and
+    // one button (a tap opens the golden menu's pizza deals with their first pizzas chosen), and the checkout's
+    // optional fields folded under one line.
+    for (const state of ['b', 'c']) {
+      for (const route of ['/menu (open)', '/menu (closed)']) {
+        const menuHtml = golden.html[golden.pages[state]![route]!]!;
+        expect(menuHtml, `${state} ${route}`).toContain('Craving cheese? Order in 2 minutes.');
+        expect(menuHtml, `${state} ${route}`).toContain('lang="ur-Latn"');
+        expect(menuHtml, `${state} ${route}`).toContain('id="deal-big-two"');
+        expect(menuHtml, `${state} ${route}`).toContain('aria-label="Choose options for Big Two');
+      }
+    }
+    for (const [k, html] of Object.entries(golden.checkout)) {
+      expect(html, k).toMatch(/Add (directions or a map pin|a note)/);
     }
   });
 });

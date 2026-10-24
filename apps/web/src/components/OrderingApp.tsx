@@ -13,13 +13,15 @@ import {
   type SiteFacts,
 } from '@/lib/delivery-facts';
 import { feeItemIdsOf, zoneFeeItemFor } from '@/lib/delivery-zones';
-import { MENU_FOOT_LINE, MENU_HEADER_HOURS, MENU_OFFER_WHERE } from '@/lib/page-copy';
+import { MENU_FOOT_LINE, MENU_HEADER_HOURS, MENU_HOOK, MENU_HOOK_ROMAN_URDU, MENU_OFFER_WHERE } from '@/lib/page-copy';
 import { DEFAULT_SHOP_FACTS, lineOrderUrl, orderWhatsappUrl, shopHoursInSentence, whatsappLinesOf, type ShopFacts } from '@/lib/shop-facts';
 import { taxBpsOf } from '@/lib/tax-words';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
 import {
+  anchorFor,
   buildMenuView,
   cartDeals,
+  dealContents,
   dealWorthCents,
   isDealSection,
   isPickupOnly,
@@ -28,6 +30,8 @@ import {
   menuHasNoDiscountItems,
   menuHasTaxIncluded,
   pickupOnlyNote,
+  presetPicks,
+  quickPicks,
   sectionTitle,
   sizeOrderable,
   type MenuCard,
@@ -35,6 +39,8 @@ import {
 } from '@/lib/menu-view';
 import {
   addLine,
+  cartLineKey,
+  lineChoices,
   cartCount as countLines,
   cartPricedLines,
   cartSubtotalCents,
@@ -62,6 +68,7 @@ import {
 import { menuImageSrcSet } from '@/lib/images';
 import { OFFER_FINE_PRINT, OFFER_FINE_PRINT_TAX_INCLUDED, cardOffer, discountOnEveryOrder, offerSectionOf, regularPizzaPrices, type OfferPrice } from '@/lib/offers';
 import { pixel, type PixelLine } from '@/lib/meta-pixel';
+import { funnel, type AddHow } from '@/lib/funnel';
 import { trackPath } from '@/lib/order-display';
 import {
   NOT_ON_VALUE_DEALS,
@@ -325,19 +332,25 @@ export function OrderingApp({
   const buy1Get1Anchor = useMemo(() => sections.find((s) => isBuy1Get1Category(s.name))?.anchor ?? null, [sections]);
 
   const [cart, setCart] = useState<CartLine[]>([]);
-  const [sheet, setSheet] = useState<{ card: MenuCard; variantIndex: number } | null>(null);
+  // `preset`: the choices the sheet starts with (a deal's first options; a one-tap line being changed).
+  const [sheet, setSheet] = useState<{ card: MenuCard; variantIndex: number; preset?: string[] } | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [zoneId, setZoneId] = useState('');
   const [lastOrder, setLastOrder] = useState<LastOrder | null>(null);
-  const [toast, setToast] = useState<{ id: number; text: string; ms: number } | null>(null);
+  const [toast, setToast] = useState<{ id: number; text: string; ms: number; action?: { label: string; run: () => void } } | null>(null);
   /** The saved cart has been read; from here on the cart is written back. */
   const hydrated = useRef(false);
   /** The order went through — don't write the (sent) cart back on the way out. */
   const placed = useRef(false);
 
-  const flash = useCallback((text: string, ms = 1800) => {
-    setToast({ id: Date.now(), text, ms });
+  const flash = useCallback((text: string, ms = 1800, action?: { label: string; run: () => void }) => {
+    setToast({ id: Date.now(), text, ms, ...(action ? { action } : {}) });
   }, []);
+  // The deals' till ids: what the funnel counts as a deal going in the cart.
+  const dealItemIds = useMemo(
+    () => new Set(sections.filter((s) => isDealSection(s.name)).flatMap((s) => s.cards.flatMap((c) => c.variants.map((v) => v.item.posItemId)))),
+    [sections],
+  );
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast((cur) => (cur?.id === toast.id ? null : cur)), toast.ms);
@@ -378,10 +391,21 @@ export function OrderingApp({
 
   // "/menu#value-deals" from the home page: the loading skeleton was on screen
   // when Next looked for the section, so find it now that it exists.
+  // "/menu?deal=large-and-chilled" (an ad or a banner about one deal, 24 Oct 2026): that deal's card, centred and lit
+  // for a moment, so the tap that brought them here is one more tap from the order.
+  const [litDeal, setLitDeal] = useState<string | null>(null);
   useEffect(() => {
     const id = decodeURIComponent(window.location.hash.slice(1));
     if (id && sections.some((s) => s.anchor === id)) {
       document.getElementById(id)?.scrollIntoView({ block: 'start', behavior: 'instant' });
+    }
+    const want = new URLSearchParams(window.location.search).get('deal');
+    const slug = want ? anchorFor(want) : '';
+    if (slug && sections.some((s) => isDealSection(s.name) && s.cards.some((c) => anchorFor(c.name) === slug))) {
+      document.getElementById(`deal-${slug}`)?.scrollIntoView({ block: 'center', behavior: 'instant' });
+      setLitDeal(slug);
+      const t = setTimeout(() => setLitDeal(null), 2600);
+      return () => clearTimeout(t);
     }
   }, [sections]);
 
@@ -446,15 +470,21 @@ export function OrderingApp({
   }, [cart]);
 
   const addToCart = useCallback(
-    (item: PublishedMenuItem, label: string, modifierIds: string[], quantity = 1, notes: string | null = null) => {
+    (item: PublishedMenuItem, label: string, modifierIds: string[], quantity = 1, notes: string | null = null, how: AddHow = 'sheet') => {
       setCart((prev) => addLine(prev, { item, label, quantity, modifierIds, notes }));
       pixel.addToCart(pixelLines([{ item, quantity, modifierIds }]));
+      funnel.addToCart(how, dealItemIds.has(item.posItemId));
       flash(`Added ${quantity > 1 ? `${quantity} × ` : ''}${label}`);
     },
-    [flash],
+    [flash, dealItemIds],
   );
 
-  /** A size tap: straight into the cart unless the item has choices to make. */
+  /**
+   * A price tap (24 Oct 2026: one tap to order). Straight into the cart when the only choices it needs are a drink's
+   * flavour or a dip (lib/menu-view quickPicks: the first option, Cola, the house dip), with "Change" on the toast to
+   * pick another; a choice that matters (which pizza in a deal, the veggies) opens the sheet — a deal's already on its
+   * first options, so its Add works at once.
+   */
   const pickVariant: PickFn = useCallback(
     (card, variantIndex) => {
       const v = card.variants[variantIndex];
@@ -464,14 +494,35 @@ export function OrderingApp({
         flash(buy1Get1ClosedMessage(dealRules), 3200);
         return;
       }
-      if (v.item.modifierGroups.length > 0) {
-        pixel.viewItem({ id: v.item.posItemId, name: variantLabel(card, v), unitCents: v.item.basePriceCents });
-        setSheet({ card, variantIndex });
-      } else {
-        addToCart(v.item, variantLabel(card, v), []);
+      const label = variantLabel(card, v);
+      const quick = quickPicks(v.item);
+      if (quick !== null) {
+        setCart((prev) => addLine(prev, { item: v.item, label, quantity: 1, modifierIds: quick, notes: null }));
+        pixel.addToCart(pixelLines([{ item: v.item, quantity: 1, modifierIds: quick }]));
+        funnel.addToCart('one tap', dealItemIds.has(v.item.posItemId));
+        const picked = lineChoices({ item: v.item, modifierIds: quick }).others;
+        const key = cartLineKey(v.item.posItemId, quick, null);
+        flash(`Added ${label}${picked.length > 0 ? ` · ${picked.join(', ')}` : ''}`, 3500, v.item.modifierGroups.length > 0
+          ? {
+              label: 'Change',
+              // Take the one just added back out and let the customer choose in the sheet, starting from it.
+              run: () => {
+                setCart((prev) => {
+                  const line = prev.find((l) => l.key === key);
+                  return line ? setLineQty(prev, key, line.quantity - 1) : prev;
+                });
+                setToast(null);
+                pixel.viewItem({ id: v.item.posItemId, name: label, unitCents: v.item.basePriceCents });
+                setSheet({ card, variantIndex, preset: quick });
+              },
+            }
+          : undefined);
+        return;
       }
+      pixel.viewItem({ id: v.item.posItemId, name: label, unitCents: v.item.basePriceCents });
+      setSheet({ card, variantIndex, ...(dealItemIds.has(v.item.posItemId) ? { preset: presetPicks(v.item) } : {}) });
     },
-    [canPickup, addToCart, buy1Get1Open, buy1Get1Items, flash, dealRules],
+    [canPickup, buy1Get1Open, buy1Get1Items, flash, dealRules, dealItemIds],
   );
 
   const setQty = useCallback((key: string, qty: number) => setCart((prev) => setLineQty(prev, key, qty)), []);
@@ -488,6 +539,7 @@ export function OrderingApp({
     }
     setCart((prev) => lines.reduce((acc, l) => addLine(acc, l), prev));
     pixel.addToCart(pixelLines(lines));
+    funnel.addToCart('again', lines.some((l) => dealItemIds.has(l.item.posItemId)));
     if (o.fulfilment === 'pickup' && canPickup) setFulfilment('pickup');
     flash(dropped > 0 ? `Added your last order · ${dropped} no longer on the menu` : 'Added your last order', 3000);
   }
@@ -504,6 +556,7 @@ export function OrderingApp({
 
   function onPlaced({ orderId, phone, name, totalCents }: PlacedOrder) {
     placed.current = true;
+    funnel.orderPlaced(fulfilment, cart.some((l) => dealItemIds.has(l.item.posItemId)));
     // The Meta Pixel hears of the sale here, once, while the page is still /menu (the tracking address
     // carries the phone, and is never sent): the server's own total, not one worked out from the cart,
     // and the customer's phone and name hashed (lib/meta-user-data). A replayed order comes back with
@@ -526,6 +579,7 @@ export function OrderingApp({
   /** The desktop panel and the phone's bar open the checkout alike: the Meta Pixel hears of it once per open. */
   function openCheckout() {
     pixel.initiateCheckout(pixelLines(cart));
+    funnel.checkoutOpened(open);
     setCheckoutOpen(true);
   }
 
@@ -605,13 +659,23 @@ export function OrderingApp({
                     : null
                 }
               />
-              <div className={`mt-4 grid gap-3 ${smallSections.has(s.id) ? 'grid-cols-2 sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+              {/* Deals two to a row on a phone too (24 Oct 2026), like the printed deal menu's grid: photos, not a long scroll. */}
+              <div
+                className={`mt-4 grid gap-3 ${
+                  isDealSection(s.name)
+                    ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3'
+                    : smallSections.has(s.id)
+                      ? 'grid-cols-2 sm:grid-cols-3'
+                      : 'sm:grid-cols-2'
+                }`}
+              >
                 {s.cards.map((card, i) =>
                   isDealSection(s.name) ? (
                     <DealCard
                       key={card.key}
                       card={card}
                       n={i + 1}
+                      lit={litDeal === anchorFor(card.name)}
                       kind={isBuy1Get1Category(s.name) ? 'buy1get1' : 'value'}
                       dealWindow={dealWindow}
                       closed={isBuy1Get1Category(s.name) && !buy1Get1Open}
@@ -661,9 +725,17 @@ export function OrderingApp({
         </aside>
       </div>
 
-      {/* Cart — mobile bottom bar */}
+      {/* Cart — mobile bottom bar. Since 24 Oct 2026 it says what delivery adds (the area's fee once known, else the
+          range), so the total never jumps by a charge the customer was not shown. */}
       {cartCount > 0 && (
-        <div className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t border-ink/10 bg-paper/95 px-3 pt-3 backdrop-blur lg:hidden">
+        <div className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t border-ink/10 bg-paper/95 px-3 pt-2 backdrop-blur lg:hidden">
+          <p className="mb-1.5 truncate text-center font-cond text-xs font-bold uppercase tracking-wide text-ink-muted">
+            {pickup
+              ? `Pick-up · ${shop.profile.address.street}`
+              : zone
+                ? `Delivery to ${zone.name} · ${formatCents(zone.feeCents)} in the total`
+                : `+ delivery ${feeRange} · choose your area next`}
+          </p>
           <button
             type="button"
             onClick={openCheckout}
@@ -676,7 +748,10 @@ export function OrderingApp({
               </span>
               {open ? 'View order' : 'View order · closed'}
             </span>
-            <span className="tabular-nums">{formatCents(total)}</span>
+            <span className="flex items-center gap-2 tabular-nums">
+              {formatCents(total)}
+              <span aria-hidden>→</span>
+            </span>
           </button>
         </div>
       )}
@@ -690,10 +765,23 @@ export function OrderingApp({
         {toast && (
           <div
             key={toast.id}
-            className="animate-pop-in rounded-full bg-ink px-5 py-2.5 text-center font-cond text-sm font-bold uppercase tracking-wide text-cheese shadow-soft-lg"
+            className={`animate-pop-in flex items-center gap-3 rounded-full bg-ink py-2.5 pl-5 text-center font-cond text-sm font-bold uppercase tracking-wide text-cheese shadow-soft-lg ${
+              toast.action ? 'pointer-events-auto pr-2' : 'pr-5'
+            }`}
           >
-            <span aria-hidden>✓ </span>
-            {toast.text}
+            <span>
+              <span aria-hidden>✓ </span>
+              {toast.text}
+            </span>
+            {toast.action && (
+              <button
+                type="button"
+                onClick={toast.action.run}
+                className="shrink-0 rounded-full bg-cheese px-3 py-1.5 font-cond text-sm font-extrabold uppercase tracking-wide text-ink"
+              >
+                {toast.action.label}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -702,6 +790,7 @@ export function OrderingApp({
         <ItemSheet
           card={sheet.card}
           initialVariant={sheet.variantIndex}
+          {...(sheet.preset ? { initialSelected: sheet.preset } : {})}
           canPickup={canPickup}
           onClose={closeSheet}
           onConfirm={(v, ids, qty, notes) => {
@@ -853,7 +942,13 @@ function MenuHeader({
     <div className="bg-ink text-cream">
       <div className="mx-auto max-w-6xl px-4 pb-5 pt-6 md:pb-7 md:pt-8">
         <div className="md:flex md:items-end md:justify-between md:gap-8">
-          <h1 className="font-display text-5xl uppercase leading-none tracking-wide md:text-6xl">The Menu</h1>
+          <div>
+            <h1 className="font-display text-5xl uppercase leading-none tracking-wide md:text-6xl">The Menu</h1>
+            <p className="mt-2 font-cond text-xl font-extrabold uppercase leading-tight tracking-wide text-cheese">{MENU_HOOK}</p>
+            <p lang="ur-Latn" className="mt-0.5 text-sm font-semibold text-cream/70">
+              {MENU_HOOK_ROMAN_URDU}
+            </p>
+          </div>
           <ul
             aria-label="Hours, payment and delivery"
             className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-cond text-[0.95rem] font-semibold leading-snug text-cream/80 md:mt-0 md:justify-end md:pb-1"
@@ -1338,9 +1433,11 @@ const ItemCard = memo(function ItemCard({
 });
 
 /**
- * A value deal, set like the printed menu's gold deals panel: numbered, a big
- * price, and what it saves against buying the same things one by one (worked
- * out from the live menu — no badge when that can't be priced).
+ * A deal, set like the printed A4 deal menu (24 Oct 2026): a dark card with melted cheese dripping over its top, the
+ * deal's food as that menu draws it (lib/menu-view dealPhotoFor; no stand-in when there is none), the price on a gold
+ * coin, the contents ticked off, and one big button — a tap adds it (a deal whose only choice is the drink) or opens
+ * its sheet already on the first pizzas, so Add works at once. What it saves against buying the same things one by one
+ * shows when the live menu can price that.
  */
 const DealCard = memo(function DealCard({
   card,
@@ -1352,8 +1449,11 @@ const DealCard = memo(function DealCard({
   qtyByItem,
   canPickup,
   onPick,
+  lit = false,
 }: CardProps & {
   n: number;
+  /** The deal a link named (/menu?deal=…): ringed for a moment. */
+  lit?: boolean;
   /** A value deal, or a Buy 1 Get 1 deal (its own label; sold in the owner's hours only). */
   kind?: 'value' | 'buy1get1';
   /** A Buy 1 Get 1 deal's hours in words ("1–7 PM"). */
@@ -1363,56 +1463,136 @@ const DealCard = memo(function DealCard({
   worthCents: number | null;
 }) {
   const count = countFor(card, qtyByItem);
-  const price = card.variants[0]?.item.basePriceCents ?? 0;
+  const v = card.variants[0];
+  const price = v?.item.basePriceCents ?? 0;
   const save = worthCents !== null ? worthCents - price : 0;
   const num = String(n).padStart(2, '0');
+  const contents = dealContents(card.description);
+  const oneTap = v ? quickPicks(v.item) !== null : false;
+  const label = v ? variantLabel(card, v) : card.name;
   return (
-    <article className="relative flex flex-col overflow-hidden rounded-3xl border-2 border-ink bg-cheese p-5 text-ink shadow-soft-md">
+    <article
+      id={`deal-${anchorFor(card.name)}`}
+      className={`relative flex scroll-mt-40 flex-col overflow-hidden rounded-2xl bg-ink text-cream shadow-soft-md transition-shadow duration-500 sm:rounded-3xl ${
+        lit ? 'ring-4 ring-red-600 ring-offset-2 ring-offset-paper' : ''
+      }`}
+    >
+      <CheeseDrip />
       <span
         aria-hidden
-        className="pointer-events-none absolute -bottom-7 -right-1 select-none font-display text-[8.5rem] leading-none text-ink/[0.08]"
+        className="pointer-events-none absolute -bottom-4 right-1 select-none font-display text-[4.5rem] leading-none text-transparent [-webkit-text-stroke:1.2px_rgba(255,255,255,0.09)] sm:text-[6.5rem]"
       >
         {num}
       </span>
-      <div className="relative flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="font-cond text-xs font-extrabold uppercase tracking-[0.22em] text-ink/70">
-            {kind === 'buy1get1' ? `Buy 1 Get 1 · ${dealWindow}` : `Value deal ${num}`}
-            {/* Its price includes the tax (0057; the deal menu: "the price you see is the price you pay"). */}
-            {card.variants.every((v) => isTaxIncluded(v.item)) && card.variants.length > 0 ? ' · Tax included' : ''}
-          </p>
-          <h3 className="mt-1 font-display text-3xl uppercase leading-none tracking-wide">{card.name}</h3>
-        </div>
+      {/* No photo for this deal (lib/menu-view dealPhotoFor): no empty spotlight either — just room for the coin. */}
+      <div className={`relative shrink-0 ${card.image ? 'h-[7.5rem] sm:h-44' : 'h-[6.25rem] sm:h-28'}`}>
+        {card.image && (
+          <div aria-hidden className="absolute inset-x-2 bottom-0 top-6 rounded-full bg-[radial-gradient(closest-side,rgba(245,179,1,0.32),rgba(245,179,1,0.10)_60%,transparent)]" />
+        )}
+        {card.image && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={card.image}
+            srcSet={menuImageSrcSet(card.image)}
+            sizes="(min-width: 640px) 340px, 46vw"
+            alt={card.name}
+            loading={n <= 4 ? 'eager' : 'lazy'}
+            decoding="async"
+            className="absolute inset-x-1.5 bottom-0 top-5 h-[calc(100%-1.25rem)] w-[calc(100%-0.75rem)] object-contain drop-shadow-[0_12px_16px_rgba(0,0,0,0.6)] sm:inset-x-3 sm:top-7 sm:h-[calc(100%-2rem)] sm:w-[calc(100%-1.5rem)]"
+          />
+        )}
+        <span className="absolute right-1.5 top-6 flex -rotate-6 flex-col items-center sm:right-3 sm:top-9">
+          <span className="grid h-14 w-14 place-items-center rounded-full bg-cheese text-ink shadow-[2px_2px_0_0_#FAFAF9] ring-[1.5px] ring-inset ring-ink/60 sm:h-[4.6rem] sm:w-[4.6rem]">
+            <span className="text-center leading-none">
+              <span className="block font-cond text-[0.55rem] font-extrabold tracking-widest sm:text-[0.65rem]">RS</span>
+              <span className="block font-display text-base tabular-nums sm:text-[1.35rem]">{formatCents(price).replace(/^Rs\s*/, '')}</span>
+            </span>
+          </span>
+          <span className="-mt-1.5 whitespace-nowrap rounded bg-red-600 px-1.5 py-0.5 font-cond text-[0.55rem] font-extrabold uppercase tracking-wider text-white sm:text-[0.62rem]">
+            {kind === 'buy1get1' ? dealWindow : 'Limited time'}
+          </span>
+        </span>
         {save > 0 && (
-          <span className="shrink-0 -rotate-6 rounded-xl bg-ink px-2.5 py-1.5 text-center font-cond font-extrabold uppercase leading-none text-cheese shadow-soft-sm">
-            <span className="block text-[0.65rem] tracking-widest">Save</span>
-            <span className="mt-0.5 block text-lg tabular-nums">{formatCents(save)}</span>
+          <span className="absolute left-1.5 top-6 -rotate-6 rounded-lg bg-red-600 px-1.5 py-1 text-center font-cond font-extrabold uppercase leading-none text-white shadow-soft-sm sm:left-3 sm:top-9 sm:px-2.5 sm:py-1.5">
+            <span className="block text-[0.5rem] tracking-widest sm:text-[0.6rem]">Save</span>
+            <span className="mt-0.5 block text-xs tabular-nums sm:text-base">{formatCents(save)}</span>
           </span>
         )}
       </div>
-      {card.description && <p className="relative mt-2 font-cond text-lg font-bold leading-snug">{card.description}</p>}
-      {save > 0 && worthCents !== null && (
-        <p className="relative mt-0.5 text-sm font-medium text-ink/70">
-          <s className="tabular-nums">{formatCents(worthCents)}</s> if bought separately
-        </p>
-      )}
-      <div className="relative mt-auto flex flex-wrap items-center gap-3 pt-4">
-        {closed ? (
-          <span className="rounded-full border-2 border-ink px-4 py-2 font-cond text-sm font-extrabold uppercase tracking-wide text-ink">
-            Available {dealWindow}
-          </span>
+      <div className="relative flex flex-1 flex-col px-3 pb-3 pt-1 sm:px-5 sm:pb-5">
+        <h3 className="font-display text-lg uppercase leading-[1.05] tracking-wide text-cheese sm:text-[1.7rem] sm:leading-none">
+          {card.name}
+        </h3>
+        {/* Its price includes the tax (0057; the deal menu: "the price you see is the price you pay"). */}
+        {card.variants.length > 0 && card.variants.every((x) => isTaxIncluded(x.item)) && (
+          <p className="mt-0.5 font-cond text-[0.65rem] font-extrabold uppercase tracking-widest text-cream/60 sm:text-xs">Tax included</p>
+        )}
+        {contents.length > 1 ? (
+          <ul className="mt-1.5 space-y-0.5 sm:mt-2.5 sm:space-y-1">
+            {contents.map((line) => (
+              <li key={line} className="flex items-start gap-1.5 text-[0.78rem] font-semibold leading-snug text-cream/90 sm:gap-2 sm:text-[0.95rem]">
+                <span aria-hidden className="mt-[0.22em] grid h-3 w-3 shrink-0 place-items-center rounded-full bg-cheese text-[0.45rem] font-black text-ink sm:h-4 sm:w-4 sm:text-[0.6rem]">
+                  ✓
+                </span>
+                {line}
+              </li>
+            ))}
+          </ul>
         ) : (
-          <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} onGold />
+          card.description && <p className="mt-1.5 text-[0.78rem] font-semibold leading-snug text-cream/85 sm:mt-2 sm:text-[0.95rem]">{card.description}</p>
         )}
-        {count > 0 && (
-          <span className="rounded-full bg-ink px-2.5 py-1 font-cond text-xs font-bold uppercase text-cheese">
-            {count} in order
-          </span>
+        {save > 0 && worthCents !== null && (
+          <p className="mt-1 text-[0.7rem] font-medium text-cream/55 sm:text-xs">
+            <s className="tabular-nums">{formatCents(worthCents)}</s> if bought separately
+          </p>
         )}
+        <div className="mt-auto pt-3 sm:pt-4">
+          {closed ? (
+            <span className="block rounded-full border-2 border-cheese/60 px-3 py-2 text-center font-cond text-xs font-extrabold uppercase tracking-wide text-cheese sm:text-sm">
+              Available {dealWindow}
+            </span>
+          ) : card.pickupOnly && !canPickup ? (
+            <PickupOnly />
+          ) : v ? (
+            <button
+              type="button"
+              onClick={() => onPick(card, 0)}
+              aria-label={`${oneTap ? 'Add' : 'Choose options for'} ${label}, ${formatCents(price)}${count > 0 ? ` (${count} in your order)` : ''}`}
+              className="relative flex min-h-[2.75rem] w-full items-center justify-between gap-2 rounded-full bg-cheese py-1.5 pl-3.5 pr-1.5 font-cond text-base font-extrabold uppercase tracking-wide text-ink transition-transform hover:bg-cheese-hot active:scale-[0.97] sm:min-h-[3.25rem] sm:pl-5 sm:pr-2 sm:text-lg"
+            >
+              <span className="leading-none">{oneTap ? 'Add' : 'Choose'}</span>
+              <span aria-hidden className="grid h-8 w-8 place-items-center rounded-full bg-ink text-xl leading-none text-cheese sm:h-9 sm:w-9">
+                {oneTap ? '+' : '›'}
+              </span>
+              {count > 0 && (
+                <span
+                  aria-hidden
+                  className="absolute -right-1 -top-2 grid h-6 min-w-6 place-items-center rounded-full bg-red-600 px-1 text-xs text-white"
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          ) : null}
+        </div>
       </div>
     </article>
   );
 });
+
+/** Melted cheese over the top of a deal card, as on the printed deal menu (drawn here: nothing to load). */
+function CheeseDrip() {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 238 40"
+      preserveAspectRatio="none"
+      className="pointer-events-none absolute inset-x-0 top-0 z-10 h-9 w-full fill-cheese"
+    >
+      <path d="M-2,-2 H240 V9 L238,9 C231,12 224,7 217,9 C212,9 210,12 210,18 L210,13 C210,15.3 211.8,14.7 211.8,18.2 A5.8,5.8 0 0 1 200.2,18.2 C200.2,14.7 202,15.3 202,13 L202,18 C202,12 200,9 195,9 C187,12 179,7 171.5,9 C166.5,9 164.5,12 164.5,18 L164.5,18.6 C164.5,21.2 166.5,20.6 166.5,24.5 A6.5,6.5 0 0 1 153.5,24.5 C153.5,20.6 155.5,21.2 155.5,18.6 L155.5,18 C155.5,12 153.5,9 148.5,9 C141,12 134,7 126.5,9 C121.5,9 119.5,12 119.5,18 L119.5,7.4 C119.5,9.4 121.1,8.9 121.1,11.9 A5.1,5.1 0 0 1 110.9,11.9 C110.9,8.9 112.5,9.4 112.5,7.4 L112.5,18 C112.5,12 110.5,9 105.5,9 C97,12 88.5,7 80,9 C75,9 73,12 73,18 L73,26.2 C73,29.1 75.3,28.4 75.3,32.8 A7.3,7.3 0 0 1 60.7,32.8 C60.7,28.4 63,29.1 63,26.2 L63,18 C63,12 61,9 56,9 C51,12 46,7 41,9 C36,9 34,12 34,18 L34,11 C34,13.3 35.8,12.7 35.8,16.2 A5.8,5.8 0 0 1 24.2,16.2 C24.2,12.7 26,13.3 26,11 L26,18 C26,12 24,9 19,9 C12.7,12 6.3,7 0,9 L-2,9 Z" />
+    </svg>
+  );
+}
 
 // ---------------------------------------------------------------------------
 

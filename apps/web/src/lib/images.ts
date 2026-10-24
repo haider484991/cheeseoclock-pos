@@ -4,9 +4,9 @@
  * small one is plenty there; the browser picks by width from this srcset.
  * Anything else (a till photo sent as a data URL) has no small copy.
  */
-const SHOP_PHOTO = /^\/images\/menu\/([a-z0-9-]+\.webp)$/;
+const SHOP_PHOTO = /^\/images\/(menu|deals)\/([a-z0-9-]+\.webp)$/;
 
 export function menuImageSrcSet(src: string | null | undefined): string | undefined {
   const m = src ? SHOP_PHOTO.exec(src) : null;
-  return m ? `/images/menu/sm/${m[1]} 400w, ${src} 720w` : undefined;
+  return m ? `/images/${m[1]}/sm/${m[2]} 400w, ${src} 720w` : undefined;
 }

@@ -52,12 +52,18 @@ function isUnmet(g: PublishedModifierGroup, sel: Set<string>): boolean {
 export function ItemSheet({
   card,
   initialVariant,
+  initialSelected,
   canPickup,
   onClose,
   onConfirm,
 }: {
   card: MenuCard;
   initialVariant: number;
+  /**
+   * The choices to start with instead of the till's defaults (24 Oct 2026): a deal's first options (lib/menu-view
+   * presetPicks), or the line the customer tapped "Change" on. Absent = the defaults, as before.
+   */
+  initialSelected?: readonly string[];
   /** The till takes pick-up orders right now (what the card's size buttons follow). */
   canPickup: boolean;
   onClose: () => void;
@@ -71,7 +77,7 @@ export function ItemSheet({
   const item = variant.item;
   const groups = useMemo(() => sheetGroups(item), [item]);
   const [qty, setQty] = useState(1);
-  const [selected, setSelected] = useState<Set<string>>(() => defaultsOf(item));
+  const [selected, setSelected] = useState<Set<string>>(() => (initialSelected ? new Set(initialSelected) : defaultsOf(item)));
 
   // Another size is another till item with its own modifier ids. Carry the
   // choices across by name (Medium and Large share their groups' options),

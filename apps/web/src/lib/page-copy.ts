@@ -380,6 +380,13 @@ export const MENU_PAGE_NAME: Copy = '{name} Menu & Prices';
  */
 export const MENU_HEADER_HOURS: Copy = { text: '{hours}', when: { everyDay: true }, otherwise: HOURS_CHIP_WITH_DAYS };
 /**
+ * The /menu hook (24 Oct 2026, "attack the craving first"; the Meta ads land here saying "2 minute mein order
+ * karein"): the craving in English, then in Roman Urdu written as Karachi says it — never a translation of the
+ * English line word for word.
+ */
+export const MENU_HOOK = 'Craving cheese? Order in 2 minutes.';
+export const MENU_HOOK_ROMAN_URDU = 'Bhook lagi hai? Garma garam pizza, seedha aap ke ghar.';
+/**
  * The Buy 1 Get 1 banner's where-and-when line (lib/offers; owner 5 Oct 2026: "Takeaway - Delivery", "everyday from
  * 1 pm to 7 pm"): "every day" only while the shop opens all seven days — the offer runs only while it is open.
  */

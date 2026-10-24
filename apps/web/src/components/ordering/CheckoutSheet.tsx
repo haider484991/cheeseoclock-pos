@@ -22,6 +22,7 @@ import {
   writeStored,
 } from '@/lib/device-memory';
 import { formatCents } from '@/lib/format';
+import { funnel } from '@/lib/funnel';
 import { storedTestCode } from '@/lib/meta-pixel';
 import { isPickupOnly } from '@/lib/menu-view';
 import { tagUsHint } from '@/lib/offers';
@@ -77,6 +78,8 @@ export function CheckoutSheet(
   const [pin, setPin] = useState<LocationPin | null>(null);
   const [social, setSocial] = useState('');
   const [remember, setRemember] = useState(true);
+  // The optional fields' fold (24 Oct 2026): shut to start with; a problem in one of them opens it.
+  const [moreOpen, setMoreOpen] = useState(false);
   const [hasSaved, setHasSaved] = useState(saved !== null);
   const [submitting, setSubmitting] = useState(false);
   const [problem, setProblem] = useState<CheckoutProblem | null>(null);
@@ -100,8 +103,10 @@ export function CheckoutSheet(
     setProblem((p) => (p && (field === 'any' || p.field === field) ? null : p));
   }
 
-  function show(p: CheckoutProblem) {
+  function show(p: CheckoutProblem, where: 'form' | 'server' = 'form', reason: string = p.field ?? 'other') {
     setProblem(p);
+    funnel.checkoutProblem(where, reason);
+    if (p.field === 'social') setMoreOpen(true);
     // Focusing the field scrolls it into view; a problem with no field of its
     // own is shown above the button, which is always on screen.
     requestAnimationFrame(() => {
@@ -145,7 +150,7 @@ export function CheckoutSheet(
     });
     if (invalid) return show(invalid);
     if (!props.acceptingOrders) {
-      return show({ field: null, message: props.closedNotice ?? 'We are not taking online orders right now.' });
+      return show({ field: null, message: props.closedNotice ?? 'We are not taking online orders right now.' }, 'form', 'closed');
     }
 
     inFlight.current = true;
@@ -182,7 +187,7 @@ export function CheckoutSheet(
       if (!json?.ok || !json.data) {
         inFlight.current = false;
         setSubmitting(false);
-        return show(problemFromServer(json));
+        return show(problemFromServer(json), 'server', json?.error ?? `http_${res.status}`);
       }
       if (remember) {
         writeStored(
@@ -202,7 +207,7 @@ export function CheckoutSheet(
     } catch {
       inFlight.current = false;
       setSubmitting(false);
-      show({ field: null, message: 'Network problem — check your connection and tap Place order again.' });
+      show({ field: null, message: 'Network problem — check your connection and tap Place order again.' }, 'server', 'network');
     }
   }
 
@@ -220,6 +225,23 @@ export function CheckoutSheet(
     social,
   });
   const payFacts = { ...props.deliveryFacts, shop };
+  const socialRequired = props.buy1Get1InCart === true && props.deliveryFacts.buy1Get1.asksSocial;
+  const socialField = (
+    <TextField
+      inputRef={setFieldRef('social')}
+      label={socialRequired ? 'Your Instagram or Facebook name (for Buy 1 Get 1)' : 'Your Instagram or Facebook (optional)'}
+      value={social}
+      onChange={(v) => {
+        edited('social');
+        setSocial(v);
+      }}
+      placeholder="@yourname"
+      autoComplete="off"
+      maxLength={SOCIAL_MAX}
+      error={fieldError('social')}
+      hint={tagUsHint(shop.profile.name, shop.profile.socialLinks, props.deliveryFacts.buy1Get1)}
+    />
+  );
 
   return (
     <Sheet onClose={props.onClose} label="Your order and checkout">
@@ -382,34 +404,37 @@ export function CheckoutSheet(
                   error={fieldError('address')}
                 />
               )}
-              {!pickup && <LocationPinField pin={pin} onPin={setPin} />}
-              <TextField
-                label={pickup ? 'Notes for the counter (optional)' : 'Directions for the rider (optional)'}
-                value={notes}
-                onChange={setNotes}
-                placeholder={pickup ? 'I’ll be there at 9 pm' : 'Near the park, ring the bell twice'}
-                maxLength={400}
-              />
               {/* Required with a Buy 1 Get 1 deal in the cart while the owner's rules ask for it (7 Oct 2026): it goes
-                  first in the order's notes, so the cashier knows whose post to check. Optional otherwise, as before. */}
-              <TextField
-                inputRef={setFieldRef('social')}
-                label={
-                  props.buy1Get1InCart && props.deliveryFacts.buy1Get1.asksSocial
-                    ? 'Your Instagram or Facebook name (for Buy 1 Get 1)'
-                    : 'Your Instagram or Facebook (optional)'
-                }
-                value={social}
-                onChange={(v) => {
-                  edited('social');
-                  setSocial(v);
-                }}
-                placeholder="@yourname"
-                autoComplete="off"
-                maxLength={SOCIAL_MAX}
-                error={fieldError('social')}
-                hint={tagUsHint(shop.profile.name, shop.profile.socialLinks, props.deliveryFacts.buy1Get1)}
-              />
+                  first in the order's notes, so the cashier knows whose post to check. Then it stands with the
+                  fields above; otherwise it waits, optional, under "More" with the pin and the directions. */}
+              {socialRequired && socialField}
+              {/* 24 Oct 2026 (four fields to order, not seven): the optional ones fold under one line. Open when one
+                  of them already says something, or the problem is there. */}
+              <details
+                open={moreOpen}
+                onToggle={(e) => setMoreOpen((e.currentTarget as HTMLDetailsElement).open)}
+                className="group rounded-2xl border-2 border-paper-line bg-white"
+              >
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 font-cond text-sm font-extrabold uppercase tracking-wide text-ink [&::-webkit-details-marker]:hidden">
+                  <span>
+                    {pickup ? 'Add a note' : 'Add directions or a map pin'}
+                    {!socialRequired && ' · your Instagram'}
+                    <span className="ml-1.5 font-bold normal-case tracking-normal text-ink-muted">(optional)</span>
+                  </span>
+                  <span aria-hidden className="text-lg transition-transform group-open:rotate-45">+</span>
+                </summary>
+                <div className="space-y-4 px-4 pb-4">
+                  {!pickup && <LocationPinField pin={pin} onPin={setPin} />}
+                  <TextField
+                    label={pickup ? 'Notes for the counter (optional)' : 'Directions for the rider (optional)'}
+                    value={notes}
+                    onChange={setNotes}
+                    placeholder={pickup ? 'I’ll be there at 9 pm' : 'Near the park, ring the bell twice'}
+                    maxLength={400}
+                  />
+                  {!socialRequired && socialField}
+                </div>
+              </details>
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                 <label className="flex cursor-pointer items-center gap-2 py-1 text-sm font-semibold text-ink">
                   <input
@@ -468,6 +493,7 @@ export function CheckoutSheet(
                     href={whatsappUrlWith(shop, waText)}
                     target="_blank"
                     rel="noopener noreferrer"
+                    onClick={() => funnel.whatsappOrder('problem')}
                     className="whitespace-nowrap underline underline-offset-2"
                   >
                     Send it on WhatsApp →
@@ -500,6 +526,7 @@ export function CheckoutSheet(
               href={whatsappUrlWith(shop, waText)}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={() => funnel.whatsappOrder('closed')}
               className="flex min-h-[3.5rem] w-full items-center justify-center rounded-full bg-[#1FA855] py-3.5 font-cond text-xl font-bold uppercase tracking-wide text-white transition-all hover:bg-[#178a45] active:scale-[0.99]"
             >
               Send this order on WhatsApp
