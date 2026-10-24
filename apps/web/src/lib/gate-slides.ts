@@ -6,7 +6,7 @@ import {
   type PublishedMenuItem,
 } from '@cheeseoclock/shared-types';
 import { formatCents } from './format';
-import { drinkFlavourName, isDealSection, sectionTitle } from './menu-view';
+import { drinkFlavourName, isDealSection, sectionTitle, withoutDrinkBrand } from './menu-view';
 
 /**
  * The deals banner at the top of the landing location popup (components/location/LocationGate;
@@ -136,6 +136,7 @@ const RECIPES: readonly Recipe[] = [
 /** A deal the recipes don't name: still a deal, with a plain hook. */
 const PLAIN = {
   hook: { en: 'Hungry? This one’s for you.', ur: 'Bhook lagi hai? Yeh aap ke liye.' },
+  line: { en: 'One of our value deals', ur: 'Hamari value deals mein se ek' },
   cutouts: [cut('pizza', 14, 4, 66, -6)],
 };
 
@@ -190,10 +191,12 @@ export function gateSlides(
     const at = RECIPES.findIndex((r) => r.match.test(item.name));
     const included = taxIncluded(item);
     if (at === -1) {
+      // What is in it, in the till's own words (its first sentence, no drink brand); else a plain line.
+      const what = withoutDrinkBrand(item.description)?.trim().split(/(?<=\.)\s/)[0]?.trim() || null;
       plain.push({
         key: `deal-${item.posItemId}`,
         hook: PLAIN.hook,
-        line: { en: name, ur: name },
+        line: what ? { en: what, ur: what } : PLAIN.line,
         name,
         priceCents: item.basePriceCents,
         from: false,

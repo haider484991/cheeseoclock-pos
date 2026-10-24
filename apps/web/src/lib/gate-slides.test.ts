@@ -97,6 +97,9 @@ describe('gateSlides', () => {
     const slides = gateSlides({ categories: [cat('Value Deals', [item('Midnight Feast', 2500), item('Cheese Partners', 1300)])] }, OFF);
     expect(slides.map((s) => s.name)).toEqual(['Cheese Partners', 'Midnight Feast']);
     expect(slides[1]!.hook.en).toBe('Hungry? This one’s for you.');
+    expect(slides[1]!.line.en).toBe('One of our value deals');
+    const described = gateSlides({ categories: [cat('Value Deals', [item('Big Two', 3600, { description: 'Two medium pizzas and a 1.5 litre Pepsi. Dips extra.' })])] }, OFF)[0]!;
+    expect(described.line.en).toBe('Two medium pizzas and a 1.5 litre soft drink.');
     expect(gateSlides(MENU, OFF).some((s) => s.key === 'buy-1-get-1')).toBe(false);
   });
 

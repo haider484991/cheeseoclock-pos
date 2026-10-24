@@ -76,8 +76,14 @@ const T = {
   closed: { en: 'We’re closed right now: choose your area and browse the deals.', ur: 'Abhi band hain: area chun kar deals dekh lein.' },
   limited: { en: 'Limited time', ur: 'Limited time' },
   taxIn: { en: 'Tax included', ur: 'Tax shamil' },
-  from: { en: 'from', ur: 'sirf' },
 } satisfies Record<string, Words>;
+
+/** "from Rs 850" / "Rs 850 se shuru": the lowest of several prices, never "sirf" (only). */
+function priceWords(cents: number, from: boolean, lang: GateLang): string {
+  const p = formatCents(cents);
+  if (!from) return p;
+  return lang === 'en' ? `from ${p}` : `${p} se shuru`;
+}
 
 // The owner's brand edge, as the deal menu prints it (the user, 24 Oct 2026).
 const BRAND_LINES = 'Master-crafted premium sauces · Soft & crispy dough · Zero-leftover crust';
@@ -402,7 +408,7 @@ function DealSlides({ slides, lang, t }: { slides: readonly GateSlide[]; lang: G
   }, [paused, count]);
 
   const slide = slides[at % count]!;
-  const price = `${slide.from ? `${t(T.from)} ` : ''}${formatCents(slide.priceCents)}`;
+  const price = priceWords(slide.priceCents, slide.from, lang);
 
   return (
     <div
