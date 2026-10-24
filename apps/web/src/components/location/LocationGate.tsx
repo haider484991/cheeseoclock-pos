@@ -79,7 +79,8 @@ const T = {
   from: { en: 'from', ur: 'sirf' },
 } satisfies Record<string, Words>;
 
-const BRAND_LINES = 'Home-crafted premium sauces · Soft & crispy dough · Zero-leftover crust';
+// The owner's brand edge, as the deal menu prints it (the user, 24 Oct 2026).
+const BRAND_LINES = 'Master-crafted premium sauces · Soft & crispy dough · Zero-leftover crust';
 
 function newEventId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
