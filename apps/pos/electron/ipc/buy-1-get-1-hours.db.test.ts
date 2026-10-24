@@ -37,7 +37,7 @@ const POSTER = buy1Get1ClosedMessage();
 
 const d = DatabaseSync ? describe : describe.skip;
 
-d('Buy 1 Get 1 deals at the counter: the owner’s rules (1 PM to 7 PM until changed)', () => {
+d('Buy 1 Get 1 deals at the counter: the owner’s rules (12 PM to 7 PM until changed)', () => {
   let db: ReturnType<typeof openMigrated>;
   let dealId: string;
   let pizzaId: string;
@@ -83,15 +83,16 @@ d('Buy 1 Get 1 deals at the counter: the owner’s rules (1 PM to 7 PM until cha
     startedAt(karachi(11, 0)); // started before the hours: only the clock now decides
   });
 
-  it('never saved: lets a deal on from 1:00 PM up to 6:59 PM', () => {
-    expect(refusal(() => assertBuy1Get1Hours(db, orderId, [dealId], karachi(13, 0)))).toBeNull();
+  it('never saved: lets a deal on from 12:00 PM up to 6:59 PM (12 PM since 24 Oct 2026)', () => {
+    expect(refusal(() => assertBuy1Get1Hours(db, orderId, [dealId], karachi(12, 0)))).toBeNull();
+    expect(refusal(() => assertBuy1Get1Hours(db, orderId, [dealId], karachi(12, 59)))).toBeNull();
     expect(refusal(() => assertBuy1Get1Hours(db, orderId, [dealId], karachi(16, 30)))).toBeNull();
     expect(refusal(() => assertBuy1Get1Hours(db, orderId, [dealId], karachi(18, 59)))).toBeNull();
   });
 
-  it('never saved: refuses one before 1 PM and from 7 PM, in the cashier’s words', () => {
-    expect(POSTER).toBe('Buy 1 Get 1 deals are sold from 1 PM to 7 PM.');
-    expect(refusal(() => assertBuy1Get1Hours(db, orderId, [dealId], karachi(12, 59)))).toBe(POSTER);
+  it('never saved: refuses one before 12 PM and from 7 PM, in the cashier’s words', () => {
+    expect(POSTER).toBe('Buy 1 Get 1 deals are sold from 12 PM to 7 PM.');
+    expect(refusal(() => assertBuy1Get1Hours(db, orderId, [dealId], karachi(11, 59)))).toBe(POSTER);
     expect(refusal(() => assertBuy1Get1Hours(db, orderId, [dealId], karachi(19, 0)))).toBe(POSTER);
     expect(refusal(() => assertBuy1Get1Hours(db, orderId, [dealId], karachi(23, 45)))).toBe(POSTER);
     // An edit that adds a pizza AND a deal is refused for the deal.

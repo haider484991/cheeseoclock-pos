@@ -96,10 +96,10 @@ describe('Buy 1 Get 1 deals at checkout (owner, 7 Oct 2026)', () => {
     expect(validateCheckout({ ...DEAL, fulfilment: 'pickup', hasZone: false, address: '' })).toBeNull();
   });
 
-  it('are refused outside 1–7 PM, at the cart', () => {
+  it('are refused outside 12–7 PM, at the cart', () => {
     expect(validateCheckout({ ...DEAL, buy1Get1Open: false })).toEqual({
       field: 'cart',
-      message: 'Buy 1 Get 1 deals are sold from 1 PM to 7 PM. Remove the deal to order now.',
+      message: 'Buy 1 Get 1 deals are sold from 12 PM to 7 PM. Remove the deal to order now.',
     });
   });
 

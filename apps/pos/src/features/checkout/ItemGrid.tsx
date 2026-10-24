@@ -29,14 +29,14 @@ interface Props {
  * not a fill — a menu of eighty items must not be eighty coloured blocks. A
  * photo, when the shop has one, sits small at the side; it never decides the
  * tile's size. A Buy 1 Get 1 deal while the owner has them off, or outside
- * their hours (Settings → Money & discounts; 1–7 PM until changed), is greyed
+ * their hours (Settings → Money & discounts; 12–7 PM until changed), is greyed
  * and says so; the till refuses it there too (ipc/buy-1-get-1-hours.ts).
  */
 export function ItemGrid({ items, categories, onAdd, onChooseSize }: Props) {
   const now = useHalfMinuteNow();
   const dealRules = useBuy1Get1Rules();
   const dealsOpen = buy1Get1OpenAt(now, dealRules);
-  // "1–7 PM only" on a closed tile; "Off" while the owner has them switched off.
+  // "12–7 PM only" on a closed tile; "Off" while the owner has them switched off.
   const closedWords = dealRules.on ? `${buy1Get1WindowWords(dealRules)} only` : 'Off';
   const nameOf = new Map(categories.map((c) => [c.id, c.name] as const));
   const choices = menuChoices(items, categories);

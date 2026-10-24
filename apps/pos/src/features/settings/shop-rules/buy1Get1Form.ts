@@ -75,4 +75,4 @@ export const BUY_1_GET_1_MENU_NOTE =
   'The deals are the menu’s “Buy 1 Get 1 Deals” items (they come with the menu file). They never take a % off — no discount, no website offer.';
 
 /** What "never changed" means here: the poster's rules. */
-export const BUY_1_GET_1_NEVER_CHANGED = 'Never changed: the poster’s rules — on, every day 1 PM to 7 PM, the name asked for online.';
+export const BUY_1_GET_1_NEVER_CHANGED = 'Never changed: the poster’s rules — on, every day 12 PM to 7 PM, the name asked for online.';

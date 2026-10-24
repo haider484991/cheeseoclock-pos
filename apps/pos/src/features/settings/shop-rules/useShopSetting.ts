@@ -97,7 +97,7 @@ export function useOrderReasons(): CounterOrderReasons {
 
 /**
  * The Buy 1 Get 1 deals' rules (Settings → Money & discounts): the menu greys a deal while they are off or outside
- * their hours — the poster's (on, 1–7 PM) until the till has answered. Re-read when a Save lands.
+ * their hours — the poster's (on, 12–7 PM) until the till has answered. Re-read when a Save lands.
  */
 export function useBuy1Get1Rules(): Buy1Get1Rules {
   return buy1Get1RulesOf(useCheckoutRules().data);

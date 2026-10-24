@@ -828,7 +828,7 @@ describe('POST /api/orders — Buy 1 Get 1 deals (owner, 7 Oct 2026)', () => {
     vi.useRealTimers();
   });
 
-  it('takes a deal from 1 PM to 7 PM with the customer’s Instagram or Facebook name, which leads the notes', async () => {
+  it('takes a deal from 12 PM to 7 PM with the customer’s Instagram or Facebook name, which leads the notes', async () => {
     at(13, 0);
     const r = await place({ ...DEAL, social: '@ahmed_k', notes: 'Ring twice' });
     expect(r.status).toBe(200);
@@ -842,9 +842,9 @@ describe('POST /api/orders — Buy 1 Get 1 deals (owner, 7 Oct 2026)', () => {
     expect((await place({ ...DEAL, social: '@ahmed_k' })).status).toBe(200);
   });
 
-  it('refuses a deal before 1 PM and from 7 PM, pointing the customer at the cart', async () => {
+  it('refuses a deal before 12 PM and from 7 PM, pointing the customer at the cart (12 PM since 24 Oct 2026)', async () => {
     for (const [hour, minute] of [
-      [12, 59],
+      [11, 59],
       [19, 0],
       [23, 30],
     ] as const) {
@@ -852,7 +852,7 @@ describe('POST /api/orders — Buy 1 Get 1 deals (owner, 7 Oct 2026)', () => {
       const r = await place({ ...DEAL, social: '@ahmed_k' });
       expect(r.status, `${hour}:${minute}`).toBe(409);
       expect(r.json.error).toBe('buy1get1_closed');
-      expect(r.json.message).toBe('Buy 1 Get 1 deals are sold from 1 PM to 7 PM. Remove the deal to order now.');
+      expect(r.json.message).toBe('Buy 1 Get 1 deals are sold from 12 PM to 7 PM. Remove the deal to order now.');
     }
   });
 

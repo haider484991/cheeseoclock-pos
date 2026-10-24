@@ -408,7 +408,7 @@ describe('the facts the /menu page hands the browser', () => {
     expect([facts.announcement, facts.minDeliveryOrderCents]).toEqual(['Made-up announcement', 100_000]);
     expect([DEFAULT_FACTS.announcement, DEFAULT_FACTS.minDeliveryOrderCents]).toEqual([null, 0]);
     expect(facts.buy1Get1).toEqual({ on: false, opensMinute: 1320, closesMinute: 60, asksSocial: false });
-    expect(DEFAULT_FACTS.buy1Get1).toEqual({ on: true, opensMinute: 780, closesMinute: 1140, asksSocial: true });
+    expect(DEFAULT_FACTS.buy1Get1).toEqual({ on: true, opensMinute: 720, closesMinute: 1140, asksSocial: true });
     // A block without them (an older till's): the poster's rules.
     expect(factsFromBlock(block()).buy1Get1).toEqual(DEFAULT_FACTS.buy1Get1);
     expect(facts.zones.find((z) => z.id === 'dha-8')?.feeCents).toBe(30_000);

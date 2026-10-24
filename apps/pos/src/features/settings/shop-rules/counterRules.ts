@@ -96,7 +96,7 @@ export function orderReasonsOf(rules: Pick<CheckoutRules, 'reasons'> | null | un
   return rules?.reasons ?? DEFAULT_COUNTER_REASONS;
 }
 
-/** The Buy 1 Get 1 deals' rules from checkout:getRules, or the poster's (on, 1–7 PM) until it has answered. */
+/** The Buy 1 Get 1 deals' rules from checkout:getRules, or the poster's (on, 12–7 PM) until it has answered. */
 export function buy1Get1RulesOf(rules: Pick<CheckoutRules, 'buy1Get1'> | null | undefined): Buy1Get1Rules {
   return rules?.buy1Get1 ?? DEFAULT_BUY_1_GET_1_RULES;
 }

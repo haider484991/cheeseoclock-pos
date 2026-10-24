@@ -212,7 +212,7 @@ describe('the slides, worked out from the published menu and the owner’s offer
     ]);
     expect(pizzaDeals!.line).toBe('Your choice of regular pizzas, with a 1 litre soft drink');
     expect([buy1Get1!.line, buy1Get1!.href, rowsOf(buy1Get1!)]).toEqual([
-      '1–7 PM only',
+      '12–7 PM only',
       '/menu#buy-1-get-1-deals',
       [
         ['Medium + Free Side', null, 1500, false],

@@ -17,12 +17,12 @@ const form = buy1Get1ToForm(DEFAULT_BUY_1_GET_1_DEALS);
 
 describe('the Buy 1 Get 1 card', () => {
   it('saves what is picked, in the format this version writes; the poster’s rules round-trip', () => {
-    expect(form).toEqual({ on: true, opensMinute: 780, closesMinute: 1140, asksSocial: true });
+    expect(form).toEqual({ on: true, opensMinute: 720, closesMinute: 1140, asksSocial: true });
     expect(buy1Get1FromForm(form)).toEqual({ value: { ...DEFAULT_BUY_1_GET_1_DEALS }, problem: null });
     expect(buy1Get1FromForm({ ...form, on: false, asksSocial: false }).value).toEqual({
       v: 1,
       on: false,
-      opensMinute: 780,
+      opensMinute: 720,
       closesMinute: 1140,
       asksSocial: false,
     });
@@ -60,14 +60,14 @@ describe('the Buy 1 Get 1 card', () => {
   });
 
   it('says what the hours mean, past midnight too', () => {
-    expect(hoursNote(form)).toBe('Every day 1–7 PM, Karachi time.');
+    expect(hoursNote(form)).toBe('Every day 12–7 PM, Karachi time.');
     expect(hoursNote({ opensMinute: 22 * 60, closesMinute: 60 })).toBe('Every day 10 PM–1 AM: past midnight, into the next morning.');
     expect(hoursNote({ opensMinute: 0, closesMinute: 1440 })).toBe('Every day, all day.');
     expect(hoursNote({ opensMinute: 600, closesMinute: 600 })).toBe('Every day, Karachi time.');
   });
 
   it('works the example: on with the name asked, optional, or off', () => {
-    expect(buy1Get1Example(form)).toMatch(/^Buy 1 Get 1 deals are sold from 1 PM to 7 PM\. Outside the hours the till greys them/);
+    expect(buy1Get1Example(form)).toMatch(/^Buy 1 Get 1 deals are sold from 12 PM to 7 PM\. Outside the hours the till greys them/);
     expect(buy1Get1Example(form)).toMatch(/must type their Instagram or Facebook name/);
     expect(buy1Get1Example({ ...form, asksSocial: false })).toMatch(/name is optional/);
     expect(buy1Get1Example({ ...form, on: false })).toMatch(/^The deals are greyed on the till and hidden on the website/);

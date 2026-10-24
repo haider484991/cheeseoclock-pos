@@ -48,9 +48,9 @@ describe('Buy 1 Get 1: which categories', () => {
 });
 
 describe('Buy 1 Get 1: the setting', () => {
-  it('is the poster’s until the owner saves one: on, 1 PM up to 7 PM, the name asked for (frozen, format 1)', () => {
-    expect(DEFAULT_BUY_1_GET_1_RULES).toEqual({ on: true, opensMinute: 780, closesMinute: 1140, asksSocial: true });
-    expect(DEFAULT_BUY_1_GET_1_DEALS).toEqual({ v: 1, on: true, opensMinute: 780, closesMinute: 1140, asksSocial: true });
+  it('is the poster’s until the owner saves one: on, 12 PM up to 7 PM, the name asked for (frozen, format 1)', () => {
+    expect(DEFAULT_BUY_1_GET_1_RULES).toEqual({ on: true, opensMinute: 720, closesMinute: 1140, asksSocial: true });
+    expect(DEFAULT_BUY_1_GET_1_DEALS).toEqual({ v: 1, on: true, opensMinute: 720, closesMinute: 1140, asksSocial: true });
     expect(SHOP_SETTING_DEFAULTS['deals.buy1Get1']).toBe(DEFAULT_BUY_1_GET_1_DEALS);
     expect(SHOP_SETTING_FORMAT['deals.buy1Get1']).toBe(1);
     expect(Object.isFrozen(DEFAULT_BUY_1_GET_1_RULES)).toBe(true);
@@ -80,9 +80,10 @@ describe('Buy 1 Get 1: the hours', () => {
     expect(karachiMinuteOfDay(-60_000)).toBe(5 * 60 - 1);
   });
 
-  it('are on from 1:00 PM up to 6:59 PM, every day, until the owner changes them', () => {
-    expect(buy1Get1OpenAt(karachi(12, 59))).toBe(false);
-    expect(buy1Get1OpenAt(karachi(13, 0))).toBe(true);
+  it('are on from 12:00 PM up to 6:59 PM, every day, until the owner changes them (12 PM since 24 Oct 2026)', () => {
+    expect(buy1Get1OpenAt(karachi(11, 59))).toBe(false);
+    expect(buy1Get1OpenAt(karachi(12, 0))).toBe(true);
+    expect(buy1Get1OpenAt(karachi(12, 59))).toBe(true);
     expect(buy1Get1OpenAt(karachi(18, 59))).toBe(true);
     expect(buy1Get1OpenAt(karachi(19, 0))).toBe(false);
     expect(buy1Get1OpenAt(karachi(1, 0))).toBe(false);
@@ -116,7 +117,7 @@ describe('Buy 1 Get 1: the hours', () => {
 
   it('keep a deal for an order started inside them, never one started outside — and none while switched off', () => {
     expect(buy1Get1AllowedOn(karachi(19, 2), new Date(karachi(18, 58)).toISOString())).toBe(true);
-    expect(buy1Get1AllowedOn(karachi(19, 2), new Date(karachi(12, 0)).toISOString())).toBe(false);
+    expect(buy1Get1AllowedOn(karachi(19, 2), new Date(karachi(11, 59)).toISOString())).toBe(false);
     expect(buy1Get1AllowedOn(karachi(14, 0), new Date(karachi(12, 0)).toISOString())).toBe(true);
     expect(buy1Get1AllowedOn(karachi(20, 0), null)).toBe(false);
     expect(buy1Get1AllowedOn(karachi(20, 0), 'not a date')).toBe(false);
@@ -129,7 +130,7 @@ describe('Buy 1 Get 1: the hours', () => {
 
 describe('Buy 1 Get 1: the words', () => {
   it('print the hours as the poster does', () => {
-    expect(buy1Get1WindowWords()).toBe('1–7 PM');
+    expect(buy1Get1WindowWords()).toBe('12–7 PM');
     expect(buy1Get1WindowWords({ opensMinute: 11 * 60, closesMinute: 15 * 60 })).toBe('11 AM–3 PM');
     expect(buy1Get1WindowWords({ opensMinute: 13 * 60 + 30, closesMinute: 19 * 60 })).toBe('1:30–7 PM');
     expect(buy1Get1WindowWords({ opensMinute: 22 * 60, closesMinute: 60 })).toBe('10 PM–1 AM');
@@ -139,7 +140,7 @@ describe('Buy 1 Get 1: the words', () => {
   });
 
   it('say why a deal can’t be had: the hours, or that they are off — never "every day" (the shop’s days are its own)', () => {
-    expect(buy1Get1ClosedMessage()).toBe('Buy 1 Get 1 deals are sold from 1 PM to 7 PM.');
+    expect(buy1Get1ClosedMessage()).toBe('Buy 1 Get 1 deals are sold from 12 PM to 7 PM.');
     expect(buy1Get1ClosedMessage(rules({ opensMinute: 22 * 60, closesMinute: 60 }))).toBe('Buy 1 Get 1 deals are sold from 10 PM to 1 AM.');
     expect(buy1Get1ClosedMessage(rules({ opensMinute: 13 * 60 + 30, closesMinute: 1440 }))).toBe(
       'Buy 1 Get 1 deals are sold from 1:30 PM to 12 AM.',
@@ -149,7 +150,7 @@ describe('Buy 1 Get 1: the words', () => {
 
   it('sum the owner’s rules up in one line (the card, its history)', () => {
     expect(buy1Get1Summary(DEFAULT_BUY_1_GET_1_RULES)).toBe(
-      'On · every day 1–7 PM · the website asks for the Instagram or Facebook name',
+      'On · every day 12–7 PM · the website asks for the Instagram or Facebook name',
     );
     expect(buy1Get1Summary(rules({ asksSocial: false, opensMinute: 0, closesMinute: 1440 }))).toBe(
       'On · all day, every day · the name is optional on the website',

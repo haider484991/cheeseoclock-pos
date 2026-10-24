@@ -36,10 +36,14 @@ export interface Buy1Get1Rules {
   asksSocial: boolean;
 }
 
-/** The poster's rules: on, every day 1 PM up to 7 PM, the name asked for. */
+/**
+ * The poster's rules: on, every day 12 PM up to 7 PM, the name asked for. (12 PM since 24 Oct 2026 — the user: "Buy 1
+ * Get 1 default from 12 PM"; the printed deal menu says "DAILY 12 PM – 7 PM ONLY". It was 1 PM.) The owner's own
+ * hours, once saved on the till, replace these.
+ */
 export const DEFAULT_BUY_1_GET_1_RULES: Readonly<Buy1Get1Rules> = Object.freeze({
   on: true,
-  opensMinute: 13 * 60,
+  opensMinute: 12 * 60,
   closesMinute: 19 * 60,
   asksSocial: true,
 });

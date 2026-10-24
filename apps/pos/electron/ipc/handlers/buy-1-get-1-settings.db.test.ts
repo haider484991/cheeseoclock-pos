@@ -152,7 +152,7 @@ live('the Buy 1 Get 1 deals’ rules are the owner’s', () => {
     h.session = CASHIER;
     expect((await counterRules()).buy1Get1).toEqual(DEFAULT_BUY_1_GET_1_RULES);
     const { readBuy1Get1Rules } = await import('../../db/business-settings-read.js');
-    expect(readBuy1Get1Rules(db as AppDatabase)).toEqual({ on: true, opensMinute: 780, closesMinute: 1140, asksSocial: true });
+    expect(readBuy1Get1Rules(db as AppDatabase)).toEqual({ on: true, opensMinute: 720, closesMinute: 1140, asksSocial: true });
     expect(rows()).toBe(0);
   });
 

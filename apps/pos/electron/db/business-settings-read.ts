@@ -293,7 +293,7 @@ export function readOnlineOptions(db: AppDatabase): OnlineOptions {
 
 /**
  * The Buy 1 Get 1 deals' rules ('deals.buy1Get1'), without the format: read on every call by the counter's check,
- * checkout:getRules and the settings block. The poster's (on, 1–7 PM, the name asked for) when nothing is saved.
+ * checkout:getRules and the settings block. The poster's (on, 12–7 PM, the name asked for) when nothing is saved.
  */
 export function readBuy1Get1Rules(db: AppDatabase): Buy1Get1Rules {
   try {

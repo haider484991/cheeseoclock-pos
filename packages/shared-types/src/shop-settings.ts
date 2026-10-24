@@ -1061,7 +1061,7 @@ export const DEFAULT_ONLINE_OPTIONS: Readonly<OnlineOptions> = Object.freeze({
 }) as Readonly<OnlineOptions>;
 
 /**
- * The poster's rules (5 Oct 2026): on, every day 1 PM up to 7 PM, the website asking for the customer's Instagram
+ * The poster's rules (5 Oct 2026; from 12 PM since 24 Oct 2026): on, every day 12 PM up to 7 PM, the website asking for the customer's Instagram
  * or Facebook name. NOT an exception to "installing changes nothing": they only touch items of a category named
  * "Buy 1 Get 1 …", and no menu had one before v0.7.39 — a till whose menu never gets one works exactly as before.
  * Pinned by pos-domain shop-settings.test.ts.

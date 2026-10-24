@@ -211,7 +211,7 @@ describe('the cleaner menu (20 Oct 2026: "too much information" in the header)',
   it('Buy 1 Get 1 in the header is one line: it jumps to the deals when the menu has them; else it opens to the rules', () => {
     const withDeals = header(open());
     expect(withDeals).toContain('href="#buy-1-get-1-deals"');
-    expect(withDeals).toContain('Buy 1 Get 1 FREE, 1–7 PM: see the deals');
+    expect(withDeals).toContain('Buy 1 Get 1 FREE, 12–7 PM: see the deals');
     expect(withDeals).not.toContain('<details');
     for (const rule of OFFER_RULES) expect(withDeals).not.toContain(rule.split(' → ')[1]!);
     // The deals' own section says "Delivery charges & tax may apply", in gold under its title.
@@ -261,7 +261,7 @@ describe('the cleaner menu (20 Oct 2026: "too much information" in the header)',
   it('Buy 1 Get 1 on a card is one tag that jumps to the deals; a regular pizza leaves the rule to them, a burger keeps its line', () => {
     const html = open();
     const pizza = cardOf(html, 'Test Fajita');
-    expect(pizza).toContain('aria-label="BUY 1 GET 1 FREE · 1–7 PM: see the Buy 1 Get 1 deals"');
+    expect(pizza).toContain('aria-label="BUY 1 GET 1 FREE · 12–7 PM: see the Buy 1 Get 1 deals"');
     expect(pizza).not.toContain('In a Buy 1 Get 1 deal');
     const burger = cardOf(html, 'Test Crispy Burger');
     expect(burger).toContain('href="#buy-1-get-1-deals"');

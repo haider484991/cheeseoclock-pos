@@ -43,8 +43,8 @@ const PICKUP_10 = { pickupPct: 10, deliveryPct: 0, canPickup: true };
 const rules = (over: Partial<Buy1Get1Rules>): Buy1Get1Rules => ({ ...DEFAULT_BUY_1_GET_1_RULES, ...over });
 
 describe('the poster’s words', () => {
-  it('1–7 PM (until the owner changes the hours), the two Buy 1 Get 1 rules, the tag-us hint and the delivery-and-tax warning', () => {
-    expect(offerWindow()).toBe('1–7 PM');
+  it('12–7 PM (until the owner changes the hours), the two Buy 1 Get 1 rules, the tag-us hint and the delivery-and-tax warning', () => {
+    expect(offerWindow()).toBe('12–7 PM');
     expect(offerWindow(rules({ opensMinute: 22 * 60, closesMinute: 60 }))).toBe('10 PM–1 AM');
     expect(OFFER_FINE_PRINT).toBe('Delivery charges & tax may apply');
     expect(OFFER_RULES).toHaveLength(2);
@@ -56,13 +56,13 @@ describe('the poster’s words', () => {
 describe('tagUsHint: the shop’s own profiles, else its name', () => {
   it('names each profile the owner lists, as the poster does', () => {
     expect(tagUsHint('Test Shop', ['https://www.instagram.com/testshop_/', 'https://www.facebook.com/testshop.karachi'])).toBe(
-      'Post your meal, tag us (Instagram @testshop_ · Facebook /testshop.karachi) and show us the post: your Buy 1 Get 1 item is free (1–7 PM).',
+      'Post your meal, tag us (Instagram @testshop_ · Facebook /testshop.karachi) and show us the post: your Buy 1 Get 1 item is free (12–7 PM).',
     );
   });
 
   it('with no profiles, the shop’s name', () => {
     expect(tagUsHint('Test Shop', [])).toBe(
-      'Post your meal, tag Test Shop on Instagram or Facebook and show us the post: your Buy 1 Get 1 item is free (1–7 PM).',
+      'Post your meal, tag Test Shop on Instagram or Facebook and show us the post: your Buy 1 Get 1 item is free (12–7 PM).',
     );
   });
 
@@ -101,7 +101,7 @@ describe('cardOffer', () => {
 
   it('a regular pizza in both sizes: the strip says what each size earns; the pick-up prices are worked per size', () => {
     expect(cardOffer('Pizza', fajita, PICKUP_10)).toEqual({
-      bogo: { title: 'BUY 1 GET 1 FREE · 1–7 PM', detail: 'Large: any burger, side or Medium FREE · Medium: any side FREE' },
+      bogo: { title: 'BUY 1 GET 1 FREE · 12–7 PM', detail: 'Large: any burger, side or Medium FREE · Medium: any side FREE' },
       discount: {
         label: '10% off with pick-up',
         prices: [
@@ -127,7 +127,7 @@ describe('cardOffer', () => {
 
   it('burgers: free with any Large pizza — never the Nashville Burger', () => {
     expect(cardOffer('Burgers', card('Classic Crispy Chicken', [[null, 700]]), PICKUP_10)).toEqual({
-      bogo: { title: 'FREE · 1–7 PM', detail: 'With any Large pizza' },
+      bogo: { title: 'FREE · 12–7 PM', detail: 'With any Large pizza' },
       discount: { label: '10% off with pick-up', prices: [{ size: '', wasCents: 70_000, nowCents: 63_000 }] },
     });
     expect(cardOffer('Burgers', card('Nashville Authentic (Hot)', [[null, 950]]), PICKUP_10).bogo).toBeNull();
@@ -138,7 +138,7 @@ describe('cardOffer', () => {
 
   it('sides: free with a Large or a Medium — Loaded Fries only with a Large', () => {
     const fries = cardOffer('Fries & Sides', card('Fries', [['Regular', 300], ['Large', 450]]), PICKUP_10);
-    expect(fries.bogo).toEqual({ title: 'FREE · 1–7 PM', detail: 'With any Large or Medium pizza' });
+    expect(fries.bogo).toEqual({ title: 'FREE · 12–7 PM', detail: 'With any Large or Medium pizza' });
     expect(fries.discount?.prices).toEqual([
       { size: 'Regular', wasCents: 30_000, nowCents: 27_000 },
       { size: 'Large', wasCents: 45_000, nowCents: 40_500 },
@@ -240,7 +240,7 @@ describe('cardOffer with Buy 1 Get 1 deals on the menu (7 Oct 2026)', () => {
       ['Large', 2000],
     ]);
     expect(cardOffer('Pizza', both, PICKUP_10, ON).bogo).toEqual({
-      title: 'BUY 1 GET 1 FREE · 1–7 PM',
+      title: 'BUY 1 GET 1 FREE · 12–7 PM',
       detail: 'In a Buy 1 Get 1 deal: Large + free burger, side or Medium · Medium + free side',
     });
     expect(cardOffer('Pizza', card('Fajita Pizza', [['Large', 2000]]), PICKUP_10, ON).bogo?.detail).toBe(
