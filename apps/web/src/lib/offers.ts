@@ -36,6 +36,11 @@ export const OFFER_HEADLINE = 'Buy 1 Get 1 FREE';
 export const OFFER_FINE_PRINT = 'Delivery charges & tax may apply';
 /** The same, when the deals' prices include their tax (0057; the owner's deal menu: "Regular menu pizzas · tax included"). */
 export const OFFER_FINE_PRINT_TAX_INCLUDED = 'Tax included · delivery charges extra';
+/**
+ * The value deals' promise once every one of them includes its tax (0057; the deal menu's ribbon and the Meta ads:
+ * "the price you see is the price you pay").
+ */
+export const DEALS_PRICE_PROMISE = 'The price you see is the price you pay · tax included · delivery extra';
 export const OFFER_TAG_LINE = 'Tag us on social media and show us the post to get the free item.';
 
 /** A profile link as the hint names it: "Instagram @cheeseoclock.karachi", "Facebook /cheeseoclock.karachi", else the label alone. */

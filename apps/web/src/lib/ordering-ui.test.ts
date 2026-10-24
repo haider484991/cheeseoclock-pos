@@ -544,3 +544,35 @@ describe('the pick-up-only size rule where a size is tapped, switched and added 
     expect(SHEET.match(/onConfirm\(/g) ?? []).toHaveLength(1);
   });
 });
+
+describe('the value deals’ price promise (24 Oct 2026)', () => {
+  const deals = (taxIncluded: boolean) =>
+    publicMenu({
+      categories: [
+        ...MENU.categories,
+        {
+          posCategoryId: 'c-deals',
+          name: 'Test Deals',
+          displayOrder: 2,
+          items: [
+            item('deal-1', 'Test Deal', 1800, { noDiscount: true, ...(taxIncluded ? { taxIncluded: true } : {}) }),
+            item('deal-2', 'Test Burger Deal', 850, { noDiscount: true, ...(taxIncluded ? { taxIncluded: true } : {}) }),
+          ],
+        },
+      ],
+      publishedAt: '2026-10-24T09:00:00.000Z',
+      store: STORE,
+    });
+
+  it('says "the price you see is the price you pay" once every deal includes its tax, and each card says so', () => {
+    const html = app({ menu: deals(true), acceptingOrders: true });
+    expect(html.split('The price you see is the price you pay · tax included · delivery extra').length - 1).toBe(1);
+    expect(html.split('>Tax included</p>').length - 1).toBe(2);
+  });
+
+  it('never while a deal still adds its tax on the bill', () => {
+    const html = app({ menu: deals(false), acceptingOrders: true });
+    expect(html).not.toContain('The price you see is the price you pay');
+    expect(html).not.toContain('>Tax included</p>');
+  });
+});

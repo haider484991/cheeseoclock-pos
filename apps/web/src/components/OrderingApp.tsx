@@ -76,7 +76,7 @@ import {
   type LastOrder,
 } from '@/lib/device-memory';
 import { menuImageSrcSet } from '@/lib/images';
-import { OFFER_FINE_PRINT, OFFER_FINE_PRINT_TAX_INCLUDED, cardOffer, discountOnEveryOrder, offerSectionOf, regularPizzaPrices, type OfferPrice } from '@/lib/offers';
+import { DEALS_PRICE_PROMISE, OFFER_FINE_PRINT, OFFER_FINE_PRINT_TAX_INCLUDED, cardOffer, discountOnEveryOrder, offerSectionOf, regularPizzaPrices, type OfferPrice } from '@/lib/offers';
 import { pixel, type PixelLine } from '@/lib/meta-pixel';
 import { funnel, type AddHow } from '@/lib/funnel';
 import { trackPath } from '@/lib/order-display';
@@ -674,7 +674,10 @@ export function OrderingApp({
                       s.cards.length > 0 && s.cards.every((c) => c.variants.every((v) => isTaxIncluded(v.item)))
                       ? OFFER_FINE_PRINT_TAX_INCLUDED
                       : OFFER_FINE_PRINT
-                    : null
+                    : // Value deals all at their tax-included price (24 Oct 2026): the deal menu's promise.
+                      isDealSection(s.name) && s.cards.length > 0 && s.cards.every((c) => c.variants.every((v) => isTaxIncluded(v.item)))
+                      ? DEALS_PRICE_PROMISE
+                      : null
                 }
               />
               {s.id === promiseSections.pizza && <PizzaPromise />}
