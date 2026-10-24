@@ -132,6 +132,15 @@ export const menuImportItemSchema = z.object({
    * and never makes it when it has none); true = switched back on. Absent = as it is.
    */
   onSale: z.boolean().optional(),
+  /**
+   * The file's own words and place win (version 7): `name` renames the till's item (found by its name or an alias) to
+   * the file's name, `description` replaces a description the till already has, `sortOrder` sets its place in its
+   * category. Absent = the till keeps its own (a description it has none of is still filled in).
+   */
+  fileWins: z
+    .object({ name: z.boolean().optional(), description: z.boolean().optional(), sortOrder: z.boolean().optional() })
+    .strict()
+    .optional(),
 });
 
 /**
@@ -140,7 +149,7 @@ export const menuImportItemSchema = z.object({
  * a file in a newer format is never downloaded by a till that would refuse it
  * ("update the till"). Raise it together with the union (a test pins them).
  */
-export const MAX_MENU_FILE_VERSION = 6;
+export const MAX_MENU_FILE_VERSION = 7;
 
 export const menuImportFileSchema = z
   .object({
@@ -164,8 +173,11 @@ export const menuImportFileSchema = z
      * without the owner's OK (POS 0.7.53; the owner, 24 Oct 2026: "i am the
      * owner … do it from here"): a POS before that would ignore both and
      * hold the file — so it waits for its update.
+     * 7 = an item may say its name, description or place win (`fileWins`;
+     * POS 0.7.55; the owner's spelling fixes and the printed menu's order,
+     * 24 Oct 2026): a POS before that would keep the old words and order.
      */
-    version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)]),
+    version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7)]),
     source: z.string().max(300).nullable().default(null),
     /**
      * The tax every item in the file is charged (added on top of the price —

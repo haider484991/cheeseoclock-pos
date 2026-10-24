@@ -177,18 +177,18 @@ live('where the till stands decides', () => {
 
   it('a file newer than this till reads: never downloaded, "update the till", said once', async () => {
     const c = setup();
-    c.website.upload(madeUpMenu('v7', { version: 7 }));
+    c.website.upload(madeUpMenu('v8', { version: 8 }));
     for (let i = 0; i < 3; i++) {
       const v = await c.till.service.checkNow();
       expect(v.phase).toBe('too_old');
-      expect(v.message).toContain('format 7; this till reads up to 6');
+      expect(v.message).toContain('format 8; this till reads up to 7');
       expect(v.message).toContain('Update the till');
       tick(c, 3 * MIN);
     }
     expect(c.website.claims()).toHaveLength(0);
     expect(c.website.callsTo(/\/content$/)).toHaveLength(0);
     expect(c.website.reports('too_old')).toHaveLength(1);
-    expect(c.website.reports('too_old')[0]!.body).toMatchObject({ formatVersion: 7, maxFormatVersion: 6 });
+    expect(c.website.reports('too_old')[0]!.body).toMatchObject({ formatVersion: 8, maxFormatVersion: 7 });
     expect(c.till.emits.map((e) => e.notice?.kind).filter(Boolean)).toEqual(['problem']);
   });
 
@@ -668,6 +668,29 @@ live('after a restore, a reset website, a slow backup, a file that cuts prices (
     // The hours are the file's; on/off and the name question stay the till's.
     expect(readShopSetting(c.till.db, 'deals.buy1Get1').value).toMatchObject({ on: true, opensMinute: 720, closesMinute: 1140, asksSocial: true });
     // The website hears the new menu (and its settings block) once more.
+    expect(c.till.steps).toEqual(['backup', 'publish', 'backup', 'publish']);
+  });
+
+  it('version 7 (POS 0.7.55), by itself: the file renames an item, replaces its description and sets its place — no tap', async () => {
+    const c = setup();
+    c.website.upload(madeUpMenu('one'));
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    const row = (id: string) =>
+      c.till.db.prepare(`SELECT name, description, sort_order AS place FROM menu_items WHERE id = ?`).get(id) as { name: string; description: string | null; place: number };
+    const lemonade = (c.till.db.prepare(`SELECT id FROM menu_items WHERE name = 'Test Lemonade' AND deleted_at IS NULL`).get() as { id: string }).id;
+    c.till.db.prepare(`UPDATE menu_items SET description = 'Test lemon+ mint' WHERE id = ?`).run(lemonade);
+    // The owner's spelling and the printed menu's order, from the costing PC (24 Oct 2026).
+    const items = (madeUpMenu('v7')['items'] as Array<Record<string, unknown>>).map((i) =>
+      i['name'] === 'Test Lemonade'
+        ? { ...i, name: 'Test Lemonade Fresh', aliases: ['Test Lemonade'], description: 'Test lemon + mint', sortOrder: 7, fileWins: { name: true, description: true, sortOrder: true } }
+        : i,
+    );
+    const p = c.website.upload(madeUpMenu('v7', { version: 7, items }));
+    tick(c, 3 * MIN);
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    expect(c.website.byId(p.id)).toMatchObject({ state: 'applied', appliedBy: 'till-1' });
+    expect(row(lemonade)).toEqual({ name: 'Test Lemonade Fresh', description: 'Test lemon + mint', place: 7 });
+    expect(menuRows(c.till.db).items).toBe(2);
     expect(c.till.steps).toEqual(['backup', 'publish', 'backup', 'publish']);
   });
 

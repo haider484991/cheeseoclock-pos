@@ -640,7 +640,7 @@ describe('menuImportFileSchema', () => {
     expect(orderOf(last, 'dips')).toBe(6);
   });
 
-  it('reads versions 1 to 6 only (4: the Buy 1 Get 1 deals, v0.7.39; 5: prices that include their tax, v0.7.52; 6: items off the menu and the Buy 1 Get 1 hours, v0.7.53)', () => {
+  it('reads versions 1 to 7 only (4: the Buy 1 Get 1 deals, v0.7.39; 5: prices that include their tax, v0.7.52; 6: items off the menu and the Buy 1 Get 1 hours, v0.7.53; 7: the file’s name, description and place win, v0.7.55)', () => {
     const file = (version: number) =>
       menuImportFileSchema.safeParse({ format: 'cheeseoclock-menu-import', version, categories: [], ingredients: [], items: [] });
     expect(file(1).success).toBe(true);
@@ -649,7 +649,48 @@ describe('menuImportFileSchema', () => {
     expect(file(4).success).toBe(true);
     expect(file(5).success).toBe(true);
     expect(file(6).success).toBe(true);
-    expect(file(7).success).toBe(false);
+    expect(file(7).success).toBe(true);
+    expect(file(8).success).toBe(false);
+  });
+
+  it('version 7: the file renames an item it finds by an alias, replaces its description and sets its place — only where it says so', () => {
+    const v7 = (items: unknown[]) =>
+      menuImportFileSchema.parse({ format: 'cheeseoclock-menu-import', version: 7, categories: [{ name: 'Pizza' }], ingredients: [], items });
+    const deal = (extra: Record<string, unknown>) => ({
+      name: 'Test Crispy Deal',
+      aliases: ['Test Cripsy Deal'],
+      category: 'Pizza',
+      priceCents: 170000,
+      description: 'Test burger + fries + 345 ml drink',
+      sortOrder: 8,
+      ...extra,
+    });
+    const till = shop({ items: [item('cd', 'Test Cripsy Deal', { description: 'Test burger+ fries+ 345ml drink', sortOrder: 0 })] });
+    const all = planMenuImport(v7([deal({ fileWins: { name: true, description: true, sortOrder: true } })]), till);
+    expect(all.preview.items[0]).toMatchObject({
+      action: 'update',
+      existingName: 'Test Cripsy Deal',
+      changes: ['renamed “Test Cripsy Deal” → “Test Crispy Deal”', 'description replaced', 'place in its category 0 → 8'],
+    });
+    expect(all.ops.items[0]?.update).toEqual({ name: 'Test Crispy Deal', description: 'Test burger + fries + 345 ml drink', sortOrder: 8 });
+    // Only what it says wins.
+    expect(planMenuImport(v7([deal({ fileWins: { sortOrder: true } })]), till).ops.items[0]?.update).toEqual({ sortOrder: 8 });
+    // Without it: the till keeps its name, its description and its place (as before version 7).
+    const none = planMenuImport(v7([deal({})]), till);
+    expect(none.preview.items[0]).toMatchObject({ action: 'same', changes: [] });
+    expect(none.ops.items).toEqual([]);
+    // Never two items of one name: when the till has one called what the file says, the file finds that one, and the
+    // item its alias names keeps its own name.
+    const taken = planMenuImport(
+      v7([deal({ fileWins: { name: true } })]),
+      shop({ items: [item('cd', 'Test Cripsy Deal'), item('other', 'Test Crispy Deal', { isActive: false })] }),
+    );
+    expect(taken.ops.items.find((o) => o.existingId === 'cd')?.update?.name).toBeUndefined();
+    expect(taken.ops.items.find((o) => o.existingId === 'other')?.update?.name).toBeUndefined();
+    // An empty description in the file never wipes the till's.
+    expect(planMenuImport(v7([deal({ description: null, fileWins: { description: true } })]), till).ops.items).toEqual([]);
+    // A field it does not know is refused with the file.
+    expect(() => v7([deal({ fileWins: { price: true } })])).toThrow();
   });
 
   it('version 6: an item the file takes off the menu is switched off (never deleted), and never made when the till has none', () => {

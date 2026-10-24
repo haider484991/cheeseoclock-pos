@@ -94,6 +94,8 @@ export interface MenuSnapshot {
     taxCategoryId: string;
     /** Its price includes the tax (0057); absent / false = added on top. */
     priceIncludesTax?: boolean;
+    /** Its place in its category; absent = not known (a snapshot made without it). */
+    sortOrder?: number;
   }>;
   ingredients: Array<{
     id: string;
@@ -208,7 +210,15 @@ export interface MenuImportOps {
      * useImportTax: move the item onto the import's tax category (see taxCategoryId / createTaxCategory).
      * priceIncludesTax: the file's mark where it differs from the till's (0057) — a tax change.
      */
-    update: { basePriceCents?: number; description?: string; useImportTax?: true; priceIncludesTax?: boolean; isActive?: boolean } | null;
+    update: {
+      basePriceCents?: number;
+      description?: string;
+      useImportTax?: true;
+      priceIncludesTax?: boolean;
+      isActive?: boolean;
+      name?: string;
+      sortOrder?: number;
+    } | null;
     /** Choice groups to attach (in addition to those already attached). */
     attach: GroupRef[];
     /** Replace the item's recipe with these lines; null = leave the recipe alone. */
@@ -1221,6 +1231,26 @@ export function planMenuImport(
     if (!row.description?.trim() && item.description?.trim()) {
       changes.push('description added');
       update.description = item.description;
+    }
+    // The file's own words and place (version 7, `fileWins`): the owner's spelling and the printed menu's order, sent
+    // from the costing PC. Never a name another item already has (the next file could not tell them apart).
+    const wins = item.fileWins;
+    if (wins?.name && item.name !== row.name) {
+      const taken = live.items.some((it) => it.id !== row.id && normalizeName(it.name) === normalizeName(item.name));
+      if (taken) {
+        kept.push(`the name “${row.name}” (another item is already called “${item.name}”)`);
+      } else {
+        changes.push(`renamed “${row.name}” → “${item.name}”`);
+        update.name = item.name;
+      }
+    }
+    if (wins?.description && row.description?.trim() && item.description?.trim() && item.description !== row.description) {
+      changes.push('description replaced');
+      update.description = item.description;
+    }
+    if (wins?.sortOrder && row.sortOrder !== undefined && row.sortOrder !== item.sortOrder) {
+      changes.push(`place in its category ${row.sortOrder} → ${item.sortOrder}`);
+      update.sortOrder = item.sortOrder;
     }
     if (file.tax && row.taxCategoryId !== taxCategory?.id) {
       const was = taxRateById.get(row.taxCategoryId);
