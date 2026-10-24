@@ -30,11 +30,11 @@ export function goldenMenuDealsMarked(): PublishedMenu {
   };
 }
 
-/** /menu while pick-up is on: the chip (once; its plainer look since 20 Oct 2026, the cleaner menu). */
+/** /menu while pick-up is on: the chip (once; its plainer look since 20 Oct 2026, the cleaner menu; in the sticky line over the pills since 24 Oct). */
 const MENU_OPEN: readonly Swap[] = [
   [
-    '<li class="rounded-full bg-cheese px-3 py-1 text-ink">10% off when you order online &amp; pick up</li>',
-    '<li class="rounded-full bg-cheese px-3 py-1 text-ink">10% off online pick-up · not on value deals</li>',
+    '<li class="rounded-full bg-cheese px-2.5 py-0.5 text-ink">10% off when you order online &amp; pick up</li>',
+    '<li class="rounded-full bg-cheese px-2.5 py-0.5 text-ink">10% off online pick-up · not on value deals</li>',
     1,
   ],
 ];
@@ -49,10 +49,15 @@ function apply(html: string, swaps: readonly Swap[], where: string): string {
   return out;
 }
 
-/** The routes whose HTML marked value deals change. */
-export const DEALS_MARKED_ROUTES: readonly string[] = ['/menu (open)'];
+/**
+ * The routes whose HTML marked value deals change: /menu open; and /menu closed where a stored block carries the
+ * owner's pick-up offer (state c), whose sticky line shows it while the till is not taking orders (24 Oct 2026).
+ */
+export function dealsMarkedRoutes(state: 'b' | 'c'): readonly string[] {
+  return state === 'c' ? ['/menu (open)', '/menu (closed)'] : ['/menu (open)'];
+}
 
 /** A golden page's HTML as served with the value deals marked (unchanged for every other route). */
-export function htmlWithDealsMarked(route: string, html: string): string {
-  return route === '/menu (open)' ? apply(html, MENU_OPEN, route) : html;
+export function htmlWithDealsMarked(route: string, html: string, routes: readonly string[]): string {
+  return routes.includes(route) ? apply(html, MENU_OPEN, route) : html;
 }

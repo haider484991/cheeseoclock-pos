@@ -127,8 +127,8 @@ describe('/menu as served', () => {
   });
 
   it('the pick-up chip says value deals are left out only while the menu marks one (v0.7.34); with pick-up off, no chip as before', () => {
-    // The header's first gold chip (20 Oct 2026: the money off has a list of its own).
-    const chip = (html: string) => /<ul aria-label="Money off online"[^>]*><li class="rounded-full bg-cheese px-3 py-1 text-ink">([^<]*)<\/li>/.exec(html)?.[1];
+    // The money-off line's first gold chip (24 Oct 2026: the sticky line over the category pills).
+    const chip = (html: string) => /<ul aria-label="Money off online"[^>]*><li class="rounded-full bg-cheese px-2.5 py-0.5 text-ink">([^<]*)<\/li>/.exec(html)?.[1];
     expect(chip(app({ acceptingOrders: true, pickupAvailable: true }))).toBe('10% off when you order online &amp; pick up');
     expect(chip(app({ acceptingOrders: true, pickupAvailable: true, menu: DEALS_MENU }))).toBe('10% off online pick-up · not on value deals');
     expect(chip(app({ acceptingOrders: true, pickupAvailable: true, menu: DEALS_MENU, pickupDiscountPercent: 15 }))).toBe(
@@ -187,18 +187,41 @@ describe('the cleaner menu (20 Oct 2026: "too much information" in the header)',
   };
   const ALLERGY = DEFAULT_SHOP_FACTS.website.allergyNotice;
 
-  it('the header: the title, one line of facts, the money off as chips — no tagline, no "Order online" line, no allergy words', () => {
-    const top = header(open({ deliveryDiscountPercent: 10 }));
+  it('the header: the title and one line of facts — no money off (the sticky line has it), no tagline, no "Order online" line, no allergy words', () => {
+    const html = open({ deliveryDiscountPercent: 10 });
+    const top = header(html);
     expect(top).toContain('The Menu</h1>');
     expect(top).toMatch(/<ul aria-label="Hours and payment"[^]*1 pm – 1 am[^]*Cash on delivery/);
     // No delivery fee or area list in the header (user, 24 Oct 2026: "taking space"): the cart bar and the checkout
     // say the fee for the area chosen or found.
     expect(top).not.toContain('Delivery Rs 200–250');
-    expect(top).toContain('>10% off every online order</li>');
+    // The money off is the thin line over the category pills (24 Oct 2026: "advertised on website top some how sticky
+    // but not taking space"), not the header.
+    expect(top).not.toContain('Money off online');
+    expect(html.slice(html.indexOf('aria-label="Menu sections"'))).toMatch(/^[^]*?<ul aria-label="Money off online"[^>]*><li[^>]*>10% off every online order<\/li>/);
     expect(DEFAULT_SHOP_FACTS.profile.tagline).not.toBe('');
     expect(top).not.toContain(DEFAULT_SHOP_FACTS.profile.tagline);
     expect(top).not.toContain('Order online · ');
     expect(top).not.toContain(ALLERGY);
+  });
+
+  it('closed: the sticky line still shows the money off the owner saved, a category’s own % first; no saved offer, no line', () => {
+    /** The line's chips, in order. */
+    const chips = (html: string) => {
+      const list = /<ul aria-label="Money off online"[^>]*>([^]*?)<\/ul>/.exec(html)?.[1] ?? '';
+      return [...list.matchAll(/<li[^>]*>([^<]*)<\/li>/g)].map((m) => m[1]);
+    };
+    const saved = { pickup: true, percent: 10, alsoDelivery: true, categoryPercents: [{ categoryId: 'c-pizza', percent: 20 }] };
+    const closed = app({ menu: SHOP_MENU, advertisedOffer: saved });
+    // (The till's "Pizza" is the menu's "Regular Pizzas", sectionTitle.)
+    expect(chips(closed)).toEqual(['20% off Regular Pizzas online', '10% off the rest online']);
+    // Said on a wider screen only (a phone's line stays short).
+    expect(closed).toContain('<span class="hidden text-cream/70 sm:inline">· when online ordering opens</span>');
+    // Taking orders: the line is what the till bills now, without the "when" words.
+    const live = app({ menu: SHOP_MENU, acceptingOrders: true, pickupAvailable: true, deliveryDiscountPercent: 10, advertisedOffer: saved });
+    expect(chips(live)).toEqual(['10% off every online order']);
+    expect(live).not.toContain('when online ordering opens');
+    expect(app({ menu: SHOP_MENU })).not.toContain('Money off online');
   });
 
   it('the allergy words close the menu, once, after the last section (each item’s sheet and the checkout say them too)', () => {
@@ -365,7 +388,9 @@ describe('the cart’s totals: a value deal takes no share of the pick-up % (v0.
     expect(src).toMatch(
       /minDeliveryOrderCents: deliveryFacts\.minDeliveryOrderCents,\n\s+notOnDeals,\n\s+dealInCart,\n\s+onlyDeals,\n\s+buy1Get1InCart,\n\s+buy1Get1Open,\n\s+\};/,
     );
-    expect(src).toMatch(/<MenuHeader\n\s+canPickup=\{canPickup\}\n\s+pickupPct=\{pickupPct\}\n\s+deliveryPct=\{deliveryPct\}\n\s+notOnDeals=\{notOnDeals\}/);
+    // 24 Oct 2026: the money off is the sticky line's, with the same flags while the till takes orders.
+    expect(src).toContain('return moneyOffChips({ canPickup, pickupPct, deliveryPct, notOnDeals, own: ownPercentChips(pickupCats, deliveryCats, canPickup, categoryNames) });');
+    expect(src).toContain('<CategoryRail sections={railSections} offerChips={offerChips} offersAreLive={open || !advertisedOffer} />');
   });
 });
 

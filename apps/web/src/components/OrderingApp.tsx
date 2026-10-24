@@ -158,7 +158,13 @@ export function OrderingApp({
   deliveryFacts,
   closedNotice = null,
   shop = DEFAULT_SHOP_FACTS,
+  advertisedOffer = null,
 }: {
+  /**
+   * The website's money off as the owner saved it on the till (the settings block's pick-up offer), shown while the
+   * till is not taking orders (24 Oct 2026); null = none saved: the bar shows what the till bills, as before.
+   */
+  advertisedOffer?: AdvertisedOffer | null;
   menu: PublicMenu;
   acceptingOrders: boolean;
   /** The till can take pickup orders right now (lib/store-status). */
@@ -620,6 +626,25 @@ export function OrderingApp({
     setCheckoutOpen(true);
   }
 
+  // The money off online for the sticky bar (24 Oct 2026, the user: "the percent off should be advertised on website
+  // top some how sticky but not taking space"). While the till takes orders: what it bills now (the status poll).
+  // While it does not (closed, before opening): the offer the owner saved, from the settings block this menu came
+  // with — so a customer planning lunch still sees 20% off regular pizzas, as the home page says.
+  const offerChips = useMemo(() => {
+    const ad = advertisedOffer;
+    if (open || !ad) {
+      return moneyOffChips({ canPickup, pickupPct, deliveryPct, notOnDeals, own: ownPercentChips(pickupCats, deliveryCats, canPickup, categoryNames) });
+    }
+    const adDelivery = ad.alsoDelivery ? ad.percent : 0;
+    return moneyOffChips({
+      canPickup: ad.pickup,
+      pickupPct: ad.percent,
+      deliveryPct: adDelivery,
+      notOnDeals,
+      own: ownPercentChips(ad.pickup ? ad.categoryPercents : NO_CATEGORY_PERCENTS, ad.alsoDelivery ? ad.categoryPercents : NO_CATEGORY_PERCENTS, ad.pickup, categoryNames),
+    });
+  }, [open, advertisedOffer, canPickup, pickupPct, deliveryPct, notOnDeals, pickupCats, deliveryCats, categoryNames]);
+
   const cartProps: CartProps = {
     cart,
     subtotal,
@@ -652,17 +677,12 @@ export function OrderingApp({
     <ShopFactsContext.Provider value={shop}>
     <div className="pb-28 lg:pb-12">
       <MenuHeader
-        canPickup={canPickup}
-        pickupPct={pickupPct}
-        deliveryPct={deliveryPct}
-        notOnDeals={notOnDeals}
         hoursChip={copyText(MENU_HEADER_HOURS, { ...deliveryFacts, shop })}
         announcement={deliveryFacts.announcement}
         offerPrices={offerPrices}
         offerWhere={copyText(MENU_OFFER_WHERE, { ...deliveryFacts, shop })}
         offerDealsAnchor={buy1Get1Anchor}
         offerWindow={dealRules.on ? dealWindow : null}
-        ownPercentChips={ownPercentChips(pickupCats, deliveryCats, canPickup, categoryNames)}
         valueDealsAnchor={valueDealsAnchor}
       />
 
@@ -678,7 +698,7 @@ export function OrderingApp({
         />
       )}
 
-      <CategoryRail sections={railSections} />
+      <CategoryRail sections={railSections} offerChips={offerChips} offersAreLive={open || !advertisedOffer} />
 
       <div className="mx-auto max-w-6xl px-4 lg:grid lg:grid-cols-[1fr_22rem] lg:gap-8">
         <div>
@@ -903,8 +923,19 @@ function sectionNote(sectionName: string, dealWindow: string): string | null {
 /** No category with its own % (v0.7.50): one shared value, so the memos see no change. */
 const NO_CATEGORY_PERCENTS: WebsiteCategoryPercent[] = [];
 
+/** The settings block's pick-up offer, as the /menu page hands it over (app/menu/page.tsx). */
+export interface AdvertisedOffer {
+  /** Customers may choose pick-up online. */
+  pickup: boolean;
+  /** The % off online (pick-up, and delivery's food when `alsoDelivery`). */
+  percent: number;
+  alsoDelivery: boolean;
+  /** Categories with their own % instead (Regular Pizzas 20%). */
+  categoryPercents: WebsiteCategoryPercent[];
+}
+
 /**
- * The header's chips for the categories with their own % (v0.7.50): "20% off Pizza online" when pick-up and
+ * The money-off line's chips for the categories with their own % (v0.7.50): "20% off Pizza online" when pick-up and
  * delivery agree, else "20% off Pizza with pick-up" / "on delivery". A category no longer on the menu: no chip.
  */
 export function ownPercentChips(
@@ -931,34 +962,59 @@ export function ownPercentChips(
 }
 
 /**
+ * The money off online in words, one chip each (the header's chips until 24 Oct 2026, now the sticky bar's line): the
+ * categories with their own % first (ownPercentChips: "20% off Regular Pizzas online", which they take INSTEAD of the
+ * rest's), then the rest's: the same % off pick-up and delivery is one chip; with value deals marked, the shorter words
+ * that say they are left out.
+ */
+export function moneyOffChips(o: {
+  canPickup: boolean;
+  pickupPct: number;
+  deliveryPct: number;
+  notOnDeals: boolean;
+  own: readonly string[];
+}): string[] {
+  // A category's own % leads (24 Oct 2026: "20% off regular pizzas" is the line's news, and a phone shows the start
+  // of the line first); the rest's % then says it is for the rest.
+  const chips: string[] = [...o.own];
+  const rest = o.own.length > 0;
+  // The same % off a delivery's food as off a pick-up (v0.7.37): one chip for every online order.
+  if (o.deliveryPct > 0 && (!o.canPickup || o.deliveryPct === o.pickupPct)) {
+    chips.push(
+      rest
+        ? `${o.deliveryPct}% off the rest online${o.notOnDeals ? ` · ${NOT_ON_VALUE_DEALS}` : ''}`
+        : o.notOnDeals
+          ? `${o.deliveryPct}% off online orders · ${NOT_ON_VALUE_DEALS}`
+          : `${o.deliveryPct}% off every online order`,
+    );
+  } else {
+    // With value deals marked: shorter words, so the chip stays one line on a 375 px phone.
+    if (o.canPickup && o.pickupPct > 0) {
+      chips.push(o.notOnDeals ? `${o.pickupPct}% off online pick-up · ${NOT_ON_VALUE_DEALS}` : `${o.pickupPct}% off when you order online & pick up`);
+    }
+    if (o.deliveryPct > 0) chips.push(`${o.deliveryPct}% off online delivery food${o.notOnDeals ? ` · ${NOT_ON_VALUE_DEALS}` : ''}`);
+  }
+  return chips;
+}
+
+/**
  * The menu's header, kept short so the food starts on the first screen of a phone (20 Oct 2026: "too much
  * information" in it): the title, one line of facts (hours, cash on delivery, where we deliver and what it costs),
- * the money off as gold chips, and Buy 1 Get 1 as one line that jumps to its deals. The offer's rules sit with the
+ * and Buy 1 Get 1 as one line that jumps to its deals (the money off is the sticky line over the pills, 24 Oct 2026). The offer's rules sit with the
  * deals, and the allergy words close the menu (each item's sheet and the checkout say them too); the shop's tagline
  * stays on the home page and in the footer.
  */
 function MenuHeader({
-  canPickup,
-  pickupPct,
-  deliveryPct = 0,
-  notOnDeals,
   hoursChip,
   announcement,
   offerPrices,
   offerWhere,
   offerDealsAnchor = null,
   offerWindow,
-  ownPercentChips = [],
   valueDealsAnchor = null,
 }: {
   /** The value deals' section (the wide screen's pizza photo links down to it); null = no photo. */
   valueDealsAnchor?: string | null;
-  canPickup: boolean;
-  pickupPct: number;
-  /** The % off a delivery's food (v0.7.37); 0 = none. */
-  deliveryPct?: number;
-  /** The menu marks value deals (lib/menu-view menuHasNoDiscountItems): the % chip says they are left out. */
-  notOnDeals: boolean;
   /** The hours (page-copy MENU_HEADER_HOURS): with the days unless the shop opens every day. */
   hoursChip: string;
   /** The owner's announcement while it is on (plain text, never markup), else null: nothing shows. */
@@ -971,20 +1027,7 @@ function MenuHeader({
   offerDealsAnchor?: string | null;
   /** The offer's hours in words (the owner's rules); null = the owner switched it off: no line. */
   offerWindow: string | null;
-  /** v0.7.50: one chip per category with its own % ("20% off Pizza online"). */
-  ownPercentChips?: string[];
 }) {
-  const chip = 'rounded-full bg-cheese px-3 py-1 text-ink';
-  const chips: string[] = [];
-  // The same % off a delivery's food as off a pick-up (v0.7.37): one chip for every online order.
-  if (deliveryPct > 0 && (!canPickup || deliveryPct === pickupPct)) {
-    chips.push(notOnDeals ? `${deliveryPct}% off online orders · ${NOT_ON_VALUE_DEALS}` : `${deliveryPct}% off every online order`);
-  } else {
-    // With value deals marked: shorter words, so the chip stays one line on a 375 px phone.
-    if (canPickup) chips.push(notOnDeals ? `${pickupPct}% off online pick-up · ${NOT_ON_VALUE_DEALS}` : `${pickupPct}% off when you order online & pick up`);
-    if (deliveryPct > 0) chips.push(`${deliveryPct}% off online delivery food${notOnDeals ? ` · ${NOT_ON_VALUE_DEALS}` : ''}`);
-  }
-  chips.push(...ownPercentChips);
   return (
     <div className="bg-ink text-cream">
       {/* 24 Oct 2026 (the user: "nothing is showing any conversion attractiveness and value deals need to scroll"): a
@@ -1014,18 +1057,10 @@ function MenuHeader({
               <span>{announcement}</span>
             </p>
           )}
-          {(chips.length > 0 || (offerWindow !== null && offerDealsAnchor)) && (
+          {/* The money off online sits in the sticky bar under the header (24 Oct 2026: "advertised … sticky but not
+              taking space"); here, Buy 1 Get 1 as one chip that jumps to its deals (its rules sit with them). */}
+          {offerWindow !== null && offerDealsAnchor && (
             <div className="mt-3 flex flex-wrap items-center gap-2 font-cond text-sm font-bold uppercase tracking-wide">
-              {chips.length > 0 && (
-                <ul aria-label="Money off online" className="contents">
-                  {chips.map((words) => (
-                    <li key={words} className={chip}>
-                      {words}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {/* Buy 1 Get 1 as one chip that jumps to its deals (its rules sit with them). */}
               {offerWindow !== null && offerDealsAnchor && (
                 <a
                   href={`#${offerDealsAnchor}`}
@@ -1171,7 +1206,17 @@ function ReturningBanner({
  * Sticky category pills with scroll-spy: the pill for the section under the
  * reader lights up, and a tap scrolls to that section.
  */
-function CategoryRail({ sections }: { sections: Array<{ anchor: string; name: string }> }) {
+function CategoryRail({
+  sections,
+  offerChips = [],
+  offersAreLive = true,
+}: {
+  sections: Array<{ anchor: string; name: string }>;
+  /** The money off online (moneyOffChips), one thin line over the pills — sticky with them; none = no line. */
+  offerChips?: readonly string[];
+  /** The till bills them now; false = the owner's saved offer while the kitchen is not taking orders. */
+  offersAreLive?: boolean;
+}) {
   const [active, setActive] = useState(sections[0]?.anchor ?? '');
   const railRef = useRef<HTMLDivElement>(null);
 
@@ -1209,7 +1254,23 @@ function CategoryRail({ sections }: { sections: Array<{ anchor: string; name: st
       aria-label="Menu sections"
       className="sticky top-16 z-30 border-b border-ink/10 bg-paper/95 backdrop-blur-md sm:top-[4.5rem]"
     >
-      <div ref={railRef} className="scrollbar-hide mx-auto flex max-w-6xl gap-2 overflow-x-auto px-4 py-3">
+      {/* The money off online, one thin line that stays on screen with the pills (24 Oct 2026). */}
+      {offerChips.length > 0 && (
+        <div className="bg-ink text-cheese">
+          <div className="scrollbar-hide mx-auto flex max-w-6xl items-center gap-2 overflow-x-auto whitespace-nowrap px-4 py-1.5 font-cond text-xs font-extrabold uppercase tracking-wide">
+            <span aria-hidden>%</span>
+            <ul aria-label="Money off online" className="flex items-center gap-2">
+              {offerChips.map((words) => (
+                <li key={words} className="rounded-full bg-cheese px-2.5 py-0.5 text-ink">
+                  {words}
+                </li>
+              ))}
+            </ul>
+            {!offersAreLive && <span className="hidden text-cream/70 sm:inline">· when online ordering opens</span>}
+          </div>
+        </div>
+      )}
+      <div ref={railRef} className="scrollbar-hide mx-auto flex max-w-6xl gap-2 overflow-x-auto px-4 py-2.5">
         {sections.map((s) => (
           <a
             key={s.anchor}

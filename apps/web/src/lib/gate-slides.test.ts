@@ -126,8 +126,10 @@ describe('every slide shows its own deal’s picture, and the picture is there',
   });
 
   it('the deals sold before 24 Oct show their two pizzas, not one', () => {
+    // Since 24 Oct the menu's deal cards have their own two-pizza pictures for these too (lib/menu-view DEAL_PHOTOS),
+    // so the slide shows the same picture as the card.
     for (const [name, file] of [['Big Two', 'big-two'], ['Family Feast', 'family-feast'], ['Perfect Pair', 'perfect-pair']] as const) {
-      expect(gatePhotoFor(name), name).toBe(`/images/gate/deals/${file}.webp`);
+      expect(gatePhotoFor(name), name).toBe(`/images/deals/sm/${file}.webp`);
     }
     expect(gatePhotoFor('Midnight Feast')).toBe(FALLBACK_PHOTO);
   });

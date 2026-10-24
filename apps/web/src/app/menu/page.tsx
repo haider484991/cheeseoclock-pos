@@ -82,6 +82,17 @@ export default async function MenuPage() {
   // The shop's details from the row this page read (sweep B2 + B4) — never the shop block's stamps
   // or device id; with no menu, the pages' own read (today's details with none stored).
   const shop = menu ? shopFactsFromBlock(parseStoredShop(menu.shop ?? null)) : await getShopFacts();
+  // The website's money off as the owner saved it (the block's pick-up offer): the menu's sticky line shows it while
+  // the till is not taking orders (24 Oct 2026). Only the %s and their categories go to the browser.
+  const advertisedOffer =
+    block && block.pickup.percent > 0
+      ? {
+          pickup: block.pickup.offered,
+          percent: block.pickup.percent,
+          alsoDelivery: block.pickup.alsoDelivery === true,
+          categoryPercents: (block.pickup.categoryPercents ?? []).map((c) => ({ categoryId: c.categoryId, percent: c.percent })),
+        }
+      : null;
 
   return (
     <>
@@ -99,6 +110,7 @@ export default async function MenuPage() {
             deliveryFacts={deliveryFacts}
             closedNotice={closedNotice}
             shop={shop}
+            advertisedOffer={advertisedOffer}
           />
         ) : (
           <div className="mx-auto max-w-md px-4 py-24 text-center">

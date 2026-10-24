@@ -37,7 +37,7 @@ import type { PublicMenu } from './public-menu';
 import { withFooterCredit } from './__fixtures__/footer-credit';
 import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
 import { goldenMenu } from './__fixtures__/golden-menu';
-import { DEALS_MARKED_ROUTES, MARKED_DEALS, goldenMenuDealsMarked, htmlWithDealsMarked } from './__fixtures__/no-discount';
+import { MARKED_DEALS, dealsMarkedRoutes, goldenMenuDealsMarked, htmlWithDealsMarked } from './__fixtures__/no-discount';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
 
 const db = vi.hoisted(() => ({
@@ -312,6 +312,7 @@ describe('the value deals marked: every page as v0.7.30 but the /menu chip', () 
 
   for (const state of ['b', 'c'] as const) {
     it(`(${state}) every page’s HTML is the golden, but '/menu (open)' by exactly the chip`, () => {
+      const marked = dealsMarkedRoutes(state);
       expect(Object.keys(now.pages[state]!)).toEqual(Object.keys(golden.pages[state]!));
       for (const [route, key] of Object.entries(golden.pages[state]!)) {
         // The golden as served today: plus the footer's ordering-system credit (2026-10-13), and the home
@@ -319,14 +320,18 @@ describe('the value deals marked: every page as v0.7.30 but the /menu chip', () 
         const credited = withFooterCredit(golden.html[key]!);
         const hero = heroDealsHtml(goldenMenuDealsMarked(), state === 'c' ? { pickup: defaultBlock(goldenMenuDealsMarked()).pickup } : {});
         const was = route === '/' ? withHeroDeals(credited, hero) : credited;
-        expect(now.pages[state]![route], `${state} ${route}`).toBe(htmlWithDealsMarked(route, was));
-        expect(now.pages[state]![route] === was, `${state} ${route} unchanged`).toBe(!DEALS_MARKED_ROUTES.includes(route));
+        expect(now.pages[state]![route], `${state} ${route}`).toBe(htmlWithDealsMarked(route, was, marked));
+        expect(now.pages[state]![route] === was, `${state} ${route} unchanged`).toBe(!marked.includes(route));
       }
-      // The chip in its new words, once; the old words nowhere. Closed (no pick-up offered): no chip at all, as before.
-      const open = now.pages[state]!['/menu (open)']!;
-      expect(open.split('10% off online pick-up · not on value deals</li>').length - 1).toBe(1);
-      expect(open).not.toContain('when you order online');
-      expect(now.pages[state]!['/menu (closed)']).not.toContain('% off');
+      // The chip in its new words, once; the old words nowhere. Closed: the owner's saved pick-up offer in the same
+      // words where a block carries one (c, 24 Oct 2026: the sticky line); with none (b), no chip at all, as before.
+      const pages = state === 'c' ? ['/menu (open)', '/menu (closed)'] : ['/menu (open)'];
+      for (const route of pages) {
+        const html = now.pages[state]![route]!;
+        expect(html.split('10% off online pick-up · not on value deals</li>').length - 1, route).toBe(1);
+        expect(html, route).not.toContain('when you order online');
+      }
+      if (state === 'b') expect(now.pages[state]!['/menu (closed)']).not.toContain('% off');
     });
 
     it(`(${state}) every page’s title, description, canonical, Open Graph and Twitter blocks, and the root layout’s`, () => {
