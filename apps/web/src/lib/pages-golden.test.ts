@@ -49,6 +49,7 @@ import { MENU_PRICED_ROUTES, htmlWithMenuUnknown } from './__fixtures__/menu-unk
 import { FOOTER_CREDIT, withFooterCredit } from './__fixtures__/footer-credit';
 import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
 import { withDomainVerification } from './__fixtures__/domain-verification';
+import { withAreaListAdditions } from './__fixtures__/area-list';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
 
 const db = vi.hoisted(() => ({
@@ -425,7 +426,7 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
   });
 
   it('the checkout sheet: delivery and pick-up, open and closed', () => {
-    for (const [k, html] of Object.entries(golden.checkout)) expect(now.checkout[k], k).toBe(html);
+    for (const [k, html] of Object.entries(golden.checkout)) expect(now.checkout[k], k).toBe(withAreaListAdditions(html));
     expect(Object.keys(now.checkout)).toEqual(Object.keys(golden.checkout));
   });
 

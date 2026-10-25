@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { AREA_NOT_LISTED } from '@/lib/delivery-facts';
 import { onLocationChoice, openLocationPicker, readLocationChoice, type LocationChoice } from '@/lib/location-choice';
 
 /**
@@ -22,7 +23,8 @@ export function LocationChip({ zones }: { zones: ReadonlyArray<{ id: string; sho
   const label =
     choice?.fulfilment === 'pickup'
       ? 'Pick-up'
-      : (zones.find((z) => z.id === choice?.zoneId)?.shortName ?? (choice ? 'Delivery' : 'Set area'));
+      : (zones.find((z) => z.id === choice?.zoneId)?.shortName ??
+        (choice?.zoneId === AREA_NOT_LISTED ? 'Other area' : choice ? 'Delivery' : 'Set area'));
 
   return (
     <button

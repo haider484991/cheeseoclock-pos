@@ -39,8 +39,11 @@ export const funnel = {
   orderPlaced(fulfilment: 'delivery' | 'pickup', deal: boolean): void {
     send('Order placed', { fulfilment, what: deal ? 'has a deal' : 'no deal' });
   },
-  /** The order went to WhatsApp instead: the kitchen was closed, or the checkout failed and offered it. */
-  whatsappOrder(why: 'closed' | 'problem'): void {
+  /**
+   * The order went to WhatsApp instead: the kitchen was closed, the checkout failed and offered it, or the customer's
+   * area is not on the list (AREA_NOT_LISTED, 26 Oct 2026).
+   */
+  whatsappOrder(why: 'closed' | 'problem' | 'area'): void {
     send('WhatsApp order', { why });
   },
 };

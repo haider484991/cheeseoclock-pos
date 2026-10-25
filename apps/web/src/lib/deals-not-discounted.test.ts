@@ -37,6 +37,7 @@ import type { PublicMenu } from './public-menu';
 import { withFooterCredit } from './__fixtures__/footer-credit';
 import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
 import { withDomainVerification } from './__fixtures__/domain-verification';
+import { withAreaListAdditions } from './__fixtures__/area-list';
 import { goldenMenu } from './__fixtures__/golden-menu';
 import { MARKED_DEALS, dealsMarkedRoutes, goldenMenuDealsMarked, htmlWithDealsMarked } from './__fixtures__/no-discount';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
@@ -88,7 +89,7 @@ const orders = await import('@/app/api/orders/route');
 const orderById = await import('@/app/api/orders/[id]/route');
 const { CheckoutSheet } = await import('@/components/ordering/CheckoutSheet');
 const { CartPanel } = await import('@/components/ordering/cart-ui');
-const { DEFAULT_FACTS, findFactZone, deliveryFeeRange, deliveryOptionNote } = await import('@/lib/delivery-facts');
+const { AREA_NOT_LISTED, DEFAULT_FACTS, findFactZone, deliveryFeeRange, deliveryOptionNote } = await import('@/lib/delivery-facts');
 const { DELIVERY_AREAS } = await import('@/lib/areas');
 const { publicMenu } = await import('@/lib/public-menu');
 const { cartLineKey, cartPricedLines, cartSubtotalCents } = await import('@/lib/cart');
@@ -363,9 +364,27 @@ describe('the checkout with the value deals marked', () => {
       for (const acceptingOrders of [true, false]) {
         const props = { ...base, fulfilment, acceptingOrders, ...(fulfilment === 'pickup' ? { discount: 22_000, deliveryFee: 0 } : {}) };
         const k = `${fulfilment}, ${acceptingOrders ? 'open' : 'closed'}`;
-        expect(sheet(props), k).toBe(golden.checkout[k]);
+        expect(sheet(props), k).toBe(withAreaListAdditions(golden.checkout[k]!));
       }
     }
+  });
+
+  it('"My area isn’t listed" (26 Oct 2026): the sheet sends the order on WhatsApp instead of placing it, open or closed', () => {
+    const cart = [{ ...shawarma(MARKED), label: 'Shawarma Pizza · Large 12"' }];
+    for (const acceptingOrders of [true, false]) {
+      const html = sheet({ ...sheetProps(MARKED, cart, 'delivery', AREA_NOT_LISTED), acceptingOrders });
+      expect(html, String(acceptingOrders)).toContain(`<option value="${AREA_NOT_LISTED}" selected="">My area isn’t listed — order on WhatsApp</option>`);
+      expect(html).toContain('We don’t deliver there yet. Send this order on WhatsApp and we’ll tell you if we can reach you, or choose pick-up above.');
+      expect(html).toContain('>Send this order on WhatsApp</a>');
+      expect(html).not.toContain('Place order');
+      expect(html).toContain('we tell you if we deliver to your area, and the total.');
+      // The message names the gap, so the shop answers it first.
+      expect(decodeURIComponent(html.match(/href="(https:\/\/wa\.me\/[^"]+)"/)![1]!.replace(/&amp;/g, '&'))).toContain(
+        'Delivery to: my area (not on your list), can you deliver?',
+      );
+    }
+    // A listed area still places the order as before.
+    expect(sheet(sheetProps(MARKED, cart, 'delivery', 'dha-6'))).toContain('Place order');
   });
 
   it('Big Two (Rs 3,600) + Shawarma Pizza (Rs 2,200) on pick-up: −Rs 220, and the header and the totals say value deals are left out — nothing else moves', () => {

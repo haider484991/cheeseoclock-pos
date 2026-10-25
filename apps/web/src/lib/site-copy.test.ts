@@ -13,6 +13,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { optionsWithLocalNames } from './__fixtures__/area-list';
 import { FEE_SUMMARY, type PublishedSettings } from '@cheeseoclock/shared-types';
 import golden from './__fixtures__/site-copy-v0.7.26.json';
 import { DELIVERY_AREAS, coveredLandmarks, feeText, getArea, renderArea } from './areas';
@@ -136,7 +137,7 @@ describe('with no settings block the site reads exactly as v0.7.26', () => {
     const options = zoneOptionGroups(DEFAULT_FACTS.zones).flatMap((g) =>
       g.options.map((o) => ({ group: g.group, id: o.id, label: o.label, disabled: o.disabled })),
     );
-    expect(options.map(({ group, id, label }) => ({ group, id, label }))).toEqual(golden.pages.checkoutOptions);
+    expect(options.map(({ group, id, label }) => ({ group, id, label }))).toEqual(optionsWithLocalNames(golden.pages.checkoutOptions));
     expect(options.every((o) => !o.disabled)).toBe(true);
     expect(zoneOptionGroups(DEFAULT_FACTS.zones).map((g) => g.group)).toEqual(['DHA', 'Clifton']);
   });
@@ -332,7 +333,7 @@ describe('a block with other fees', () => {
     const free6 = factsFromBlock(block((zs) => ((zone(zs, 'dha-6').feeCents = 0), (zone(zs, 'dha-6').feeItemId = null))));
     expect(feeText(getArea('dha-phase-6')!, free6)).toBe('Free delivery');
     const labels = zoneOptionGroups(free6.zones).flatMap((g) => g.options.map((o) => o.label));
-    expect(labels).toContain('DHA Phase 6 — free delivery');
+    expect(labels).toContain('DHA Phase 6 (Bukhari, Ittehad, Rahat, Nishat) — free delivery');
     expect(labels.some((l) => /Rs 0\b/.test(l))).toBe(false);
     const allFree = factsFromBlock(block((zs) => zs.forEach((z) => ((z.feeCents = 0), (z.feeItemId = null)))));
     expect(deliveryChip(allFree)).toBe('Free delivery · DHA & Clifton');

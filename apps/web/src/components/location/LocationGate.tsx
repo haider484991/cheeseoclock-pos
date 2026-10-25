@@ -4,7 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import type { WebFulfilment } from '@cheeseoclock/shared-types';
 import { parsePin, type LocationPin } from '@/lib/checkout-extras';
-import { zoneOptionGroups, type FactZone } from '@/lib/delivery-facts';
+import { AREA_NOT_LISTED, zoneOptionGroups, type FactZone } from '@/lib/delivery-facts';
 import { formatCents } from '@/lib/format';
 import type { GateLang, GateSlide, Words } from '@/lib/gate-slides';
 import {
@@ -69,6 +69,12 @@ const T = {
   pickup: { en: 'Pick-up', ur: 'Pick-up' },
   area: { en: 'Your area', ur: 'Aap ka area' },
   choose: { en: 'Choose your area…', ur: 'Apna area chunein…' },
+  elsewhere: { en: 'Somewhere else', ur: 'Koi aur jagah' },
+  notListed: { en: 'My area isn’t listed', ur: 'Mera area list mein nahi' },
+  notListedHelp: {
+    en: 'We don’t deliver there yet. Build your order and send it on WhatsApp: we’ll tell you if we can reach you.',
+    ur: 'Aap ka area abhi list mein nahi. Order bana kar WhatsApp pe bhej dein, hum bata denge ke delivery ho sakti hai ya nahi.',
+  },
   locate: { en: 'Use my current location', ur: 'Meri current location lein' },
   locating: { en: 'Finding you…', ur: 'Location dhoond rahe hain…' },
   confirm: { en: 'Confirm & see deals', ur: 'Confirm karein, deals dekhein' },
@@ -191,7 +197,9 @@ export function LocationGate({
   const far = pin ? kmBetween(pin.pin, shop) : null;
   /** The phone is outside the delivery areas: no green tick, no pin kept, pick-up offered first. */
   const outside = far !== null && far > NEAR_KM;
-  const ready = chosen === 'pickup' || zone !== undefined;
+  /** "My area isn't listed" (lib/delivery-facts AREA_NOT_LISTED): confirmable, and the checkout then offers WhatsApp. */
+  const notListed = chosen === 'delivery' && zoneId === AREA_NOT_LISTED;
+  const ready = chosen === 'pickup' || zone !== undefined || notListed;
 
   function close() {
     dismissForThisVisit();
@@ -250,7 +258,7 @@ export function LocationGate({
     const at = Date.now();
     saveLocationChoice({
       fulfilment: chosen,
-      zoneId: chosen === 'delivery' ? (zone?.id ?? null) : null,
+      zoneId: chosen === 'delivery' ? (notListed ? AREA_NOT_LISTED : (zone?.id ?? null)) : null,
       pin: chosen === 'delivery' && pin && !outside ? pin.pin : null,
       pinAt: chosen === 'delivery' && pin && !outside ? pin.at : null,
       at,
@@ -339,7 +347,7 @@ export function LocationGate({
             </label>
             <select
               id={`${titleId}-area`}
-              value={zone ? zone.id : ''}
+              value={zone ? zone.id : notListed ? AREA_NOT_LISTED : ''}
               onChange={(e) => setZoneId(e.target.value)}
               className="w-full rounded-xl border border-night-edge bg-night px-3 py-3 text-[15px] font-semibold text-cream focus:border-cheese focus:outline-none"
             >
@@ -353,6 +361,9 @@ export function LocationGate({
                   ))}
                 </optgroup>
               ))}
+              <optgroup label={t(T.elsewhere)}>
+                <option value={AREA_NOT_LISTED}>{t(T.notListed)}</option>
+              </optgroup>
             </select>
             <div className="mt-2 flex min-h-[22px] flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[13px]">
               <button type="button" onClick={locate} disabled={locating} className="font-semibold text-cheese underline-offset-2 hover:underline">
@@ -364,7 +375,20 @@ export function LocationGate({
                 </span>
               )}
             </div>
-            {outside ? (
+            {notListed ? (
+              <div role="status" className="mt-2.5 rounded-xl border-2 border-amber-400 bg-amber-400/10 p-3">
+                <p className="text-[12.5px] leading-snug text-cream/85">{t(T.notListedHelp)}</p>
+                {canPickup && (
+                  <button
+                    type="button"
+                    onClick={() => setFulfilment('pickup')}
+                    className="mt-2.5 w-full rounded-xl bg-amber-400 px-2 py-2.5 font-cond text-[15px] font-extrabold uppercase tracking-wide text-night transition-transform active:scale-[0.99]"
+                  >
+                    🛍️ {lang === 'en' ? 'Pick-up' : 'Pick-up karein'} · {shop.pickupArea}
+                  </button>
+                )}
+              </div>
+            ) : outside ? (
               <div role="alert" className="mt-2.5 rounded-xl border-2 border-amber-400 bg-amber-400/10 p-3 motion-safe:animate-pop-in">
                 <p className="font-cond text-[17px] font-extrabold leading-tight text-amber-300">
                   ⚠️{' '}

@@ -12,7 +12,15 @@ import {
   type CheckoutProblem,
   type OrderErrorBody,
 } from '@/lib/checkout-validation';
-import { checkoutAreaHint, copyText, deliveryAreasText, deliveryMaxMinutes, zoneOptionGroups, type SiteFacts } from '@/lib/delivery-facts';
+import {
+  AREA_NOT_LISTED,
+  checkoutAreaHint,
+  copyText,
+  deliveryAreasText,
+  deliveryMaxMinutes,
+  zoneOptionGroups,
+  type SiteFacts,
+} from '@/lib/delivery-facts';
 import {
   STORAGE_KEYS,
   parseDetails,
@@ -98,6 +106,9 @@ export function CheckoutSheet(
   const footerErrorRef = useRef<HTMLParagraphElement>(null);
 
   const pickup = props.fulfilment === 'pickup';
+  // "My area isn't listed" (lib/delivery-facts AREA_NOT_LISTED): the order goes on WhatsApp, where the shop says
+  // whether it reaches them, instead of a "Choose your delivery area" the customer can't answer.
+  const notListed = !pickup && props.zoneId === AREA_NOT_LISTED;
   const cartCount = props.cart.reduce((s, l) => s + l.quantity, 0);
 
   // A problem clears as soon as the customer touches what it was about,
@@ -220,7 +231,7 @@ export function CheckoutSheet(
   const footerError = problem && (problem.field === null || problem.field === 'cart') ? problem.message : null;
   const waText = whatsappOrderText(props.cart, {
     fulfilment: props.fulfilment,
-    areaName: props.zone?.name,
+    areaName: notListed ? 'my area (not on your list), can you deliver?' : props.zone?.name,
     name,
     address,
     shopName: shop.profile.name,
@@ -333,7 +344,11 @@ export function CheckoutSheet(
                   hint={
                     props.zone
                       ? `Delivery to ${props.zone.name}: ${formatCents(props.zone.feeCents)} · at your door within ${deliveryMaxMinutes(props.zone)} minutes`
-                      : checkoutAreaHint(props.deliveryFacts, props)
+                      : notListed
+                        ? `We don’t deliver there yet. Send this order on WhatsApp and we’ll tell you if we can reach you${
+                            props.canPickup ? ', or choose pick-up above' : ''
+                          }.`
+                        : checkoutAreaHint(props.deliveryFacts, props)
                   }
                 >
                   {(ids) => (
@@ -346,7 +361,7 @@ export function CheckoutSheet(
                         props.onZone(e.target.value);
                       }}
                       className={`w-full rounded-xl border-2 bg-white px-3 py-3 text-base font-semibold text-ink outline-none transition-colors focus:border-ink ${
-                        fieldError('zone') ? 'border-red-600' : props.zone ? 'border-ink' : 'border-cheese'
+                        fieldError('zone') ? 'border-red-600' : props.zone || notListed ? 'border-ink' : 'border-cheese'
                       }`}
                     >
                       <option value="">Choose your area…</option>
@@ -359,6 +374,9 @@ export function CheckoutSheet(
                           ))}
                         </optgroup>
                       ))}
+                      <optgroup label="Somewhere else">
+                        <option value={AREA_NOT_LISTED}>My area isn’t listed — order on WhatsApp</option>
+                      </optgroup>
                     </select>
                   )}
                 </FieldShell>
@@ -505,7 +523,7 @@ export function CheckoutSheet(
               )}
             </p>
           )}
-          {props.acceptingOrders ? (
+          {props.acceptingOrders && !notListed ? (
             <button
               type="button"
               onClick={() => void submit()}
@@ -529,14 +547,16 @@ export function CheckoutSheet(
               href={whatsappUrlWith(shop, waText)}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={() => funnel.whatsappOrder('closed')}
+              onClick={() => funnel.whatsappOrder(notListed ? 'area' : 'closed')}
               className="flex min-h-[3.5rem] w-full items-center justify-center rounded-full bg-[#1FA855] py-3.5 font-cond text-xl font-bold uppercase tracking-wide text-white transition-all hover:bg-[#178a45] active:scale-[0.99]"
             >
               Send this order on WhatsApp
             </a>
           )}
           <p className="mt-2 text-center text-xs text-ink-muted">
-            {!props.acceptingOrders
+            {notListed
+              ? 'Opens WhatsApp with your order typed out — we tell you if we deliver to your area, and the total.'
+              : !props.acceptingOrders
               ? 'Opens WhatsApp with your order typed out — we confirm the total there.'
               : pickup
                 ? copyText(CHECKOUT_PAY_PICKUP, payFacts)

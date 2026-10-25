@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { formatCents } from '@/lib/format';
 import {
+  AREA_NOT_LISTED,
   copyText,
   deliveryFeeRange,
   deliveryMaxMinutes,
@@ -457,7 +458,10 @@ export function OrderingApp({
     function apply(choice: LocationChoice | null) {
       if (!choice) return;
       setFulfilment(choice.fulfilment);
-      if (choice.fulfilment === 'delivery' && choice.zoneId && openZone(choice.zoneId)) setZoneId(choice.zoneId);
+      // "My area isn't listed" (AREA_NOT_LISTED) carries over too: the checkout then offers WhatsApp, not a dead end.
+      if (choice.fulfilment === 'delivery' && choice.zoneId && (openZone(choice.zoneId) || choice.zoneId === AREA_NOT_LISTED)) {
+        setZoneId(choice.zoneId);
+      }
     }
     apply(readLocationChoice());
     return onLocationChoice(apply);

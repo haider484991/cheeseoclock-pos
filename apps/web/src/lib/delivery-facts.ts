@@ -279,23 +279,51 @@ export function deliveryOptionNote(facts: SiteFacts): string {
 
 export interface ZoneOption {
   id: string;
-  /** "DHA Phase 6 — Rs N", or "… — delivery paused" for an area switched off. */
+  /** "DHA Phase 6 (Bukhari, Ittehad, …) — Rs N", or "… — delivery paused" for an area switched off. */
   label: string;
   /** Switched off: listed, so the customer sees why, but not choosable. */
   disabled: boolean;
+}
+
+/**
+ * "My area isn't listed", the last choice in both area lists (26 Oct 2026, the user: a checkout stopped at "Choose your
+ * delivery area" and the customer left). Not a zone: such an order goes on WhatsApp, where the shop says whether it
+ * can reach them. Never a till zone id (those are UUIDs), and a valid one for lib/location-choice.
+ */
+export const AREA_NOT_LISTED = 'not-listed';
+
+/**
+ * The names Karachi customers know an area by, after the owner's zone name in the lists (26 Oct 2026): someone in
+ * Zamzama may not know it is DHA Phase 5. Keyed by the zone's name, so a renamed or new zone simply shows none.
+ */
+const AREA_LOCAL_NAMES: Record<string, string> = {
+  'dha phase 5': 'Zamzama, Badar, Khadda',
+  'dha phase 6': 'Bukhari, Ittehad, Rahat, Nishat',
+  'dha phase 8': 'Do Darya, Al-Murtaza',
+  'clifton block 2': 'Bilawal House',
+  'clifton block 4': 'Dolmen Mall',
+  'clifton block 5': 'Boat Basin, Kehkashan',
+  'clifton block 9': 'Schon Circle',
+};
+
+/** "DHA Phase 6 (Bukhari, Ittehad, Rahat, Nishat)", or the owner's name as it is. */
+export function zoneNameWithLocalNames(name: string): string {
+  const local = AREA_LOCAL_NAMES[name.trim().toLowerCase().replace(/\s+/g, ' ')];
+  return local ? `${name} (${local})` : name;
 }
 
 /** The checkout's area list: the owner's groups ("DHA", "Clifton", …) in display order. */
 export function zoneOptionGroups(zones: readonly FactZone[]): Array<{ group: string; options: ZoneOption[] }> {
   const groups: Array<{ group: string; options: ZoneOption[] }> = [];
   for (const z of zones) {
+    const name = zoneNameWithLocalNames(z.name);
     const option: ZoneOption = {
       id: z.id,
       label: !z.active
-        ? `${z.name} — delivery paused`
+        ? `${name} — delivery paused`
         : z.feeCents === 0
-          ? `${z.name} — free delivery`
-          : `${z.name} — ${formatCents(z.feeCents)}`,
+          ? `${name} — free delivery`
+          : `${name} — ${formatCents(z.feeCents)}`,
       disabled: !z.active,
     };
     const g = groups.find((x) => x.group === z.group);
