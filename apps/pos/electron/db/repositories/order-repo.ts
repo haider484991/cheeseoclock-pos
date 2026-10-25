@@ -4618,8 +4618,14 @@ function dealContentsOf(r: { category_name: string | null; category_no_discount:
   dealContents?: string;
 } {
   const words = r.menu_description?.trim();
-  if (!words || r.category_name === null) return {};
-  return categoryNeverDiscounted({ name: r.category_name, noDiscount: noDiscountOf(r.category_no_discount) }) ? { dealContents: words } : {};
+  if (!words || !isDealLine(r)) return {};
+  return { dealContents: words };
+}
+
+/** A line of a deal category (never discounted: Value Deals, Buy 1 Get 1 Deals). */
+function isDealLine(r: { category_name: string | null; category_no_discount: unknown }): boolean {
+  if (r.category_name === null) return false;
+  return categoryNeverDiscounted({ name: r.category_name, noDiscount: noDiscountOf(r.category_no_discount) });
 }
 
 export function getOrderSnapshot(
@@ -4691,6 +4697,24 @@ export function getOrderSnapshot(
       }>)
     : [];
 
+  // A deal's fixed parts (a "Comes with" group: required, every option already picked, all needed — shared-types
+  // isFixedChoiceGroup; v0.7.57), as the group stands now: the kitchen ticket lists them after what was picked.
+  const modIds = [...new Set(modRows.map((m) => m.modifier_id).filter((id): id is string => !!id))];
+  const fixedMods = new Set(
+    modIds.length
+      ? (
+          db
+            .prepare(
+              `SELECT m.id FROM modifiers m JOIN modifier_groups g ON g.id = m.modifier_group_id
+                WHERE m.id IN (${modIds.map(() => '?').join(',')}) AND g.is_required = 1
+                  AND g.min_select >= (SELECT COUNT(*) FROM modifiers x WHERE x.modifier_group_id = g.id AND x.deleted_at IS NULL)
+                  AND NOT EXISTS (SELECT 1 FROM modifiers x WHERE x.modifier_group_id = g.id AND x.deleted_at IS NULL AND x.is_default = 0)`,
+            )
+            .all(...modIds) as Array<{ id: string }>
+        ).map((r) => r.id)
+      : [],
+  );
+
   const modsByItem = new Map<string, OrderItemModifier[]>();
   for (const m of modRows) {
     const arr = modsByItem.get(m.order_item_id) ?? [];
@@ -4700,6 +4724,7 @@ export function getOrderSnapshot(
       modifierId: (m.modifier_id ?? '') as OrderItemModifier['modifierId'],
       modifierName: m.modifier_name,
       priceDeltaCents: m.price_delta_cents as OrderItemModifier['priceDeltaCents'],
+      ...(m.modifier_id && fixedMods.has(m.modifier_id) ? { fixed: true as const } : {}),
     });
     modsByItem.set(m.order_item_id, arr);
   }
@@ -4732,6 +4757,8 @@ export function getOrderSnapshot(
     // What a deal is made of, for the kitchen ticket (the owner, 24 Oct 2026): its description, for a
     // line of a deal category (never discounted) that has one.
     ...dealContentsOf(r),
+    // …and when its fixed parts are among its choices, the choices are the whole deal (v0.7.57).
+    ...(isDealLine(r) && (modsByItem.get(r.id) ?? []).some((m) => m.fixed) ? { dealPartsListed: true as const } : {}),
   }));
 
   const paymentRows = db

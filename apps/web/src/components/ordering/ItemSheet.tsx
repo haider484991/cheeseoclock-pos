@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  isFixedChoiceGroup,
   isLeaveOutChoice,
   type PublishedMenuItem,
   type PublishedModifierGroup,
@@ -35,6 +36,13 @@ function defaultsOf(it: PublishedMenuItem): Set<string> {
   return new Set(
     it.modifierGroups.flatMap((g) => g.modifiers.filter((m) => m.isDefault).map((m) => m.posModifierId)),
   );
+}
+
+/** The choices with a deal's fixed parts ("Comes with", v0.7.57) always on, also for a line from before them. */
+function withFixedParts(sel: Set<string>, it: PublishedMenuItem): Set<string> {
+  const next = new Set(sel);
+  for (const g of it.modifierGroups) if (isFixedChoiceGroup(g)) for (const m of g.modifiers) next.add(m.posModifierId);
+  return next;
 }
 
 function isUnmet(g: PublishedModifierGroup, sel: Set<string>): boolean {
@@ -77,7 +85,9 @@ export function ItemSheet({
   const item = variant.item;
   const groups = useMemo(() => sheetGroups(item), [item]);
   const [qty, setQty] = useState(1);
-  const [selected, setSelected] = useState<Set<string>>(() => (initialSelected ? new Set(initialSelected) : defaultsOf(item)));
+  const [selected, setSelected] = useState<Set<string>>(() =>
+    withFixedParts(initialSelected ? new Set(initialSelected) : defaultsOf(item), item),
+  );
 
   // Another size is another till item with its own modifier ids. Carry the
   // choices across by name (Medium and Large share their groups' options),
@@ -98,7 +108,7 @@ export function ItemSheet({
       }
     }
     setVariantIndex(i);
-    setSelected(carried.size > 0 ? carried : defaultsOf(next.item));
+    setSelected(withFixedParts(carried.size > 0 ? carried : defaultsOf(next.item), next.item));
   }
 
   // A deal has two pizza slots, and on a phone the second sits below the fold:
@@ -127,6 +137,7 @@ export function ItemSheet({
   }
 
   function toggle(group: PublishedModifierGroup, modId: string) {
+    if (isFixedChoiceGroup(group)) return;
     const next = new Set(selected);
     if (group.selectionType === 'single') {
       // Radio behaviour: clear siblings.
@@ -222,6 +233,31 @@ export function ItemSheet({
         )}
 
         {groups.map((g) => {
+          // A deal's fixed parts: what it always holds, ticked, nothing to choose (v0.7.57).
+          if (isFixedChoiceGroup(g)) {
+            return (
+              <div key={g.posGroupId} className="mt-5">
+                <p className="flex w-full items-center justify-between gap-2">
+                  <span className="font-cond text-sm font-extrabold uppercase tracking-widest text-ink">{groupLabel(g)}</span>
+                  <span className="font-cond text-xs font-bold uppercase tracking-wide text-ink-muted">In every box</span>
+                </p>
+                <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                  {g.modifiers
+                    .slice()
+                    .sort((a, b) => a.sortOrder - b.sortOrder)
+                    .map((m) => (
+                      <li
+                        key={m.posModifierId}
+                        className="flex min-h-[2.75rem] items-center gap-2 rounded-xl border-2 border-ink bg-cheese/25 px-2.5 py-2 text-sm font-semibold leading-tight text-ink"
+                      >
+                        <span aria-hidden className="text-base">✓</span>
+                        {sheetOptionLabel(m.name)}
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            );
+          }
           const chosen = g.modifiers.filter((m) => selected.has(m.posModifierId)).length;
           const need = requiredCount(g);
           const full = g.maxSelect > 0 && chosen >= g.maxSelect;

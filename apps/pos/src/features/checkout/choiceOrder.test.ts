@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   choiceGroupKind,
+  isFixedChoiceGroup,
   orderChoiceGroups,
   type ChoiceGroupLike,
 } from '@cheeseoclock/shared-types';
@@ -190,5 +191,28 @@ describe('orderChoiceGroups', () => {
     expect(out[0]!.id).toBe('g:Dips on the side');
     expect(names(input)).toEqual(['Leave out · Fajita Pizza', 'Dips on the side']);
     expect(orderChoiceGroups([])).toEqual([]);
+  });
+});
+
+describe('a deal\'s fixed parts ("Comes with", v0.7.57)', () => {
+  const ticked = (name: string, options: string[], over: Partial<ChoiceGroupLike> = {}) => ({
+    ...group(name, options, { isRequired: true, minSelect: options.length, ...over }),
+    modifiers: options.map((o) => ({ name: o, isDefault: true })),
+  });
+  it('is required, every option already picked and all of them needed — nothing to choose', () => {
+    expect(isFixedChoiceGroup(ticked('Comes with · Signature Crispy + fries', ['Signature Crispy burger', 'Regular fries']))).toBe(true);
+    expect(isFixedChoiceGroup(ticked('Comes with · nuggets', ['Chicken nuggets (5)']))).toBe(true);
+    // Not required, one option not picked, or fewer needed than there are: a real choice.
+    expect(isFixedChoiceGroup(ticked('A', ['x', 'y'], { isRequired: false }))).toBe(false);
+    expect(isFixedChoiceGroup(ticked('A', ['x', 'y'], { minSelect: 1 }))).toBe(false);
+    expect(isFixedChoiceGroup({ ...ticked('A', ['x', 'y']), modifiers: [{ name: 'x', isDefault: true }, { name: 'y', isDefault: false }] })).toBe(false);
+    expect(isFixedChoiceGroup(group('Empty', [], { isRequired: true, minSelect: 0 }))).toBe(false);
+    // A group without the options' isDefault (the costing screen's) never is one.
+    expect(isFixedChoiceGroup(group('Comes with', ['x'], { isRequired: true, minSelect: 1 }))).toBe(false);
+  });
+  it('is asked first, before the required choices; the rest keep their order', () => {
+    const fixed = ticked('Comes with · Signature Crispy + fries', ['Signature Crispy burger', 'Regular fries']);
+    const ordered = orderChoiceGroups([LEAVE_OUT_DEALS, SIDE_DIPS, DEAL_LARGE, fixed, CHOOSE_DIP]);
+    expect(ordered.map((g) => g.name)).toEqual([fixed.name, DEAL_LARGE.name, CHOOSE_DIP.name, SIDE_DIPS.name, LEAVE_OUT_DEALS.name]);
   });
 });

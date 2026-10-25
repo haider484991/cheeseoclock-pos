@@ -480,6 +480,25 @@ describe('deals: photos, contents and one-tap add (24 Oct 2026)', () => {
     expect(quickPicks(item('Deal', 850, { modifierGroups: [withDefault] }))).toEqual(['m:Choose a Drink· 345 ml:Orange']);
   });
 
+  it('a deal’s fixed parts ("Comes with", v0.7.57) go in with the one tap: the burger deal still adds at once', () => {
+    const comes = group('Comes with · Classic Crispy + fries', ['Classic Crispy burger', 'Regular fries'], true, {
+      selectionType: 'multi',
+      minSelect: 2,
+      maxSelect: 2,
+    });
+    for (const m of comes.modifiers) m.isDefault = true;
+    expect(quickPicks(item('Classic Crispy Deal', 850, { modifierGroups: [comes, drink] }))).toEqual([
+      'm:Comes with · Classic Crispy + fries:Classic Crispy burger',
+      'm:Comes with · Classic Crispy + fries:Regular fries',
+      'm:Choose a Drink· 345 ml:Cola',
+    ]);
+    expect(presetPicks(item('Classic Crispy Deal', 850, { modifierGroups: [drink, comes] }))).toEqual([
+      'm:Comes with · Classic Crispy + fries:Classic Crispy burger',
+      'm:Comes with · Classic Crispy + fries:Regular fries',
+      'm:Choose a Drink· 345 ml:Cola',
+    ]);
+  });
+
   it('asks in the sheet for a choice that matters: which pizza, five veggies', () => {
     expect(quickPicks(item('Large & Chilled', 1800, { modifierGroups: [pizza, drink] }))).toBeNull();
     const veggies = group('Veggie Lovers — Choose 5 veggies', ['Onion', 'Olives'], true, { selectionType: 'multi', minSelect: 1, maxSelect: 5 });

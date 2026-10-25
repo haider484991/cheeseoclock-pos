@@ -1581,7 +1581,10 @@ function kitchenChangeOf(
       modifiers: c.modifiers,
       notes: c.notes,
       drink: it ? isDrinkLine(it) : false,
-      ...(it?.dealContents ? { contents: it.dealContents } : {}),
+      // As the order's ticket: a deal's parts, or its contents when they are not among its choices (v0.7.57).
+      ...(it?.dealContents && !it.dealPartsListed ? { contents: it.dealContents } : {}),
+      ...(it && (it.dealContents !== undefined || it.dealPartsListed) ? { deal: true as const } : {}),
+      ...(it?.dealPartsListed ? { fixed: it.modifiers.filter((m) => m.fixed).map((m) => m.modifierName) } : {}),
     };
   };
   const editNo = Number(

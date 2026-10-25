@@ -5,8 +5,8 @@ import { Button, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import type { MenuItem } from '@cheeseoclock/shared-types';
-import { groupDisplayName, isLeaveOutChoice, orderChoiceGroups } from '@cheeseoclock/shared-types';
-import { X } from 'lucide-react';
+import { groupDisplayName, isFixedChoiceGroup, isLeaveOutChoice, orderChoiceGroups } from '@cheeseoclock/shared-types';
+import { Check, X } from 'lucide-react';
 import { ownsEnter } from './keys';
 import { onePickAdds as onlyOnePickAdds, strayTapGuard } from './choiceFlow';
 
@@ -71,9 +71,12 @@ export function ModifierModal({
     seeded.current = true;
     const next: Record<string, string[]> = {};
     for (const g of groupsQ.data) {
-      next[g.id] = initialModifierIds
-        ? g.modifiers.filter((m) => initialModifierIds.includes(m.id)).map((m) => m.id)
-        : g.modifiers.filter((m) => m.isDefault).map((m) => m.id);
+      // A deal's fixed parts are always on it, also on a line from before the group was added (v0.7.57).
+      next[g.id] = isFixedChoiceGroup(g)
+        ? g.modifiers.map((m) => m.id)
+        : initialModifierIds
+          ? g.modifiers.filter((m) => initialModifierIds.includes(m.id)).map((m) => m.id)
+          : g.modifiers.filter((m) => m.isDefault).map((m) => m.id);
     }
     setSelected(next);
   }, [groupsQ.data, initialModifierIds]);
@@ -82,9 +85,12 @@ export function ModifierModal({
   // stored them in.
   const groups = useMemo(() => orderChoiceGroups(groupsQ.data ?? []), [groupsQ.data]);
   const editing = initialModifierIds !== undefined;
-  // One required pick from one list and nothing else to choose: the tap on
+  // A deal's fixed parts ("Comes with", v0.7.57): shown ticked, never a pick, always sent.
+  const fixedGroupIds = new Set<string>(groups.filter((g) => isFixedChoiceGroup(g)).map((g) => g.id));
+  const fixedIds = groups.filter((g) => fixedGroupIds.has(g.id)).flatMap((g) => g.modifiers.map((m) => m.id));
+  // One required pick from one list and nothing else to choose (a deal's fixed parts are not a choice): the tap on
   // that pick is the confirmation.
-  const onePickAdds = onlyOnePickAdds(groups, editing);
+  const onePickAdds = onlyOnePickAdds(groups.filter((g) => !fixedGroupIds.has(g.id)), editing);
 
   function confirm(modifierIds: string[]) {
     // One confirmation per modal: a double tap or Enter + click must not add twice.
@@ -94,8 +100,9 @@ export function ModifierModal({
   }
 
   function toggle(groupId: string, modId: string, selectionType: 'single' | 'multi', maxSelect: number) {
+    if (fixedGroupIds.has(groupId)) return;
     if (onePickAdds && selectionType === 'single') {
-      confirm([modId]);
+      confirm([...fixedIds, modId]);
       return;
     }
     setSelected((prev) => {
@@ -239,7 +246,10 @@ export function ModifierModal({
                 ))}
               </div>
             )}
-            {groups.map((g) => (
+            {groups.map((g) =>
+              fixedGroupIds.has(g.id) ? (
+                <FixedParts key={g.id} title={groupDisplayName(g.name, g)} parts={g.modifiers.map((m) => ({ id: m.id, name: m.name }))} />
+              ) : (
               <section key={g.id} className="mb-6">
                 <div className="mb-2 flex items-baseline justify-between">
                   <h3 className="font-semibold">
@@ -328,5 +338,28 @@ export function ModifierModal({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+/** A deal's fixed parts ("Comes with", v0.7.57): what the deal always holds, ticked, nothing to tap. */
+function FixedParts({ title, parts }: { title: string; parts: ReadonlyArray<{ id: string; name: string }> }) {
+  return (
+    <section className="mb-6" aria-label={title}>
+      <div className="mb-2 flex items-baseline justify-between">
+        <h3 className="font-semibold">{title}</h3>
+        <span className="text-xs text-stone-500">Always in this deal</span>
+      </div>
+      <ul className="grid grid-cols-2 gap-2">
+        {parts.map((m) => (
+          <li
+            key={m.id}
+            className="flex min-h-[52px] items-center gap-2 rounded-lg border-2 border-emerald-500 bg-emerald-50 p-3 font-medium dark:bg-emerald-950"
+          >
+            <Check className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden />
+            {m.name}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

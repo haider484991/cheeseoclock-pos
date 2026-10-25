@@ -145,6 +145,32 @@ describe('the kitchen CHANGE slip', () => {
     expect(text()).not.toContain('Includes:');
   });
 
+  it('a deal whose fixed parts are among its choices (v0.7.57): one "- " line per part — what was picked, the fixed parts, dips, the drink last — and no Includes', () => {
+    const mega = {
+      name: 'Test Mega Box',
+      quantity: 1,
+      modifiers: ['Signature Crispy burger', 'Regular fries', 'Large: Fajita', 'Burger: Cheese Dipped', 'Pepsi 1 litre', 'Ranch Dip', '2nd dip: BBQ Dip', 'No onion'],
+      notes: null,
+      drink: false,
+      deal: true as const,
+      fixed: ['Signature Crispy burger', 'Regular fries'],
+    };
+    const t = text({ ...change, added: [mega], removed: [] });
+    const lines = t.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('- ') || l === 'NO ONION');
+    expect(lines).toEqual([
+      'NO ONION',
+      '- Large: Fajita',
+      '- Burger: Cheese Dipped',
+      '- Signature Crispy burger',
+      '- Regular fries',
+      '- Ranch Dip',
+      '- 2nd dip: BBQ Dip',
+      '- Pepsi 1 litre',
+    ]);
+    expect(t).not.toContain('Includes:');
+    expect(t).not.toContain('+ ');
+  });
+
   it('is not the order ticket: the ticket itself is unchanged', () => {
     const ticket = escPosToText(renderKitchenTicket(order(), { now: NOW }));
     expect(ticket).not.toContain('ORDER CHANGED');

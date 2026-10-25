@@ -161,7 +161,22 @@ export interface ChoiceGroupLike {
   name: string;
   isRequired: boolean;
   minSelect: number;
-  modifiers: ReadonlyArray<{ name: string; removesIngredientId?: string | null }>;
+  modifiers: ReadonlyArray<{ name: string; removesIngredientId?: string | null; isDefault?: boolean }>;
+}
+
+/**
+ * A deal's fixed parts as a choice group ("Comes with", 25 Oct 2026; the user: the deal's second burger and its fries
+ * did not show when it was punched): required, every option already picked, and all of them needed — nothing to
+ * choose. The till and the website show it ticked and locked, first; the kitchen ticket lists its options as the deal's
+ * parts. A group without its options' isDefault (the costing screen's) is never one.
+ */
+export function isFixedChoiceGroup(group: Pick<ChoiceGroupLike, 'isRequired' | 'minSelect' | 'modifiers'>): boolean {
+  return (
+    group.isRequired &&
+    group.modifiers.length > 0 &&
+    group.minSelect >= group.modifiers.length &&
+    group.modifiers.every((m) => m.isDefault === true)
+  );
 }
 
 export function choiceGroupKind(group: ChoiceGroupLike): ChoiceGroupKind {
@@ -192,8 +207,10 @@ export function choiceGroupKind(group: ChoiceGroupLike): ChoiceGroupKind {
  * import never reorders what an item already has.
  */
 export function orderChoiceGroups<G extends ChoiceGroupLike>(groups: readonly G[]): G[] {
+  // (A deal's fixed parts, isFixedChoiceGroup, come before them all.)
   return groups
-    .map((group, index) => ({ group, index, rank: CHOICE_GROUP_KIND_ORDER.indexOf(choiceGroupKind(group)) }))
+    // A deal's fixed parts ("Comes with") first: what the deal holds, then what is asked.
+    .map((group, index) => ({ group, index, rank: isFixedChoiceGroup(group) ? -1 : CHOICE_GROUP_KIND_ORDER.indexOf(choiceGroupKind(group)) }))
     .sort((a, b) => a.rank - b.rank || a.index - b.index)
     .map((x) => x.group);
 }

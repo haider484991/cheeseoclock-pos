@@ -301,9 +301,14 @@ export interface KitchenChangeLine {
   drink: boolean;
   /**
    * What a deal is made of, as the order's ticket prints it ("Includes: …", v0.7.52): its
-   * snapshot line's dealContents. Absent on every other line, and on a slip frozen before v0.7.53.
+   * snapshot line's dealContents. Absent on every other line, on a slip frozen before v0.7.53, and on a deal whose
+   * parts are its choices (dealPartsListed, v0.7.57).
    */
   contents?: string;
+  /** A deal's line (v0.7.57): its choices print as its parts ("- …"), as on the order's ticket. */
+  deal?: true;
+  /** Its fixed parts ("Comes with", v0.7.57), by name: listed after what was picked. */
+  fixed?: string[];
 }
 
 /**

@@ -147,6 +147,41 @@ describe.skipIf(!DatabaseSync)('a price that includes its tax (0057)', () => {
     expect(escPosToText(renderKitchenTicket(t.r.getOrderSnapshot(t.db, p)!, {}))).not.toContain('Includes:');
   });
 
+  it('a deal with its fixed parts as a "Comes with" group (v0.7.57): the snapshot marks them, the ticket lists the parts, no Includes', async () => {
+    const mods = await import('./repositories/modifier-repo.js');
+    const comes = mods.createModifierGroup(
+      t.db,
+      { name: 'Comes with · Test Signature Crispy + fries', selectionType: 'multi', minSelect: 2, maxSelect: 2, isRequired: true },
+      MANAGER,
+    );
+    const burger = mods.createModifier(t.db, { modifierGroupId: comes.id, name: 'Test Signature Crispy burger', priceDeltaCents: 0, isDefault: true }, MANAGER);
+    const fries = mods.createModifier(t.db, { modifierGroupId: comes.id, name: 'Test Regular fries', priceDeltaCents: 0, isDefault: true, sortOrder: 1 }, MANAGER);
+    const drinks = mods.createModifierGroup(t.db, { name: 'Test deal drink', selectionType: 'single', minSelect: 1, maxSelect: 1, isRequired: true }, MANAGER);
+    const pepsi = mods.createModifier(t.db, { modifierGroupId: drinks.id, name: 'Pepsi 1 litre', priceDeltaCents: 0 }, MANAGER);
+    mods.setItemModifierGroups(t.db, t.mega, [{ modifierGroupId: drinks.id, sortOrder: 0 }, { modifierGroupId: comes.id, sortOrder: 1 }], MANAGER);
+    const o = t.r.createOrder(t.db, { mode: 'takeaway' }, CASHIER);
+    t.r.addOrderItem(t.db, { orderId: o.id, menuItemId: t.mega, quantity: 1, modifierIds: [pepsi.id, burger.id, fries.id], notes: null }, CASHIER);
+    const snap = t.r.getOrderSnapshot(t.db, o.id)!;
+    const line = snap.items[0]!;
+    expect(line).toMatchObject({ dealPartsListed: true, dealContents: expect.any(String) });
+    // Stored in the order asked: the fixed parts first.
+    expect(line.modifiers.map((m) => [m.modifierName, m.fixed ?? false])).toEqual([
+      ['Test Signature Crispy burger', true],
+      ['Test Regular fries', true],
+      ['Pepsi 1 litre', false],
+    ]);
+    // The bill is still the printed price.
+    expect(t.row(o.id)).toMatchObject({ total: 480_000, tax: 0 });
+    const kitchen = escPosToText(renderKitchenTicket(snap, {}));
+    expect(kitchen).not.toContain('Includes:');
+    expect(kitchen.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('- '))).toEqual([
+      '- Test Signature Crispy burger',
+      '- Test Regular fries',
+      '- Pepsi 1 litre',
+    ]);
+    // A deal without one keeps its Includes (the test above).
+  });
+
   it('an order without a marked line reads exactly as before', () => {
     const o = t.ring([[t.pizza, 1]]);
     expect(t.row(o)).toMatchObject({ subtotal: 200_000, tax: 30_000, total: 230_000, included: 0, cardIncluded: 0 });

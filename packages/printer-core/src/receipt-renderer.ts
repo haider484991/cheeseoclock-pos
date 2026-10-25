@@ -1352,6 +1352,23 @@ export const KITCHEN_LATE_MS = 2 * 60_000;
  * ("Cold Drinks", "Soft drinks"…) — the names the till's food-cost
  * suggestions know drinks by.
  */
+/** A deal part that is the drink ("Pepsi 1 litre", "2nd: 7Up 345 ml") or a dip ("Ranch Dip", "2nd dip: BBQ Dip"). */
+const DEAL_DRINK_PART = /\b\d+\s*ml\b|\blit(?:re|er)s?\b/i;
+const DEAL_DIP_PART = /\bdips?\b/i;
+
+/**
+ * A deal line's parts in the order the kitchen makes them (the user, 25 Oct 2026: "kitchen slip make them easy to
+ * understand"): what was picked (the pizzas, the burger), then the deal's fixed parts ("Comes with": the Signature
+ * Crispy burger, the fries), then the dips, the drink last. Each kind keeps the order it was asked in.
+ */
+export function dealPartsInOrder(names: readonly string[], fixed: ReadonlySet<string>): string[] {
+  const rank = (n: string) => (fixed.has(n) ? 1 : DEAL_DRINK_PART.test(n) ? 3 : DEAL_DIP_PART.test(n) ? 2 : 0);
+  return names
+    .map((n, i) => ({ n, i, r: rank(n) }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .map((x) => x.n);
+}
+
 export function isDrinkLine(item: Pick<OrderSnapshot['items'][number], 'categoryName' | 'prepStation'>): boolean {
   return item.prepStation === 'bar' || /\bdrinks?\b|\bbeverages?\b/i.test(item.categoryName ?? '');
 }
@@ -1486,8 +1503,10 @@ export function renderKitchenTicket(
     b.wrappedText(`${it.quantity} x ${it.menuItemName}`, width);
     b.bold(false).doubleHeight(false);
     // What a deal is made of, before its choices (the owner, 24 Oct 2026: "in the kitchen receipt we
-    // don't see … what items are in the deals" — a burger deal asks only for its drink).
-    if (it.dealContents) {
+    // don't see … what items are in the deals" — a burger deal asks only for its drink). Not when its fixed parts are
+    // among its choices (v0.7.57): then the list below is the whole deal.
+    const deal = it.dealContents !== undefined || it.dealPartsListed === true;
+    if (it.dealContents && !it.dealPartsListed) {
       for (const ln of wrap(`Includes: ${it.dealContents}`, width - 4)) {
         b.text(`    ${ln}`).newline();
       }
@@ -1502,8 +1521,14 @@ export function renderKitchenTicket(
       }
       b.bold(false);
     }
-    for (const mod of it.modifiers.filter((m) => !isLeaveOutChoice(m.modifierName))) {
-      for (const ln of wrap(`+ ${mod.modifierName}`, width - 4)) {
+    // A deal's choices are its parts: one "- " line each, in the order the kitchen makes them (v0.7.57). Any other
+    // item's are additions: "+ ".
+    const rest = it.modifiers.filter((m) => !isLeaveOutChoice(m.modifierName));
+    const names = deal
+      ? dealPartsInOrder(rest.map((m) => m.modifierName), new Set(rest.filter((m) => m.fixed).map((m) => m.modifierName)))
+      : rest.map((m) => m.modifierName);
+    for (const name of names) {
+      for (const ln of wrap(`${deal ? '-' : '+'} ${name}`, width - 4)) {
         b.text(`    ${ln}`).newline();
       }
     }
@@ -1575,8 +1600,9 @@ function changeLines(b: EscPosBuilder, width: PrinterWidth, lines: ReadonlyArray
       for (const ln of wrap(m.toUpperCase(), width - 4)) b.text(`    ${ln}`).newline();
       b.bold(false);
     }
-    for (const m of it.modifiers.filter((n) => !isLeaveOutChoice(n))) {
-      for (const ln of wrap(`+ ${m}`, width - 4)) b.text(`    ${ln}`).newline();
+    const rest = it.modifiers.filter((n) => !isLeaveOutChoice(n));
+    for (const m of it.deal ? dealPartsInOrder(rest, new Set(it.fixed ?? [])) : rest) {
+      for (const ln of wrap(`${it.deal ? '-' : '+'} ${m}`, width - 4)) b.text(`    ${ln}`).newline();
     }
     if (it.notes) {
       b.bold(true);

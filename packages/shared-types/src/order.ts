@@ -193,6 +193,11 @@ export interface OrderItemModifier {
   modifierId: UUID;
   modifierName: string;
   priceDeltaCents: Cents;
+  /**
+   * One of a deal's fixed parts (a "Comes with" group, isFixedChoiceGroup; v0.7.57), in an order's snapshot only: the
+   * kitchen ticket lists it after what was picked. Absent on every other choice.
+   */
+  fixed?: true;
 }
 
 export interface OrderDiscount {
@@ -298,6 +303,11 @@ export interface OrderSnapshot {
        * never-discounted (deal) category. Absent on every other line and when it has none.
        */
       dealContents?: string;
+      /**
+       * A deal line that carries its fixed parts as choices ("Comes with", v0.7.57): its choices are the whole deal, so
+       * the kitchen ticket lists them as its parts and leaves out dealContents. Absent otherwise.
+       */
+      dealPartsListed?: true;
     }
   >;
   discounts: OrderDiscount[];
