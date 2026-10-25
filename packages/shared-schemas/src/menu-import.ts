@@ -141,6 +141,17 @@ export const menuImportItemSchema = z.object({
     .object({ name: z.boolean().optional(), description: z.boolean().optional(), sortOrder: z.boolean().optional() })
     .strict()
     .optional(),
+  /**
+   * The till's own item (version 8): its id, as the till publishes it (the website menu's posItemId). The file finds that
+   * item by it alone — never by a name, so two items of one name are no longer "more than one item could be this one" —
+   * and never makes one when the till has none of that id. Absent = found by its name and aliases, as before.
+   */
+  tillItemId: z
+    .string()
+    .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, 'A till item id looks like 01a16cee-8648-722e-b685-e69b49747a50')
+    .optional(),
+  /** Where it sells on the website (version 8): 'on', 'pickup_only' or 'off'. Absent = as the till has it. */
+  webAvailability: z.enum(['on', 'pickup_only', 'off']).optional(),
 });
 
 /**
@@ -149,7 +160,7 @@ export const menuImportItemSchema = z.object({
  * a file in a newer format is never downloaded by a till that would refuse it
  * ("update the till"). Raise it together with the union (a test pins them).
  */
-export const MAX_MENU_FILE_VERSION = 7;
+export const MAX_MENU_FILE_VERSION = 8;
 
 export const menuImportFileSchema = z
   .object({
@@ -176,8 +187,12 @@ export const menuImportFileSchema = z
      * 7 = an item may say its name, description or place win (`fileWins`;
      * POS 0.7.55; the owner's spelling fixes and the printed menu's order,
      * 24 Oct 2026): a POS before that would keep the old words and order.
+     * 8 = an item may name the till's item by its id (`tillItemId`) and say
+     * where it sells on the website (`webAvailability`; POS 0.7.56; the
+     * cashier's second "MEGA CHEESE BOX", 25 Oct 2026): a POS before that would
+     * find two items of one name and change neither.
      */
-    version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7)]),
+    version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8)]),
     source: z.string().max(300).nullable().default(null),
     /**
      * The tax every item in the file is charged (added on top of the price —
@@ -220,6 +235,15 @@ export const menuImportFileSchema = z
     unique(file.categories, 'categories');
     unique(file.ingredients, 'ingredients');
     unique(file.items, 'items');
+    const tillIds = new Set<string>();
+    file.items.forEach((item, i) => {
+      if (!item.tillItemId) return;
+      const key = item.tillItemId.toLowerCase();
+      if (tillIds.has(key)) {
+        ctx.addIssue({ code: 'custom', path: ['items', i, 'tillItemId'], message: `Two items name the till item ${item.tillItemId}` });
+      }
+      tillIds.add(key);
+    });
     unique(file.modifierGroups, 'modifierGroups');
     file.modifierGroups.forEach((g, gi) => unique(g.options, `modifierGroups.${gi}.options`));
 

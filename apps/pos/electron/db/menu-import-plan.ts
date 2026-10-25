@@ -96,6 +96,8 @@ export interface MenuSnapshot {
     priceIncludesTax?: boolean;
     /** Its place in its category; absent = not known (a snapshot made without it). */
     sortOrder?: number;
+    /** Where it sells on the website; absent = 'on'. */
+    webAvailability?: 'on' | 'pickup_only' | 'off';
   }>;
   ingredients: Array<{
     id: string;
@@ -218,6 +220,7 @@ export interface MenuImportOps {
       isActive?: boolean;
       name?: string;
       sortOrder?: number;
+      webAvailability?: 'on' | 'pickup_only' | 'off';
     } | null;
     /** Choice groups to attach (in addition to those already attached). */
     attach: GroupRef[];
@@ -1076,7 +1079,20 @@ export function planMenuImport(
   const itemPlans: MenuImportItemPlan[] = [];
   const itemOps: MenuImportOps['items'] = [];
   const matchedItemIds = new Set<string>();
-  const itemMatches = matchAll(file.items, live.items);
+  // An item the file names by its till id (version 8) is found by it alone, and its row is no other item's to find by
+  // name; the rest are found by name and aliases among the rows left. An id this till does not have finds nothing.
+  const itemById = new Map(live.items.map((r) => [r.id.toLowerCase(), r]));
+  const idClaimed = new Set(file.items.flatMap((it) => (it.tillItemId && itemById.has(it.tillItemId.toLowerCase()) ? [itemById.get(it.tillItemId.toLowerCase())!.id] : [])));
+  const nameMatches = matchAll(
+    file.items.filter((it) => !it.tillItemId),
+    live.items.filter((r) => !idClaimed.has(r.id)),
+  );
+  let nameAt = 0;
+  const itemMatches = file.items.map((it) => {
+    if (!it.tillItemId) return nameMatches[nameAt++]!;
+    const row = itemById.get(it.tillItemId.toLowerCase());
+    return { row: row ?? null, ambiguous: [] as MenuSnapshot['items'] };
+  });
 
   // Sizes are separate items the checkout groups by name ("Fajita — Medium" +
   // "Fajita — Large"). When the shop already has one size under its own name,
@@ -1139,6 +1155,20 @@ export function planMenuImport(
         changes: [],
         recipeChange: 'skip',
         reason: `More than one item here could be this one: ${m.ambiguous.map((r) => r.name).join(', ')} — rename one so they differ`,
+      });
+      summary.skipped++;
+      return;
+    }
+    // Named by a till id this till does not have: nothing to change, and nothing is made in its place.
+    if (!m.row && item.tillItemId) {
+      itemPlans.push({
+        ...base,
+        categoryName: categoryNameByKey.get(catKey) ?? item.category,
+        action: 'skip',
+        existingName: null,
+        changes: [],
+        recipeChange: 'skip',
+        reason: `This till has no item with the id the file names (${item.tillItemId})`,
       });
       summary.skipped++;
       return;
@@ -1280,6 +1310,13 @@ export function planMenuImport(
     if (item.onSale !== undefined && item.onSale !== row.isActive) {
       changes.push(item.onSale ? 'switched back on' : 'switched off (off the menu)');
       update.isActive = item.onSale;
+    }
+    // Where it sells on the website (version 8).
+    const webNow = row.webAvailability ?? 'on';
+    if (item.webAvailability !== undefined && item.webAvailability !== webNow) {
+      const words = { on: 'sold', pickup_only: 'pickup only', off: 'not sold' } as const;
+      changes.push(`on the website: ${words[webNow]} → ${words[item.webAvailability]}`);
+      update.webAvailability = item.webAvailability;
     }
 
     const attachedNow = new Set((live.itemGroups.get(row.id) ?? []).map((a) => a.groupId));

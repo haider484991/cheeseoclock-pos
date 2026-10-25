@@ -640,7 +640,7 @@ describe('menuImportFileSchema', () => {
     expect(orderOf(last, 'dips')).toBe(6);
   });
 
-  it('reads versions 1 to 7 only (4: the Buy 1 Get 1 deals, v0.7.39; 5: prices that include their tax, v0.7.52; 6: items off the menu and the Buy 1 Get 1 hours, v0.7.53; 7: the file’s name, description and place win, v0.7.55)', () => {
+  it('reads versions 1 to 7 only (4: the Buy 1 Get 1 deals, v0.7.39; 5: prices that include their tax, v0.7.52; 6: items off the menu and the Buy 1 Get 1 hours, v0.7.53; 7: the file’s name, description and place win, v0.7.55; 8: a till item by its id and its website availability, v0.7.56)', () => {
     const file = (version: number) =>
       menuImportFileSchema.safeParse({ format: 'cheeseoclock-menu-import', version, categories: [], ingredients: [], items: [] });
     expect(file(1).success).toBe(true);
@@ -650,7 +650,56 @@ describe('menuImportFileSchema', () => {
     expect(file(5).success).toBe(true);
     expect(file(6).success).toBe(true);
     expect(file(7).success).toBe(true);
-    expect(file(8).success).toBe(false);
+    expect(file(8).success).toBe(true);
+    expect(file(9).success).toBe(false);
+  });
+
+  it('version 8: an item named by its till id is found by it alone — two items of one name, the right one; an id the till lacks makes nothing', () => {
+    const ORIGINAL = '01a16cee-8648-722e-b685-e69b49747a50';
+    const COPY = '01a1724d-f7d2-7ee1-918c-72c14b4ab413';
+    const v8 = (items: unknown[]) =>
+      menuImportFileSchema.parse({ format: 'cheeseoclock-menu-import', version: 8, categories: [{ name: 'Pizza' }], ingredients: [], items });
+    const entry = (extra: Record<string, unknown>) => ({ category: 'Pizza', priceCents: 170000, ...extra });
+    // The cashier's copy of the deal (25 Oct 2026): two items of one name, the original switched off.
+    const till = shop({
+      items: [item(ORIGINAL, 'Test Mega Box', { isActive: false, webAvailability: 'off' }), item(COPY, 'TEST MEGA BOX')],
+    });
+    // By name: more than one could be it — neither changes (as before version 8).
+    expect(planMenuImport(v8([entry({ name: 'Test Mega Box', onSale: true })]), till).preview.items[0]).toMatchObject({ action: 'skip' });
+    // By id: the original back on (and on the website), the copy off.
+    const plan = planMenuImport(
+      v8([
+        entry({ name: 'Test Mega Box', tillItemId: ORIGINAL, onSale: true, webAvailability: 'on' }),
+        entry({ name: 'TEST MEGA BOX (copy)', tillItemId: COPY, onSale: false }),
+      ]),
+      till,
+    );
+    expect(plan.preview.items.map((r) => [r.action, r.existingName, r.changes])).toEqual([
+      ['update', 'Test Mega Box (hidden)', ['switched back on', 'on the website: not sold → sold']],
+      ['update', 'TEST MEGA BOX', ['switched off (off the menu)']],
+    ]);
+    expect(plan.ops.items.map((o) => [o.existingId, o.update])).toEqual([
+      [ORIGINAL, { isActive: true, webAvailability: 'on' }],
+      [COPY, { isActive: false }],
+    ]);
+    // A row an id claims is no other item's to find by name.
+    const claimed = planMenuImport(
+      v8([entry({ name: 'Test Mega Box', tillItemId: ORIGINAL }), entry({ name: 'Test Mega Box Deal', aliases: ['TEST MEGA BOX'] })]),
+      till,
+    );
+    expect(claimed.preview.items[1]).toMatchObject({ action: 'same', existingName: 'TEST MEGA BOX' });
+    // An id this till does not have: skipped, never made — even with a name the till has.
+    const lost = planMenuImport(v8([entry({ name: 'Test Mega Box', tillItemId: '01a00000-0000-7000-8000-000000000000' })]), till);
+    expect(lost.preview.items[0]).toMatchObject({
+      action: 'skip',
+      reason: 'This till has no item with the id the file names (01a00000-0000-7000-8000-000000000000)',
+    });
+    expect(lost.ops.items).toEqual([]);
+    expect(lost.preview.summary).toMatchObject({ newItems: 0, skipped: 1 });
+    // Two items naming one till item, or an id that is not one, are refused with the file.
+    expect(() => v8([entry({ name: 'A', tillItemId: COPY }), entry({ name: 'B', tillItemId: COPY })])).toThrow();
+    expect(() => v8([entry({ name: 'A', tillItemId: 'mega' })])).toThrow();
+    expect(() => v8([entry({ name: 'A', webAvailability: 'sometimes' })])).toThrow();
   });
 
   it('version 7: the file renames an item it finds by an alias, replaces its description and sets its place — only where it says so', () => {
