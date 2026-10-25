@@ -1,6 +1,6 @@
 {
   "name": "@cheeseoclock/pos",
-  "version": "0.7.55",
+  "version": "0.7.56",
   "private": true,
   "description": "CheeseOclock POS Electron desktop app",
   "author": {
