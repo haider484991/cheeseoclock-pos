@@ -1,5 +1,8 @@
+import { waitUntil } from '@vercel/functions';
 import { sql } from '@/lib/db';
 import { isBridgeAuthorized, unauthorized } from '@/lib/bridge-auth';
+import { sweepComments } from '@/lib/comment-replies';
+import { getShopFacts } from '@/lib/site-facts';
 import { unconfirmedOrderCutoff } from '@/lib/store-status';
 import { ensureWebOrderColumns } from '@/lib/web-order-columns';
 import { readDiscountParts, type WebDiscountPart } from '@cheeseoclock/shared-types';
@@ -26,6 +29,9 @@ const CLAIM_TTL_SECONDS = 180;
  */
 export async function GET(req: Request): Promise<Response> {
   if (!isBridgeAuthorized(req)) return unauthorized();
+  // While the till is on it asks every few seconds: the comment auto-replies ride along, at most every 3 minutes,
+  // after this answer has gone (lib/comment-replies).
+  waitUntil(sweepComments(getShopFacts));
   try {
     await ensureWebOrderColumns();
     // Expire orders nobody confirmed in time BEFORE handing out the list, so

@@ -1,3 +1,4 @@
+import { SITE_URL } from './seo';
 import { sendText } from './whatsapp-send';
 import { claimOrderUpdate, recordBotMessage, whatsappOrderOf } from './whatsapp-store';
 
@@ -27,7 +28,13 @@ export function updateWords(status: UpdateStatus, o: { fulfilment: string; numbe
     case 'out_for_delivery':
       return `🛵 Aapka order${no} rider ke saath nikal gaya — thodi der mein pohanch jayega.`;
     case 'delivered':
-      return 'Shukriya! Umeed hai maza aaya 🧀 Agli baar bhi yahin *menu* likh kar order karein.';
+      // The Google review ask (26 Oct 2026, the user: "Google reviews after delivery"): the site's /review short link
+      // opens the listing's "write a review" page (next.config.mjs).
+      return [
+        'Shukriya! Umeed hai maza aaya 🧀',
+        `Sirf 1 minute: Google par review de dein, hamein bohot madad milti hai ⭐ ${SITE_URL}/review`,
+        'Agli baar bhi yahin *menu* likh kar order karein.',
+      ].join('\n');
     case 'cancelled':
       return `Maaf kijiye, aapka order${no} cancel ho gaya. Koi sawal ho to yahin message karein.`;
     default:

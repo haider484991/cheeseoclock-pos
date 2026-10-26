@@ -466,3 +466,15 @@ CREATE TABLE IF NOT EXISTS capi_till_sales (
   order_id TEXT PRIMARY KEY,
   sent_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Comment auto-replies (src/lib/comment-replies.ts): each Facebook / Instagram comment acted on once, and when the
+-- last sweep ran (at most every 3 minutes).
+CREATE TABLE IF NOT EXISTS comment_actions (
+  comment_id TEXT PRIMARY KEY,
+  platform   TEXT NOT NULL,
+  action     TEXT NOT NULL,
+  at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS comment_sweeps (
+  id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  at TIMESTAMPTZ NOT NULL
+);

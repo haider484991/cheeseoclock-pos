@@ -1,3 +1,5 @@
+import { waitUntil } from '@vercel/functions';
+import { sweepComments } from '@/lib/comment-replies';
 import { getShopFacts } from '@/lib/site-facts';
 import { getStoreStatus } from '@/lib/store-status';
 import type { OrderAnswer } from '@/lib/whatsapp-bot';
@@ -80,6 +82,8 @@ export async function POST(req: Request): Promise<Response> {
     return new Response('bad json', { status: 400 });
   }
   const call = readCall(body);
+  // The comment auto-replies ride along with WhatsApp too (at most every 3 minutes; lib/comment-replies).
+  waitUntil(sweepComments(getShopFacts));
   try {
     // Staff first: a reply they sent in the same call holds the bot back.
     for (const m of call.staff) await recordStaffMessage(m);

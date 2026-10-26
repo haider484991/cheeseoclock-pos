@@ -95,6 +95,23 @@ export async function getWhatsappSummary(from: string, to: string): Promise<WaSu
   };
 }
 
+/**
+ * Meta's free tier (from 1 Oct 2026): 1,000 service messages a month per number; after that each is charged, and with
+ * no payment method on the account Meta stops delivering them — the bot would go quiet until the 1st. Staff's own
+ * messages from the phone app are not part of it.
+ */
+export const FREE_SERVICE_MESSAGES = 1000;
+
+/** The bot's messages (and order updates) sent since the 1st of this month (UTC, as Meta counts). */
+export async function getBotMessagesThisMonth(now: Date = new Date()): Promise<number> {
+  await ready();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+  const rows = (await sql()`
+    SELECT count(*) AS n FROM wa_events WHERE direction = 'bot' AND at >= ${start}
+  `) as Array<{ n: unknown }>;
+  return n(rows[0]?.n);
+}
+
 export interface WaAdRow {
   /** Null: customers who wrote without an ad. */
   adId: string | null;

@@ -90,6 +90,19 @@ describe('dashboard WhatsApp', () => {
     expect(chats[2]).toMatchObject({ name: 'Customer 01', phone: '+923001110001', botReplied: false, staffReplied: false });
   });
 
+  it('counts the bot’s messages since the 1st of the month, not last month’s or staff’s', async () => {
+    for (const [id, dir, at] of [
+      ['b1', 'bot', '2026-10-26T09:00:00Z'],
+      ['b2', 'bot', '2026-10-01T00:00:01Z'],
+      ['b3', 'bot', '2026-09-30T23:59:59Z'],
+      ['s1', 'staff', '2026-10-26T09:00:00Z'],
+    ] as const) {
+      await db.pg.query(`INSERT INTO wa_events (id, wa_id, direction, kind, at) VALUES ($1, '923001110001', $2, 'text', $3)`, [id, dir, at]);
+    }
+    expect(await wa.getBotMessagesThisMonth(new Date('2026-10-26T12:00:00Z'))).toBe(2);
+    expect(await wa.getBotMessagesThisMonth(new Date('2026-11-01T00:00:00Z'))).toBe(0);
+  });
+
   it('a period with nobody writing is empty', async () => {
     expect(await wa.getWhatsappSummary('2026-10-20', '2026-10-21')).toMatchObject({ customers: 0, orders: 0, salesCents: 0 });
     expect(await wa.getWhatsappChats('2026-10-20', '2026-10-21')).toEqual([]);
