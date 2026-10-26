@@ -32,6 +32,7 @@ export * from './web-bridge.js';
 export * from './website-category-discount.js';
 export * from './website-messages.js';
 export * from './website-shop.js';
+export * from './website-copy.js';
 export * from './phone.js';
 export * from './delivery-areas.js';
 export * from './delivery-charge-tax.js';

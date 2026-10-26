@@ -148,6 +148,11 @@ const api: RendererApi = {
     cancelStagedRestore: () => invoke('backup:cancelStagedRestore', undefined),
     health: () => invoke('backup:health', undefined),
   },
+  websiteCopy: {
+    status: () => invoke('websiteCopy:status', undefined),
+    takeNow: () => invoke('websiteCopy:takeNow', undefined),
+    restore: (req) => invoke('websiteCopy:restore', req),
+  },
   customers: {
     list: (req) => invoke('customers:list', req),
     page: (req) => invoke('customers:page', req),

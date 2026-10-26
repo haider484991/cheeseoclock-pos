@@ -18,6 +18,7 @@ import {
 } from './backup-service.js';
 import { MenuPackageService, WebsiteNotReadyError, setMenuPackageService } from './menu-package-service.js';
 import { DashboardPushService, setDashboardPushService } from './dashboard-push.js';
+import { WebsiteCopyService, setWebsiteCopyService } from './website-copy-service.js';
 import { readTillLink } from './till-link.js';
 import { sealSecret } from './secret-seal.js';
 import { SYNC_SNAPSHOT_KEYS } from '../db/repositories/sync-repo.js';
@@ -464,6 +465,8 @@ class WebOrdersBridge {
   private menuPackages: MenuPackageService | null = null;
   /** The owner's phone dashboard (v0.7.40): this till's figures, sent while it has the website link. */
   private dashboardPush: DashboardPushService | null = null;
+  /** The website's own data copied to this till once a day, and put back from here (27 Oct 2026). */
+  private websiteCopy: WebsiteCopyService | null = null;
 
   init(db: AppDatabase, deviceId: string): void {
     this.db = db;
@@ -504,6 +507,25 @@ class WebOrdersBridge {
       log,
     });
     setDashboardPushService(this.dashboardPush);
+    this.websiteCopy?.stop();
+    this.websiteCopy = new WebsiteCopyService({
+      db,
+      dir: path.join(app.getPath('userData'), 'website-copies'),
+      api: async (p, init) => {
+        const res = await this.callWebsite(p, init ? { method: init.method, body: init.body } : undefined);
+        return { status: res.status, json: await res.json().catch(() => null) };
+      },
+      linked: () => (this.db ? isWebBridgeReady(getWebBridgeConfig(this.db)).ok : false),
+      siteUrl: () => (this.db ? getWebBridgeConfig(this.db).siteUrl || null : null),
+      // The put-back brought the website's menu row (and the settings blocks in it) as it was: send this till's
+      // blocks if the website now lacks or has older ones, read afresh.
+      afterRestore: async () => {
+        this.settingsHeldRead = false;
+        this.settingsChanged();
+      },
+      log,
+    });
+    setWebsiteCopyService(this.websiteCopy);
     // The areas or the pick-up offer changed — saved here or arrived from the other till: the
     // website gets the newer block from ANY till with the link.
     this.stopSettingsListener?.();
@@ -870,6 +892,9 @@ class WebOrdersBridge {
     // The phone dashboard too: this till's figures go whenever the link is set up (the owner's switch, the service's own).
     if (isWebBridgeReady(cfg).ok) this.dashboardPush?.start();
     else this.dashboardPush?.stop();
+    // And the website's own data copied here, whenever the link is set up.
+    if (isWebBridgeReady(cfg).ok) this.websiteCopy?.start();
+    else this.websiteCopy?.stop();
     // Tell the website at once, above all when this is a switch OFF: the site
     // should stop taking orders the moment the cashier unticks the box, not
     // whenever the last heartbeat happens to go stale.
@@ -928,6 +953,7 @@ class WebOrdersBridge {
     this.stopSettingsListener = null;
     this.menuPackages?.stop();
     this.dashboardPush?.stop();
+    this.websiteCopy?.stop();
   }
 
   /** The website switch on this till, for the phone dashboard's live block. */

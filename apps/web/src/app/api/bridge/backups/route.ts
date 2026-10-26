@@ -4,8 +4,10 @@ import { z } from 'zod';
 import { sql } from '@/lib/db';
 import { isBridgeAuthorized, unauthorized } from '@/lib/bridge-auth';
 import { selectBackupsToDelete } from '@/lib/backup-retention';
+import { backupObjects, type BackupObjects, type CopyRecord } from '@/lib/backup-objects';
 import {
   CHUNKS_FORMAT,
+  CHUNK_GRACE_HOURS,
   CHUNK_HASH_RE,
   MAX_CHUNKS_PER_COPY,
   collectUnusedChunks,
@@ -35,7 +37,7 @@ const LegacyUploadSchema = z.object({
 /** Current tills: the copy as an ordered list of chunks already uploaded (see lib/backup-store.ts). */
 const ChunkedUploadSchema = z.object({
   format: z.literal(CHUNKS_FORMAT),
-  deviceId: z.string().min(1),
+  deviceId: z.string().min(1).max(200),
   fileName: z.string().min(1).max(200),
   chunks: z.array(z.string().regex(CHUNK_HASH_RE)).min(1).max(MAX_CHUNKS_PER_COPY),
   /** SHA-256 of the whole copy (the POS's row export); a restore checks the reassembled copy against it. */
@@ -48,13 +50,17 @@ const ChunkedUploadSchema = z.object({
  * Bridge: POS uploads a database backup. The server records its own SHA-256
  * of the bytes and its own clock for created_at; there is no endpoint to
  * modify or delete a copy, and rotation follows a policy a burst of uploads
- * cannot game (see lib/backup-retention.ts).
+ * cannot game (see lib/backup-retention.ts). With a Blob store
+ * (lib/backup-objects.ts) a chunked copy is recorded there, out of the
+ * database, so the database's limits and outages never take the copies with it.
  */
 export async function POST(req: Request): Promise<Response> {
   if (!isBridgeAuthorized(req)) return unauthorized();
   try {
-    await ensureBackupSchema();
     const body: unknown = await req.json();
+    const objects = backupObjects();
+    if ((body as { format?: unknown } | null)?.format === CHUNKS_FORMAT && objects) return await recordInBlob(objects, body);
+    await ensureBackupSchema();
     if ((body as { format?: unknown } | null)?.format === CHUNKS_FORMAT) return await recordChunkedCopy(body);
     const parsed = LegacyUploadSchema.safeParse(body);
     if (!parsed.success) {
@@ -134,6 +140,41 @@ async function recordChunkedCopy(body: unknown): Promise<Response> {
   return Response.json({ ok: true, data: { id, sizeBytes: rawBytes, sha256 } });
 }
 
+/** The same, recorded in the Blob store: its chunks must be stored there. */
+async function recordInBlob(objects: BackupObjects, body: unknown): Promise<Response> {
+  const parsed = ChunkedUploadSchema.safeParse(body);
+  if (!parsed.success) return Response.json({ ok: false, error: 'validation' }, { status: 400 });
+  const { deviceId, fileName, chunks, sha256, rawBytes, meta } = parsed.data;
+  const have = await objects.chunks();
+  const missing = [...new Set(chunks)].filter((h) => !have.has(h));
+  if (missing.length > 0) {
+    return Response.json(
+      { ok: false, error: 'missing_chunks', message: 'Some chunks are not on the site yet.', missing },
+      { status: 409 },
+    );
+  }
+  const total = chunks.reduce((n, h) => n + (have.get(h)?.rawBytes ?? 0), 0);
+  if (total !== rawBytes) {
+    return Response.json(
+      { ok: false, error: 'size_mismatch', message: 'The chunks do not add up to the copy size.' },
+      { status: 400 },
+    );
+  }
+  const record: CopyRecord = {
+    id: uuidv7(),
+    deviceId,
+    fileName,
+    sizeBytes: rawBytes,
+    sha256,
+    meta: (meta as Record<string, unknown> | undefined) ?? null,
+    chunks,
+    createdAt: new Date().toISOString(),
+  };
+  await objects.putCopy(record);
+  await applyRetentionWithBlob(objects, deviceId);
+  return Response.json({ ok: true, data: { id: record.id, sizeBytes: rawBytes, sha256 } });
+}
+
 /** Rotate this device's copies (lib/backup-retention.ts), then drop chunks nothing uses. */
 async function applyRetention(deviceId: string): Promise<void> {
   const rows = (await sql()`
@@ -154,40 +195,108 @@ async function applyRetention(deviceId: string): Promise<void> {
 }
 
 /**
+ * One rotation over this device's copies in both places — the Blob store's and the ones made before it, still in the
+ * database — so the old ones rotate out as new ones arrive and the database empties of copies by itself. A database
+ * that does not answer leaves its copies for the next time; the Blob store's rotate on their own.
+ */
+async function applyRetentionWithBlob(objects: BackupObjects, deviceId: string): Promise<void> {
+  const allBlob = await objects.copies();
+  const blob = allBlob.filter((r) => r.deviceId === deviceId);
+  let dbRows: Array<{ id: string; created_at: string; reason: string | null }> | null = null;
+  try {
+    await ensureBackupSchema();
+    dbRows = (await sql()`
+      SELECT id, created_at, meta_json->>'reason' AS reason FROM pos_backups WHERE device_id = ${deviceId}
+    `) as Array<{ id: string; created_at: string; reason: string | null }>;
+  } catch (e) {
+    console.warn('backups: the database did not answer; rotating the Blob store copies only', e);
+  }
+  const reasonOf = (r: CopyRecord) => (typeof r.meta?.['reason'] === 'string' ? (r.meta['reason'] as string) : null);
+  const toDelete = new Set(
+    selectBackupsToDelete([
+      ...blob.map((r) => ({ id: r.id, createdAt: r.createdAt, reason: reasonOf(r) })),
+      ...(dbRows ?? []).map((r) => ({ id: r.id, createdAt: r.created_at, reason: r.reason })),
+    ]),
+  );
+  const goneBlob = blob.filter((r) => toDelete.has(r.id));
+  await objects.deleteCopies(goneBlob);
+  const goneDb = (dbRows ?? []).filter((r) => toDelete.has(r.id)).map((r) => r.id);
+  if (goneDb.length > 0) {
+    await sql()`DELETE FROM pos_backups WHERE device_id = ${deviceId} AND id = ANY(${goneDb}::uuid[])`;
+  }
+  if (dbRows) await collectUnusedChunks();
+  // Chunks no Blob copy names any more, once they have also sat a grace period (a copy being recorded right now
+  // names chunks uploaded a moment ago).
+  const gone = new Set(goneBlob.map((r) => r.id));
+  const live = new Set(allBlob.filter((r) => !gone.has(r.id)).flatMap((r) => r.chunks));
+  const cutoff = Date.now() - CHUNK_GRACE_HOURS * 3_600_000;
+  const unused = [...(await objects.chunks()).values()].filter((c) => !live.has(c.hash) && c.uploadedAt.getTime() < cutoff);
+  await objects.deleteChunks(unused);
+}
+
+type ListedCopy = {
+  id: string;
+  deviceId: string;
+  fileName: string;
+  sizeBytes: number;
+  createdAt: string;
+  sha256: string | null;
+  meta: Record<string, unknown> | null;
+};
+
+/**
  * Bridge: list every copy the site holds, from every till (metadata only — no
  * blobs). A reinstalled PC has a new device id and would otherwise never see
- * the copies its predecessor made.
+ * the copies its predecessor made. With a Blob store: its copies and the ones
+ * made before it (while the database answers).
  */
 export async function GET(req: Request): Promise<Response> {
   if (!isBridgeAuthorized(req)) return unauthorized();
   try {
-    await ensureBackupSchema();
-    const rows = (await sql()`
-      SELECT id, device_id, file_name, size_bytes, created_at, sha256, meta_json
-        FROM pos_backups
-       ORDER BY created_at DESC
-       LIMIT 200
-    `) as Array<{
-      id: string;
-      device_id: string;
-      file_name: string;
-      size_bytes: number;
-      created_at: string;
-      sha256: string | null;
-      meta_json: Record<string, unknown> | null;
-    }>;
-    return Response.json({
-      ok: true,
-      data: rows.map((r) => ({
+    const objects = backupObjects();
+    const fromBlob: ListedCopy[] = objects
+      ? (await objects.copies()).map((r) => ({
+          id: r.id,
+          deviceId: r.deviceId,
+          fileName: r.fileName,
+          sizeBytes: r.sizeBytes,
+          createdAt: r.createdAt,
+          sha256: r.sha256,
+          meta: r.meta,
+        }))
+      : [];
+    let fromDb: ListedCopy[] = [];
+    try {
+      await ensureBackupSchema();
+      const rows = (await sql()`
+        SELECT id, device_id, file_name, size_bytes, created_at, sha256, meta_json
+          FROM pos_backups
+         ORDER BY created_at DESC
+         LIMIT 200
+      `) as Array<{
+        id: string;
+        device_id: string;
+        file_name: string;
+        size_bytes: number;
+        created_at: string;
+        sha256: string | null;
+        meta_json: Record<string, unknown> | null;
+      }>;
+      fromDb = rows.map((r) => ({
         id: r.id,
         deviceId: r.device_id,
         fileName: r.file_name,
         sizeBytes: r.size_bytes,
-        createdAt: r.created_at,
+        createdAt: new Date(r.created_at).toISOString(),
         sha256: r.sha256,
         meta: r.meta_json,
-      })),
-    });
+      }));
+    } catch (e) {
+      if (!objects) throw e;
+      console.warn('GET /api/bridge/backups: the database did not answer; listing the Blob store copies only', e);
+    }
+    const all = [...fromBlob, ...fromDb].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 200);
+    return Response.json({ ok: true, data: all });
   } catch (e) {
     console.error('GET /api/bridge/backups failed', e);
     return Response.json({ ok: false, error: 'internal' }, { status: 500 });

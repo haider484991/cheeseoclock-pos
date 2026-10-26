@@ -189,6 +189,7 @@ import type { CostedRecipeCalc, RecipeCalc, RecipeCalcRequest, TypicalPicksView 
 import type { OrderHistoryFilter, OrderHistoryPage, RecentCounterOrder } from './order-history.js';
 import type { AcknowledgeAlertsRequest, AlertSoundSettings, AlertWatch, PendingAlerts } from './alerts.js';
 import type { PublishMenuSummary, SettingsPublishStatus, WebOrdersShiftPause } from './web-bridge.js';
+import type { WebsiteCopyRestoreResult, WebsiteCopyStatus } from './website-copy.js';
 import type {
   ReportVariance,
   StockCountDetail,
@@ -2536,6 +2537,21 @@ export interface IpcContract {
   'backup:clearSecondCopy': {
     request: undefined;
     response: ApiResult<BackupSecondCopyStatus>;
+  };
+  /** The website's own data copied to this till once a day (website-copy-service.ts): the copies and how the last went. */
+  'websiteCopy:status': {
+    request: undefined;
+    response: ApiResult<WebsiteCopyStatus>;
+  };
+  /** Take a website copy now (manager or owner). */
+  'websiteCopy:takeNow': {
+    request: undefined;
+    response: ApiResult<WebsiteCopyStatus>;
+  };
+  /** Owner only: put a copy back on the website (only rows it lacks; never over newer ones). No file = the best one. */
+  'websiteCopy:restore': {
+    request: { fileName?: string } | undefined;
+    response: ApiResult<WebsiteCopyRestoreResult>;
   };
 
   // Audit trail (hash-chained; see apps/pos/electron/db/audit-chain.ts)

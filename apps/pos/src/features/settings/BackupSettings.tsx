@@ -9,6 +9,7 @@ import {
   Cloud,
   DatabaseBackup,
   Download,
+  Globe,
   HardDrive,
   RotateCcw,
   ShieldAlert,
@@ -51,6 +52,7 @@ export function BackupsPanel({ onGoToOnline }: { onGoToOnline: () => void }) {
       <BackupStatusCard onGoToOnline={onGoToOnline} />
       <CopiesCard />
       <SecondCopyCard />
+      <WebsiteCopyCard />
       <UsbCard />
       <AdvancedBackups onGoToOnline={onGoToOnline} />
     </div>
@@ -426,6 +428,136 @@ function SecondCopyCard() {
         {sc?.dir && (
           <Button variant="secondary" onClick={() => clear.mutate()} disabled={clear.isPending}>
             {clear.isPending ? 'Switching off…' : 'Stop the second copies'}
+          </Button>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/** Copies of the website shown before the rest are folded away. */
+const WEBSITE_COPY_ROWS = 3;
+
+/**
+ * The other way round from the cloud copies: the website's own data (its orders, the phone dashboard's sign-ins,
+ * the menu files, the WhatsApp chats, the published menu) kept on this computer once a day, and put back from here
+ * if the website's database is ever lost or replaced (website-copy-service.ts).
+ */
+function WebsiteCopyCard() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [showAll, setShowAll] = useState(false);
+  const q = useQuery({ queryKey: ['backup', 'websiteCopy'], queryFn: () => ipc.websiteCopy.status(), refetchInterval: 30_000 });
+  const st = q.data;
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['backup', 'websiteCopy'] });
+  const take = useMutation({
+    mutationFn: () => ipc.websiteCopy.takeNow(),
+    onSuccess: () => {
+      refresh();
+      toast({ title: 'Website copied', description: 'The website’s data is saved on this computer.', variant: 'success' });
+    },
+    onError: (e) => {
+      refresh();
+      toast({ title: 'Could not copy the website', description: errorMessage(e), variant: 'error' });
+    },
+  });
+  const restore = useMutation({
+    mutationFn: (fileName?: string) => ipc.websiteCopy.restore(fileName),
+    onSuccess: (r) => {
+      refresh();
+      toast({
+        title: 'Website data put back',
+        description: r.inserted > 0 ? `${r.inserted} records went back on the website.` : 'The website already had everything in that copy.',
+        variant: 'success',
+      });
+    },
+    onError: (e) => toast({ title: 'Could not put it back', description: errorMessage(e), variant: 'error' }),
+  });
+  const askRestore = (fileName: string | undefined, when: string) =>
+    void askConfirm(
+      `Put the website’s data from ${when} back on the website?
+Only what the website is missing goes back: nothing on it now is changed or removed. Needs the owner login.`,
+    ).then((yes) => {
+      if (yes) restore.mutate(fileName);
+    });
+  const copies = st?.copies ?? [];
+  const shown = showAll ? copies : copies.slice(0, WEBSITE_COPY_ROWS);
+  const replacedCopy = st?.replaced ? copies.find((c) => c.websiteId === st.replaced?.from) : undefined;
+
+  return (
+    <Card>
+      <div className="mb-1 flex items-center gap-2">
+        <Globe className="h-5 w-5" />
+        <h2 className="text-lg font-semibold">The website’s data on this computer</h2>
+      </div>
+      <p className="mb-3 text-sm text-stone-500">
+        Once a day the till copies what only the website has — its orders, the phone dashboard’s sign-ins, the menu
+        files, the WhatsApp chats and the menu it shows — here, the newest 14 kept (and to the second-copy folder when
+        one is set). If the website’s database is ever lost, the till puts it back.
+      </p>
+      {st?.replaced && (
+        <div role="alert" className="mb-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="space-y-2">
+            <p>
+              The website started afresh ({fmtWhen(st.replaced.at)}): its database was replaced.{' '}
+              {replacedCopy ? `This computer has its data from ${fmtWhen(replacedCopy.takenAt)}.` : ''}
+            </p>
+            {replacedCopy && (
+              <Button size="sm" onClick={() => askRestore(replacedCopy.fileName, fmtWhen(replacedCopy.takenAt))} disabled={restore.isPending || st.busy}>
+                {restore.isPending ? 'Putting it back…' : 'Put the website’s data back'}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+      {!st?.linked ? (
+        <p className="mb-3 text-sm text-stone-600 dark:text-stone-300">
+          Set up the website link first (Settings → Online orders); the copies start by themselves after that.
+        </p>
+      ) : (
+        <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+          <dt className="text-stone-500">Last copy</dt>
+          <dd>{st.lastAt ? fmtWhen(st.lastAt) : 'Not yet — the first one is taken a few minutes after the till starts'}</dd>
+          {st.lastError && (
+            <>
+              <dt className="text-red-700">Last try failed</dt>
+              <dd className="text-red-700">
+                {fmtWhen(st.lastError.at)}: {st.lastError.message}
+              </dd>
+            </>
+          )}
+          {st.lastRestore && (
+            <>
+              <dt className="text-stone-500">Last put back</dt>
+              <dd>
+                {fmtWhen(st.lastRestore.at)} ({st.lastRestore.by === 'auto' ? 'by itself' : 'by the owner'}, {st.lastRestore.inserted} records)
+              </dd>
+            </>
+          )}
+        </dl>
+      )}
+      {shown.length > 0 && (
+        <ul className="mb-3 divide-y divide-stone-200 rounded-md border border-stone-200 text-sm dark:divide-stone-700 dark:border-stone-700">
+          {shown.map((c) => (
+            <li key={c.fileName} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+              <span>
+                {fmtWhen(c.takenAt)} <span className="text-stone-500">· {c.rows} records · {fmtBytes(c.bytes)}</span>
+              </span>
+              <Button size="sm" variant="secondary" onClick={() => askRestore(c.fileName, fmtWhen(c.takenAt))} disabled={restore.isPending || st?.busy}>
+                Put back…
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button variant="secondary" onClick={() => take.mutate()} disabled={!st?.linked || take.isPending || st.busy}>
+          {take.isPending || st?.busy ? 'Copying…' : 'Copy the website now'}
+        </Button>
+        {copies.length > WEBSITE_COPY_ROWS && (
+          <Button variant="ghost" onClick={() => setShowAll((v) => !v)}>
+            {showAll ? 'Show fewer' : `Show all ${copies.length}`}
           </Button>
         )}
       </div>

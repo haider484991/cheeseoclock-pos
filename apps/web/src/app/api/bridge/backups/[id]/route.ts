@@ -1,6 +1,7 @@
 import { sql } from '@/lib/db';
 import { isBridgeAuthorized, unauthorized } from '@/lib/bridge-auth';
-import { ensureBackupSchema } from '@/lib/backup-store';
+import { backupObjects } from '@/lib/backup-objects';
+import { CHUNKS_FORMAT, ensureBackupSchema } from '@/lib/backup-store';
 
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
@@ -11,7 +12,9 @@ export const maxDuration = 30;
  * server recorded at upload so the POS can refuse a damaged or altered copy.
  * A one-blob copy comes back as dataBase64 (sha256 of the gzip); a chunked
  * copy as its chunk list (sha256 of the raw file) — the POS then fetches the
- * chunks from /api/bridge/backup-chunks/[hash].
+ * chunks from /api/bridge/backup-chunks/fetch. A copy in the Blob store
+ * (lib/backup-objects.ts) is found there first, so a restore works while the
+ * database does not answer.
  */
 export async function GET(
   req: Request,
@@ -19,6 +22,25 @@ export async function GET(
 ): Promise<Response> {
   if (!isBridgeAuthorized(req)) return unauthorized();
   try {
+    const objects = backupObjects();
+    const record = objects ? (await objects.copies()).find((r) => r.id === params.id) : undefined;
+    if (record) {
+      return Response.json({
+        ok: true,
+        data: {
+          id: record.id,
+          deviceId: record.deviceId,
+          fileName: record.fileName,
+          sizeBytes: record.sizeBytes,
+          dataBase64: null,
+          format: CHUNKS_FORMAT,
+          chunks: record.chunks,
+          createdAt: record.createdAt,
+          sha256: record.sha256,
+          meta: record.meta,
+        },
+      });
+    }
     await ensureBackupSchema();
     const rows = (await sql()`
       SELECT id, device_id, file_name, size_bytes, data_base64, created_at,

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sql } from '@/lib/db';
 import { isBridgeAuthorized, unauthorized } from '@/lib/bridge-auth';
+import { backupObjects } from '@/lib/backup-objects';
 import {
   CHUNK_HASH_RE,
   MAX_CHUNK_BASE64_CHARS,
@@ -33,12 +34,14 @@ const BatchSchema = z.object({
 /**
  * Bridge: store a batch of chunks of a cloud copy. Every chunk is verified
  * against its name before anything is kept; storing a chunk that is already
- * here is a no-op. One bad chunk rejects the whole batch.
+ * here is a no-op. One bad chunk rejects the whole batch. With a Blob store
+ * (lib/backup-objects.ts) the chunks go there, never into the database.
  */
 export async function POST(req: Request): Promise<Response> {
   if (!isBridgeAuthorized(req)) return unauthorized();
   try {
-    await ensureBackupSchema();
+    const objects = backupObjects();
+    if (!objects) await ensureBackupSchema();
     const parsed = BatchSchema.safeParse(await req.json());
     if (!parsed.success) return Response.json({ ok: false, error: 'validation' }, { status: 400 });
     const checked = [];
@@ -50,7 +53,14 @@ export async function POST(req: Request): Promise<Response> {
           { status: 400 },
         );
       }
-      checked.push({ ...c, rawBytes: check.rawBytes, storedBytes: check.gz.length });
+      checked.push({ ...c, gz: check.gz, rawBytes: check.rawBytes, storedBytes: check.gz.length });
+    }
+    if (objects) {
+      const have = await objects.chunks();
+      for (const c of checked) {
+        if (!have.has(c.hash)) await objects.putChunk(c.hash, c.rawBytes, c.gz);
+      }
+      return Response.json({ ok: true, data: { stored: checked.length } });
     }
     for (const c of checked) {
       await sql()`

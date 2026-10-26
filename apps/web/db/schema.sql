@@ -478,3 +478,11 @@ CREATE TABLE IF NOT EXISTS comment_sweeps (
   id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   at TIMESTAMPTZ NOT NULL
 );
+
+-- This website's identity (lib/website-copy.ts): made once per database; a new database gets a new one, which is how
+-- the till sees the website was replaced and puts its copy of the website's data back.
+CREATE TABLE IF NOT EXISTS site_identity (
+  id          INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  website_id  UUID NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

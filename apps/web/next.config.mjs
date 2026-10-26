@@ -15,6 +15,8 @@ const nextConfig = {
       ...(config.resolve.extensionAlias ?? {}),
       '.js': ['.ts', '.tsx', '.js'],
     };
+    // A file's text with `?raw` (lib/website-copy.ts reads db/schema.sql to set up a new database).
+    config.module.rules.push({ resourceQuery: /^\?raw$/, type: 'asset/source' });
     return config;
   },
   // The owner's phone dashboard: private pages and their own API (src/app/dashboard). Never indexed,

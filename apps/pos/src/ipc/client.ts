@@ -336,6 +336,12 @@ export const ipc = {
     cancelStagedRestore: () => unwrap(window.api.backup.cancelStagedRestore()),
     health: () => unwrap(window.api.backup.health()),
   },
+  /** The website's own data kept on this till (Settings → Backups → Website copy). */
+  websiteCopy: {
+    status: () => unwrap(window.api.websiteCopy.status()),
+    takeNow: () => unwrap(window.api.websiteCopy.takeNow()),
+    restore: (fileName?: string) => unwrap(window.api.websiteCopy.restore(fileName ? { fileName } : undefined)),
+  },
   tables: {
     listSections: () => unwrap(window.api.tables.listSections()),
     list: (sectionId?: string) =>
