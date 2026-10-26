@@ -20,6 +20,7 @@ import { checkOrderRate, clientIpHash, recordOrderPlaced } from '@/lib/rate-limi
 import { parseStoredSettings } from '@/lib/site-facts';
 import { getStoreStatus } from '@/lib/store-status';
 import { ensureWebOrderColumns } from '@/lib/web-order-columns';
+import { recordLinkOrder, resolveLink, type WaLinkOwner } from '@/lib/whatsapp-store';
 import {
   BUY_1_GET_1_SOCIAL_MESSAGE,
   buy1Get1ClosedMessage,
@@ -133,6 +134,11 @@ const PlaceOrderSchema = z
      * server-side Purchase then shows in Events Manager → Test events. Anything else is ignored.
      */
     metaTestCode: z.string().max(40).optional(),
+    /**
+     * The customer's personal WhatsApp order link the page was opened with (lib/wa-link, 26 Oct 2026): the order is
+     * a WhatsApp order, and the ad that brought the chat is its ad. An unknown or expired one is ignored.
+     */
+    waToken: z.string().trim().max(40).optional(),
     /** Honeypot — real users never fill this hidden field. */
     website: z.string().max(0).optional(),
   })
@@ -173,6 +179,16 @@ async function hasDeliveredOrder(phone: string): Promise<boolean> {
   } catch (e) {
     console.error('delivered-order lookup failed — no call-first warning', e);
     return true;
+  }
+}
+
+/** The WhatsApp link's owner, or null — unknown, expired, or the lookup failed (an order is never refused for it). */
+async function whatsappLinkOf(token: string): Promise<WaLinkOwner | null> {
+  try {
+    return await resolveLink(token);
+  } catch (e) {
+    console.error('whatsapp link lookup failed — ordered as a website order', e);
+    return null;
   }
 }
 
@@ -470,10 +486,13 @@ export async function POST(req: Request): Promise<Response> {
         orderNotes = orderNotes ? `${reminder}. ${orderNotes}` : reminder;
       }
     }
+    // Opened from the customer's WhatsApp order link: the number they wrote to the shop from is real, so when they
+    // order with it there is nothing to call and confirm.
+    const waLink = input.waToken ? await whatsappLinkOf(input.waToken) : null;
     // A number the shop has never delivered to, or a made-up-looking address or number: the notes lead with
     // "CALL TO CONFIRM BEFORE COOKING" (lib/call-first, 24 Oct 2026). Never a reason to refuse.
     const callFirst = callFirstLine({
-      trusted: await hasDeliveredOrder(phone),
+      trusted: waLink?.phone === phone || (await hasDeliveredOrder(phone)),
       phone,
       address: pickup ? null : input.addressLine!.trim(),
     });
@@ -486,6 +505,7 @@ export async function POST(req: Request): Promise<Response> {
       notes: orderNotes,
       buy1Get1,
       callFirst,
+      whatsapp: waLink !== null,
     });
 
     // A pick-up's %, or (v0.7.37) the owner's % off a delivery's food — 0 unless the stored block
@@ -521,6 +541,10 @@ export async function POST(req: Request): Promise<Response> {
       // Two requests raced past the check above; the other one won.
       const existing = await findExisting(id);
       if (existing) return placedResponse(existing, true);
+    }
+    // The WhatsApp chat (and its ad) gets the order. Never a reason to fail one already placed.
+    if (waLink) {
+      await recordLinkOrder(id, waLink).catch((e) => console.error('whatsapp link order not recorded', e));
     }
 
     // Meta hears of the sale from here too (lib/meta-capi; off without its token), with the same event id as

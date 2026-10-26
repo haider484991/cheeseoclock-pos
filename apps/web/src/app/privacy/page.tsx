@@ -50,6 +50,11 @@ export default async function PrivacyPage() {
             the Buy 1 Get 1 tag-us offer).
           </li>
           <li>
+            <strong className="text-cream">If you message us on WhatsApp:</strong> your WhatsApp number and name, when
+            you wrote, and which of our ads brought you, if one did. Not what you wrote: your messages stay in WhatsApp.
+            We may reply once a day with your own order link, which fills in your name and number at checkout.
+          </li>
+          <li>
             <strong className="text-cream">On your phone only:</strong> if you tick “Remember my details”, your name,
             number and address are kept in your browser for next time. Your area choice and cart are kept there too. We
             never see these until you order.
@@ -68,7 +73,7 @@ export default async function PrivacyPage() {
           <li>To see which of our ads lead to orders, so we spend less on ads that don’t work.</li>
         </ul>
 
-        <h2>Meta (Facebook and Instagram) ads</h2>
+        <h2>Meta (Facebook, Instagram and WhatsApp)</h2>
         <p>
           The site uses the Meta Pixel and Meta’s Conversions API. They tell Meta when someone visits, adds to the cart,
           starts checkout or orders, so Meta can measure our ads. With an order we send your phone number and name only

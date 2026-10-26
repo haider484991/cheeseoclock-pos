@@ -396,3 +396,53 @@ CREATE TABLE IF NOT EXISTS dash_days (
     worked_out_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (device_id, day)
   );
+
+-- The shop's WhatsApp chats (26 Oct 2026, src/lib/whatsapp-store.ts, which also
+-- creates these on demand): the shop's number is on Meta's Cloud API beside
+-- the WhatsApp Business app on the phone, and Meta's webhook
+-- (api/whatsapp/webhook) tells the site of every message. Who wrote, when,
+-- what kind and which ad brought them — never the words. wa_links are the
+-- personal order links the bot sends (/menu?wa=TOKEN); wa_orders the website
+-- orders placed through one.
+CREATE TABLE IF NOT EXISTS wa_chats (
+  wa_id         TEXT PRIMARY KEY,
+  phone         TEXT NOT NULL,
+  profile_name  TEXT,
+  first_at      TIMESTAMPTZ NOT NULL,
+  last_in_at    TIMESTAMPTZ NOT NULL,
+  inbound_count INT NOT NULL DEFAULT 0,
+  last_staff_at TIMESTAMPTZ,
+  last_auto_at  TIMESTAMPTZ,
+  ad_id         TEXT,
+  ad_headline   TEXT,
+  ad_at         TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_wa_chats_phone ON wa_chats(phone);
+CREATE TABLE IF NOT EXISTS wa_events (
+  id            TEXT PRIMARY KEY,
+  wa_id         TEXT NOT NULL,
+  direction     TEXT NOT NULL CHECK (direction IN ('in', 'staff', 'bot')),
+  kind          TEXT NOT NULL,
+  at            TIMESTAMPTZ NOT NULL,
+  ad_id         TEXT,
+  ad_headline   TEXT,
+  ad_source_url TEXT,
+  ctwa_clid     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wa_events_at ON wa_events(at);
+CREATE INDEX IF NOT EXISTS idx_wa_events_chat ON wa_events(wa_id, at);
+CREATE TABLE IF NOT EXISTS wa_links (
+  token      TEXT PRIMARY KEY,
+  wa_id      TEXT NOT NULL,
+  ad_id      TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_wa_links_chat ON wa_links(wa_id, created_at);
+CREATE TABLE IF NOT EXISTS wa_orders (
+  order_id UUID PRIMARY KEY,
+  token    TEXT NOT NULL,
+  wa_id    TEXT NOT NULL,
+  ad_id    TEXT,
+  at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_wa_orders_at ON wa_orders(at);

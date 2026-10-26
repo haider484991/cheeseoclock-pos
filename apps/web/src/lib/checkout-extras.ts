@@ -89,12 +89,18 @@ export function composeNotes(
      * cap never cuts it and it is the first thing the till shows.
      */
     callFirst?: string | null;
+    /**
+     * Placed through the customer's personal WhatsApp order link (lib/whatsapp-store, 26 Oct 2026): "WhatsApp order"
+     * comes next, so the cashier can answer them on WhatsApp.
+     */
+    whatsapp?: boolean;
   },
   max: number = ORDER_NOTES_MAX,
 ): string | null {
   const deal = parts.buy1Get1 === true;
   const head = [
     parts.callFirst || null,
+    parts.whatsapp ? 'WhatsApp order' : null,
     deal ? buy1Get1NoteLine(parts.social) : null,
     parts.pin ? pinLine(parts.pin) : null,
     parts.social && !deal ? `Social: ${parts.social}` : null,

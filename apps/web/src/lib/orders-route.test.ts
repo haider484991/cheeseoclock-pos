@@ -1283,3 +1283,85 @@ describe('POST /api/orders — a deal whose price includes its tax (0057)', () =
     expect(mega).toMatchObject({ taxIncluded: true, basePriceCents: 480_000 });
   });
 });
+
+describe('POST /api/orders — a WhatsApp customer’s personal order link (26 Oct 2026, lib/whatsapp-store)', () => {
+  const NEW = 'CALL TO CONFIRM BEFORE COOKING: new number';
+
+  beforeEach(async () => {
+    // The flood limiter counts the orders above; none of them matters here.
+    await db.pg.query('DELETE FROM web_orders', []);
+  });
+
+  /** A customer who wrote to the shop from this WhatsApp number (from an ad), and the link the bot sent them. */
+  async function chatWithLink(waId: string, opts: { ad?: string; daysAgo?: number } = {}) {
+    const store = await import('@/lib/whatsapp-store');
+    await store.recordInbound({
+      messageId: `wamid.${waId}.${Math.random()}`,
+      waId,
+      profileName: 'Ali Raza',
+      kind: 'text',
+      at: new Date(),
+      ad: opts.ad ? { id: opts.ad, headline: 'Mega Cheese Box', sourceUrl: null, ctwaClid: null } : null,
+    });
+    const token = await store.createLink(waId);
+    if (opts.daysAgo) {
+      await db.pg.query(`UPDATE wa_links SET created_at = now() - make_interval(days => $1) WHERE token = $2`, [opts.daysAgo, token]);
+    }
+    return token;
+  }
+
+  async function waOrder(orderId: string) {
+    return (await db.pg.query(`SELECT token, wa_id, ad_id FROM wa_orders WHERE order_id = $1`, [orderId])).rows[0] as
+      | { token: string; wa_id: string; ad_id: string | null }
+      | undefined;
+  }
+
+  it('ordered with the WhatsApp number: no call-first warning, "WhatsApp order" leads the notes, and the order is the ad’s', async () => {
+    const token = await chatWithLink('923217654401', { ad: '120251373303340193' });
+    const r = await place({ zoneId: 'dha-6', customerPhone: '0321 7654401', waToken: token, notes: 'Ring twice' }, { newCustomer: true });
+    expect(r.status).toBe(200);
+    expect((await stored(r.json.data!.orderId)).notes).toBe('WhatsApp order. Ring twice');
+    expect(await waOrder(r.json.data!.orderId)).toEqual({ token, wa_id: '923217654401', ad_id: '120251373303340193' });
+  });
+
+  it('ordered with another number: still a WhatsApp order, but that number is new, so the warning stays', async () => {
+    const token = await chatWithLink('923217654402');
+    const r = await place({ zoneId: 'dha-6', customerPhone: '0333 7654402', waToken: token }, { newCustomer: true });
+    expect((await stored(r.json.data!.orderId)).notes).toBe(`${NEW}. WhatsApp order`);
+    expect((await waOrder(r.json.data!.orderId))?.ad_id).toBeNull();
+  });
+
+  it('an unknown, malformed or expired link is a plain website order, never a refused one', async () => {
+    const old = await chatWithLink('923217654403', { daysAgo: 4 });
+    for (const waToken of ['NoSuchToken12', 'bad token!', old]) {
+      const r = await place({ zoneId: 'dha-6', customerPhone: '0321 7654403', waToken }, { newCustomer: true });
+      expect(r.status).toBe(200);
+      expect((await stored(r.json.data!.orderId)).notes).toBe(NEW);
+      expect(await waOrder(r.json.data!.orderId)).toBeUndefined();
+    }
+  });
+
+  it('the till pulls it like any website order; the notes tell the cashier it came by WhatsApp', async () => {
+    const token = await chatWithLink('923217654404');
+    const r = await place({ zoneId: 'dha-6', customerPhone: '0321 7654404', waToken: token }, { newCustomer: true });
+    const pulled = (await (await bridgeOrders.GET(bridge('/api/bridge/orders?device=till-1'))).json()) as {
+      data: Array<{ id: string; notes: string | null; customerPhone: string }>;
+    };
+    expect(pulled.data.find((o) => o.id === r.json.data!.orderId)).toMatchObject({
+      notes: 'WhatsApp order',
+      customerPhone: '+923217654404',
+    });
+  });
+
+  it('GET /api/whatsapp/link names the link’s owner for the checkout; an unknown or expired one is a 404', async () => {
+    const link = await import('@/app/api/whatsapp/link/route');
+    const token = await chatWithLink('923217654405');
+    const ok = await link.GET(new Request(`https://site.test/api/whatsapp/link?t=${token}`));
+    expect(ok.headers.get('cache-control')).toBe('no-store');
+    expect(await ok.json()).toEqual({ ok: true, data: { name: 'Ali Raza', phone: '0321 7654405' } });
+    const old = await chatWithLink('923217654406', { daysAgo: 4 });
+    for (const t of ['NoSuchToken12', old, '']) {
+      expect((await link.GET(new Request(`https://site.test/api/whatsapp/link?t=${t}`))).status).toBe(404);
+    }
+  });
+});

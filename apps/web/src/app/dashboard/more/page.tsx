@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { IconMenu, IconStock, IconUser } from '@/components/dashboard/icons';
+import { IconChat, IconMenu, IconStock, IconUser } from '@/components/dashboard/icons';
 import { Shell } from '@/components/dashboard/Shell';
 import { Card, ListLink, PageHeader } from '@/components/dashboard/ui';
 import { seesReports } from '@/lib/dashboard/perms';
@@ -16,6 +16,7 @@ export default async function MorePage() {
   const user = await requireUser('/dashboard/more');
   const places = [
     ...(seesReports(user) ? [{ href: '/dashboard/stock', label: 'Stock', sub: 'What is on the shelves, low and out', Icon: IconStock }] : []),
+    ...(seesReports(user) ? [{ href: '/dashboard/whatsapp', label: 'WhatsApp', sub: 'Chats, the ads behind them, what they bought', Icon: IconChat }] : []),
     { href: '/dashboard/menu', label: 'Menu', sub: 'Prices, what is on the website, plate costs', Icon: IconMenu },
     { href: '/dashboard/account', label: 'Account', sub: 'Password, sign out, tills', Icon: IconUser },
   ];

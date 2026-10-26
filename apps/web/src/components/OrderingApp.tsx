@@ -82,6 +82,7 @@ import { menuImageSrcSet } from '@/lib/images';
 import { DEALS_PRICE_PROMISE, OFFER_FINE_PRINT, OFFER_FINE_PRINT_TAX_INCLUDED, OFFER_HEADLINE, cardOffer, discountOnEveryOrder, offerSectionOf, regularPizzaPrices, type OfferPrice } from '@/lib/offers';
 import { onLocationChoice, readLocationChoice, type LocationChoice } from '@/lib/location-choice';
 import { pixel, type PixelLine } from '@/lib/meta-pixel';
+import { keepWaLinkFrom } from '@/lib/wa-link';
 import { funnel, type AddHow } from '@/lib/funnel';
 import { trackPath } from '@/lib/order-display';
 import {
@@ -428,6 +429,9 @@ export function OrderingApp({
   // "/menu?deal=large-and-chilled" (an ad or a banner about one deal, 24 Oct 2026): that deal's card, centred and lit
   // for a moment, so the tap that brought them here is one more tap from the order.
   const [litDeal, setLitDeal] = useState<string | null>(null);
+  // "/menu?wa=TOKEN": the customer's personal order link from the shop's WhatsApp (lib/wa-link, 26 Oct 2026). Kept on
+  // the phone, so the checkout fills in their name and number and the order goes to the till as a WhatsApp order.
+  useEffect(() => keepWaLinkFrom(window.location.search), []);
   useEffect(() => {
     const id = decodeURIComponent(window.location.hash.slice(1));
     if (id && sections.some((s) => s.anchor === id)) {

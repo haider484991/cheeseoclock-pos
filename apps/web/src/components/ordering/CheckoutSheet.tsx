@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { NOT_ON_VALUE_DEALS } from '@cheeseoclock/shared-types';
 import { BUSINESS } from '@/lib/business';
 import { whatsappOrderText } from '@/lib/cart';
@@ -37,6 +37,7 @@ import { isPickupOnly } from '@/lib/menu-view';
 import { tagUsHint } from '@/lib/offers';
 import { CHECKOUT_PAY_DELIVERY, CHECKOUT_PAY_PICKUP } from '@/lib/page-copy';
 import { shopHoursInSentence, whatsappUrlWith } from '@/lib/shop-facts';
+import { storedWaToken } from '@/lib/wa-link';
 import { CartLineRow, ClearCartButton, FulfilmentToggle, MinimumNote, Totals, type CartProps } from './cart-ui';
 import { LocationPinField } from './LocationPinField';
 import { CloseButton, Sheet } from './Sheet';
@@ -97,6 +98,27 @@ export function CheckoutSheet(
   // A double tap fires two clicks before React has re-rendered the disabled
   // button; the ref closes that gap synchronously.
   const inFlight = useRef(false);
+  // Opened from the customer's WhatsApp order link (lib/wa-link, 26 Oct 2026): their WhatsApp name and number fill
+  // the boxes they left empty. Details remembered on this phone come first; nothing is filled over what they typed.
+  useEffect(() => {
+    const token = storedWaToken();
+    if (!token) return;
+    let live = true;
+    fetch(`/api/whatsapp/link?t=${encodeURIComponent(token)}`, { cache: 'no-store' })
+      .then((r) => (r.ok ? (r.json() as Promise<{ ok?: boolean; data?: { name?: string | null; phone?: string } }>) : null))
+      .then((j) => {
+        if (!live || !j?.ok || !j.data) return;
+        const { name: waName, phone: waPhone } = j.data;
+        if (waName) setName((n) => n || waName);
+        if (waPhone) setPhone((p) => p || waPhone);
+      })
+      .catch(() => {
+        // The boxes stay as they are; the customer types them.
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const fieldRefs = useRef(new Map<CheckoutField, HTMLElement>());
   const setFieldRef = (f: CheckoutField) => (el: HTMLElement | null) => {
@@ -171,6 +193,7 @@ export function CheckoutSheet(
     setSubmitting(true);
     try {
       const metaTestCode = storedTestCode();
+      const waToken = storedWaToken();
       const res = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -183,6 +206,7 @@ export function CheckoutSheet(
           notes: notes.trim() || undefined,
           ...(social.trim() ? { social: social.trim() } : {}),
           ...(metaTestCode ? { metaTestCode } : {}),
+          ...(waToken ? { waToken } : {}),
           items: props.cart.map((l) => ({
             posItemId: l.item.posItemId,
             quantity: l.quantity,
