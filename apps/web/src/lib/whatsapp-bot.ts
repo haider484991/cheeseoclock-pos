@@ -46,8 +46,13 @@ export interface CartLine {
 
 export interface BotData {
   cart: CartLine[];
-  /** The item being put together: its choices so far and which of its required choices is being asked. */
-  pending?: { posItemId: string; modifierIds: string[]; step: number } | null;
+  /**
+   * The item being put together: its choices so far and which of its required choices is being asked; `quantity` when
+   * it came in a catalog cart (how many is already known).
+   */
+  pending?: { posItemId: string; modifierIds: string[]; step: number; quantity?: number } | null;
+  /** The rest of a catalog cart, waiting for their choices one item at a time. */
+  queue?: Array<{ posItemId: string; quantity: number }>;
   fulfilment?: 'delivery' | 'pickup';
   zoneId?: string;
   address?: string;
@@ -106,6 +111,8 @@ export interface BotTurn {
   profileName: string | null;
   text: string | null;
   reply: { id: string; title: string } | null;
+  /** A cart sent from the WhatsApp catalog (lib/meta-catalog). */
+  order?: Array<{ posItemId: string; quantity: number }> | null;
 }
 
 export interface BotStep {
@@ -516,9 +523,42 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       data.pending = null;
       return showMenu();
     }
+    // From a catalog cart: how many is known — into the order, and on to the cart's next item.
+    if (p.quantity) {
+      addPending(p.quantity);
+      return nextFromQueue();
+    }
     say(qtyMessage(item));
     go('qty');
   };
+
+  /** The pending item into the order (the same item with the same choices adds up). */
+  const addPending = (n: number) => {
+    const p = data.pending;
+    if (!p) return;
+    const ids = [...p.modifierIds].sort();
+    const same = data.cart.find((l) => l.posItemId === p.posItemId && [...l.modifierIds].sort().join() === ids.join());
+    if (same) same.quantity = Math.min(20, same.quantity + n);
+    else data.cart.push({ posItemId: p.posItemId, quantity: n, modifierIds: p.modifierIds });
+    data.pending = null;
+    delete data.orderId;
+  };
+
+  /** A catalog cart's next item: its choices asked (if it has any), then the next; the order when none are left. */
+  function nextFromQueue(): void {
+    while (data.queue && data.queue.length > 0) {
+      const next = data.queue.shift()!;
+      const item = itemOf(shop, next.posItemId);
+      if (!item) {
+        say({ type: 'text', body: 'Cart ka ek item ab menu par nahi, use chhor diya.' });
+        continue;
+      }
+      data.pending = { posItemId: item.posItemId, modifierIds: startIds(item), step: 0, quantity: Math.min(20, next.quantity) };
+      return askNext();
+    }
+    delete data.queue;
+    showCart();
+  }
 
   const orderBody = (): Record<string, unknown> => {
     const delivery = data.fulfilment !== 'pickup';
@@ -579,12 +619,20 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     return { state: 'idle', data: { cart: [] }, out };
   }
   const starting = id === 'o:start' || (!id && START.test(text));
-  if (!shop.open && (starting || id)) {
+  const cart = turn.order ?? [];
+  if (!shop.open && (starting || id || cart.length > 0)) {
     say({ type: 'text', body: shop.closedText });
     return { state: 'idle', data, out };
   }
   if (starting) {
     showMenu();
+    return { state, data, out };
+  }
+  // A cart from the WhatsApp catalog: each item's choices, one item at a time, then the order as usual.
+  if (cart.length > 0) {
+    data.pending = null;
+    data.queue = [...cart];
+    nextFromQueue();
     return { state, data, out };
   }
 
@@ -635,22 +683,10 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       case 'mp':
         askNext(Number(a));
         break;
-      case 'q': {
-        const p = data.pending;
-        const n = Math.min(9, Math.max(1, Number(a) || 1));
-        if (!p) {
-          showCart();
-          break;
-        }
-        const ids = [...p.modifierIds].sort();
-        const same = data.cart.find((l) => l.posItemId === p.posItemId && [...l.modifierIds].sort().join() === ids.join());
-        if (same) same.quantity = Math.min(20, same.quantity + n);
-        else data.cart.push({ posItemId: p.posItemId, quantity: n, modifierIds: p.modifierIds });
-        data.pending = null;
-        delete data.orderId;
+      case 'q':
+        if (data.pending) addPending(Math.min(9, Math.max(1, Number(a) || 1)));
         showCart();
         break;
-      }
       case 'k':
         if (a === 'add') showMenu();
         else if (a === 'clear') {

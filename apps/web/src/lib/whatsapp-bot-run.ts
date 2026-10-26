@@ -85,7 +85,8 @@ export async function handleBotMessage(
   const session = await readSession(m.waId);
   const fresh = session !== null && now.getTime() - session.updatedAt.getTime() < SESSION_TTL_MS ? session : null;
   const live = fresh !== null && fresh.state !== 'idle';
-  const tap = m.reply !== null;
+  // A tapped button or list row, or a cart from the catalog: the customer is talking to the bot.
+  const tap = m.reply !== null || (m.order?.length ?? 0) > 0;
   const command = !tap && m.text !== null && isBotCommand(m.text);
 
   if (!tap && !command) {
@@ -104,7 +105,7 @@ export async function handleBotMessage(
   }
 
   const step = await runBot(
-    { waId: m.waId, profileName: m.profileName, text: m.text, reply: m.reply },
+    { waId: m.waId, profileName: m.profileName, text: m.text, reply: m.reply, order: m.order },
     fresh ? { state: fresh.state as BotState, data: fresh.data as unknown as BotData } : null,
     await botShop(),
     {

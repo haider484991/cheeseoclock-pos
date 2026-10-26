@@ -299,6 +299,32 @@ describe('the WhatsApp ordering bot', () => {
     expect((await c.send({ text: 'Bilal' })).state).toBe('notes');
   });
 
+  it('a cart from the WhatsApp catalog: each deal’s choices asked, an item with none added straight away, then the order', async () => {
+    let saved: { state: BotState; data: BotData } | null = null;
+    const turn = async (said: { tap?: string; order?: Array<{ posItemId: string; quantity: number }> }) => {
+      const step = await runBot({ waId: '923088440608', profileName: 'Haider', text: null, reply: said.tap ? { id: said.tap, title: '' } : null, order: said.order ?? null }, saved, shop(), fakeDeps().deps);
+      saved = { state: step.state, data: step.data };
+      return step;
+    };
+    const first = await turn({ order: [{ posItemId: 'burger', quantity: 1 }, { posItemId: 'deal-lc', quantity: 2 }, { posItemId: 'gone', quantity: 1 }] });
+    expect(first.state).toBe('choice');
+    expect(first.data.cart).toEqual([{ posItemId: 'burger', quantity: 1, modifierIds: [] }]);
+    expect(ids(first.out[0])).toEqual(['m:pz-fajita', 'm:pz-tikka', 'm:pz-malai']);
+    await turn({ tap: 'm:pz-fajita' });
+    const done = await turn({ tap: 'm:dr-lemon' });
+    expect(done.state).toBe('cart');
+    expect(done.data.cart).toEqual([
+      { posItemId: 'burger', quantity: 1, modifierIds: [] },
+      { posItemId: 'deal-lc', quantity: 2, modifierIds: ['fx-fries', 'pz-fajita', 'dr-lemon'] },
+    ]);
+    expect(body(done.out[0])).toBe('Cart ka ek item ab menu par nahi, use chhor diya.');
+    expect(ids(done.out[1])).toEqual(['k:add', 'k:checkout', 'k:clear']);
+    expect(done.data.queue).toBeUndefined();
+
+    const closed = await runBot({ waId: '923088440608', profileName: null, text: null, reply: null, order: [{ posItemId: 'burger', quantity: 1 }] }, null, shop({ open: false }), fakeDeps().deps);
+    expect(closed.out).toEqual([{ type: 'text', body: 'Abhi online orders band hain (open daily · 1 pm – 1 am).' }]);
+  });
+
   it('the welcome and every message fit WhatsApp’s limits', () => {
     const w = welcomeMessage({ shopName: 'Cheese O’Clock', profileName: 'Haider Ali' });
     expect(body(w)).toContain('Assalam o Alaikum Haider! Cheese O’Clock mein khush aamdeed');

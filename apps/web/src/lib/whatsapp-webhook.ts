@@ -32,6 +32,8 @@ export interface WaStaffMessage {
 export interface WaSaid {
   text: string | null;
   reply: { id: string; title: string } | null;
+  /** A cart sent from the shop's WhatsApp catalog (lib/meta-catalog): each item's id (the till's) and how many. */
+  order: Array<{ posItemId: string; quantity: number }> | null;
 }
 
 /** What one webhook call says: customers' messages (with the shop number they wrote to) and staff's. */
@@ -87,6 +89,18 @@ function replyOf(m: Obj): { id: string; title: string } | null {
   return id ? { id, title: text(r?.['title'], 100) ?? '' } : null;
 }
 
+/** A catalog cart: its lines' product ids (the till's item ids) and quantities. */
+function orderOf(m: Obj): Array<{ posItemId: string; quantity: number }> | null {
+  const items = list(obj(m['order'])?.['product_items'])
+    .map((x) => obj(x))
+    .flatMap((x) => {
+      const id = text(x?.['product_retailer_id'], 100);
+      const q = Math.floor(Number(x?.['quantity']));
+      return id && q > 0 ? [{ posItemId: id, quantity: Math.min(q, 20) }] : [];
+    });
+  return items.length > 0 ? items : null;
+}
+
 /** Reads one webhook call. Anything it does not know (statuses, history, account updates) is left out. */
 export function readCall(body: unknown): WaCall {
   const call: WaCall = { inbound: [], staff: [] };
@@ -122,6 +136,7 @@ export function readCall(body: unknown): WaCall {
             ad: adOf(m['referral']),
             text: textOf(m),
             reply: replyOf(m),
+            order: orderOf(m),
           });
         }
       } else if (c['field'] === 'smb_message_echoes') {
