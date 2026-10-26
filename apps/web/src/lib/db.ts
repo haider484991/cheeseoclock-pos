@@ -55,8 +55,13 @@ const passText = (value: unknown) => (typeof value === 'string' ? value : String
 function tcpClient(url: string): NeonQueryFunction<false, false> {
   let pool = pools.get(url);
   if (!pool) {
-    const host = new URL(url).hostname;
-    pool = postgres(url, {
+    const address = new URL(url);
+    const host = address.hostname;
+    // Without its ?…: words there for libpq or Prisma (sslmode, channel_binding — in every Neon address —,
+    // pgbouncer) are not Postgres settings, and postgres.js would send each to the server as one, which refuses
+    // the login. TLS is set below instead.
+    address.search = '';
+    pool = postgres(address.toString(), {
       // Supabase's transaction pooler (port 6543) hands each statement to any
       // server connection, so a prepared statement would not be there next time.
       prepare: false,

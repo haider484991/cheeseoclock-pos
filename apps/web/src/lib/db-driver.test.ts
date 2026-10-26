@@ -15,7 +15,7 @@
  */
 import { createServer, type Server } from 'node:http';
 import { readFileSync } from 'node:fs';
-import type { AddressInfo } from 'node:net';
+import { createServer as createNetServer, type AddressInfo } from 'node:net';
 import { PGlite, types } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -109,6 +109,33 @@ describe('lib/db.ts picks the driver by the address', () => {
   it('Neon and the dev stand-in get Neon’s driver; any other Postgres gets postgres.js', async () => {
     expect(await neonSql()`SELECT 'neon' AS via`).toEqual([{ via: 'neon' }]);
     expect(await tcpSql()`SELECT 'tcp' AS via`).toEqual([{ via: 'tcp' }]);
+  });
+
+  it('an address’s words after ? (libpq’s, Prisma’s) never reach the server as Postgres settings, which it would refuse', async () => {
+    // PGlite takes any setting at login, real Postgres refuses an unknown one ("unrecognized configuration
+    // parameter channel_binding"): read what the driver says at login, from a server that only listens.
+    const said: Record<string, string> = {};
+    let heard: () => void = () => undefined;
+    const loggedIn = new Promise<void>((r) => (heard = r));
+    const listener = createNetServer((socket) =>
+      socket.once('data', (packet: Buffer) => {
+        const words = packet.subarray(8).toString('utf8').split('\0');
+        for (let i = 0; i + 1 < words.length && words[i]; i += 2) said[words[i]!] = words[i + 1]!;
+        heard();
+      }),
+    );
+    await new Promise<void>((r) => listener.listen(0, '127.0.0.1', r));
+    const port = (listener.address() as AddressInfo).port;
+    const address = `postgres://someone:made-up@127.0.0.1:${port}/shop?sslmode=disable&channel_binding=require&pgbouncer=true`;
+    // The query never gets an answer from this server; only its login is read.
+    void Promise.resolve(tcpSql(address)`SELECT 1`).catch(() => undefined);
+    await loggedIn;
+    listener.close();
+    listener.unref();
+    expect(said).toMatchObject({ user: 'someone', database: 'shop' });
+    expect(Object.keys(said)).not.toContain('channel_binding');
+    expect(Object.keys(said)).not.toContain('pgbouncer');
+    expect(Object.keys(said)).not.toContain('sslmode');
   });
 });
 
