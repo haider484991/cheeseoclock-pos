@@ -36,6 +36,9 @@
  *    spells out what came in).
  *  - 2026-10-25: the root layout's metadata carries Meta's domain-verification
  *    tag for cheeseoclock.net (__fixtures__/domain-verification.ts).
+ *  - 2026-10-27: the share images carry their font in the code, so they are
+ *    drawn here in Bebas, as on the site, not the fallback the failed font
+ *    fetch gave (__fixtures__/share-image-font.ts).
  * Apart from those, states (b) and (c) are the golden byte for byte.
  */
 import { createHash } from 'node:crypto';
@@ -49,6 +52,7 @@ import { MENU_PRICED_ROUTES, htmlWithMenuUnknown } from './__fixtures__/menu-unk
 import { FOOTER_CREDIT, FOOTER_LEGAL_NAME, withFooterCredit } from './__fixtures__/footer-credit';
 import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
 import { withDomainVerification } from './__fixtures__/domain-verification';
+import { withShareImageFont } from './__fixtures__/share-image-font';
 import { withAreaListAdditions } from './__fixtures__/area-list';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
 
@@ -394,7 +398,7 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     });
 
     it(`(${state}) the share images, the manifest, robots.txt and the sitemap`, () => {
-      expect(now.images[state]).toEqual(golden.images[state]);
+      expect(now.images[state]).toEqual(withShareImageFont(golden.images[state]));
       expect(now.routes[state]).toEqual(golden.routes[state]);
     });
   }
