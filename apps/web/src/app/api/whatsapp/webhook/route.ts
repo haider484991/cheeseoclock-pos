@@ -29,8 +29,9 @@ export const revalidate = 0;
  */
 export function GET(req: Request): Response {
   const q = new URL(req.url).searchParams;
-  const want = process.env['WHATSAPP_VERIFY_TOKEN'];
-  if (q.get('hub.mode') === 'subscribe' && want && q.get('hub.verify_token') === want) {
+  // Trimmed both sides: a phrase pasted with a space or a line break still matches.
+  const want = process.env['WHATSAPP_VERIFY_TOKEN']?.trim();
+  if (q.get('hub.mode') === 'subscribe' && want && q.get('hub.verify_token')?.trim() === want) {
     return new Response(q.get('hub.challenge') ?? '', { status: 200, headers: { 'content-type': 'text/plain' } });
   }
   return new Response('forbidden', { status: 403 });
