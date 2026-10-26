@@ -36,7 +36,7 @@ describe('Meta catalog feed', () => {
     const csv = catalogCsv(catalogRows(MENU, 'Shop'));
     const lines = csv.trim().split('\n');
     expect(lines[0]).toBe('id,title,description,availability,condition,price,link,image_link,brand');
-    expect(lines[1]).toContain('"Large + Medium, 2 burgers, ""fries"", drink Value Deals. Tax included. Order on WhatsApp: send ""menu""."');
+    expect(lines[1]).toContain('"Large + Medium, 2 burgers, ""fries"", drink. Value Deals. Tax included. Order on WhatsApp: send ""menu""."');
     expect(lines).toHaveLength(5);
   });
 });

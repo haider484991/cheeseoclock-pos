@@ -31,23 +31,24 @@ export interface CatalogRow {
  * public/images/catalog/<slug>.jpg.
  */
 const CATALOG_PHOTOS: Readonly<Record<string, string>> = {
+  // The owner's real photos, enhanced in Gemini (same food; lighting and background only): '-v2'.
   'fajita pizza': 'fajita-pizza',
   'classic supreme': 'classic-supreme',
-  'malai supreme': 'malai-supreme',
-  'classic pepperoni': 'classic-pepperoni',
+  'malai supreme': 'malai-supreme-v2',
+  'classic pepperoni': 'classic-pepperoni-v2',
   'chicken tikka pizza': 'chicken-tikka-pizza',
   'chicken tikka malai': 'chicken-tikka-malai',
   cheesalious: 'cheesalious',
   'veggie lovers': 'veggie-lovers',
   'classic crispy chicken': 'classic-crispy-chicken',
-  'crispy signature': 'crispy-signature',
-  'nashville authentic (hot)': 'nashville-authentic',
+  'crispy signature': 'crispy-signature-v2',
+  'nashville authentic (hot)': 'nashville-authentic-v2',
   fries: 'fries',
   'signature mayo masala fries': 'signature-mayo-masala-fries',
   // Gemini images (cheeseoclock-menu\catalog-ai, 26 Oct 2026): presentation only until there are real photos.
   'signature masala fries': 'signature-masala-fries',
   'signature loaded fries': 'signature-loaded-fries',
-  nuggets: 'nuggets',
+  nuggets: 'nuggets-v2',
   'baked wings': 'baked-wings',
   'soft drink — 345 ml': 'soft-drink-345-ml',
   'soft drink — 1 litre': 'soft-drink-1-litre',
@@ -70,7 +71,7 @@ export function catalogPhotoFor(name: string): string | null {
 function describe(item: PublishedMenuItem, category: string): string {
   const own = item.description?.replace(/\s+/g, ' ').trim();
   const tax = item.taxIncluded ? 'Tax included.' : 'Plus tax.';
-  return `${own ? `${own} ` : ''}${category}. ${tax} Order on WhatsApp: send "menu".`.slice(0, 5000);
+  return `${own ? `${own.replace(/[.!]?$/, '.')} ` : ''}${category}. ${tax} Order on WhatsApp: send "menu".`.slice(0, 5000);
 }
 
 /** The feed's rows: one per menu item with a shop photo, priced as the till publishes it. */
