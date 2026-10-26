@@ -16,18 +16,21 @@ const MENU: Pick<PublishedMenu, 'categories'> = {
 };
 
 describe('Meta catalog feed', () => {
-  it('lists the items with a website photo — the till’s old deal spelling too — and leaves out the rest', () => {
+  it('lists the items with a photo — the website’s, the till’s old deal spelling too, then the catalog’s own', () => {
     const rows = catalogRows(MENU, 'Cheese O’Clock');
     expect(rows.map((r) => [r.id, r.image_link])).toEqual([
       ['mega', 'https://www.cheeseoclock.net/images/catalog/mega-cheese-box.jpg'],
       ['sig', 'https://www.cheeseoclock.net/images/catalog/signature-crispy.jpg'],
       ['sh-l', 'https://www.cheeseoclock.net/images/catalog/shawarma-pizza.jpg'],
+      ['faj-l', 'https://www.cheeseoclock.net/images/catalog/fajita-pizza.jpg'],
     ]);
     expect(rows[0]).toMatchObject({ price: '4800.00 PKR', availability: 'in stock', condition: 'new', brand: 'Cheese O’Clock', link: 'https://www.cheeseoclock.net/menu?deal=mega-cheese-box' });
     expect(rows[0]!.description).toContain('Tax included.');
     expect(rows[2]!.description).toContain('Plus tax.');
     expect(rowPriceWords(rows[0]!)).toBe('Rs 4,800');
-    expect(catalogPhotoFor('Fajita Pizza — Large')).toBeNull();
+    expect(catalogPhotoFor('Soft Drink — 345 ml')).toBe('https://www.cheeseoclock.net/images/catalog/soft-drink-345-ml.jpg');
+    expect(catalogPhotoFor('Veggie Lovers — Large')).toBe('https://www.cheeseoclock.net/images/catalog/veggie-lovers.jpg');
+    expect(catalogPhotoFor('Mystery Special — Large')).toBeNull();
   });
 
   it('writes CSV Meta reads: a header, and a cell with a comma or quote quoted', () => {
@@ -35,6 +38,6 @@ describe('Meta catalog feed', () => {
     const lines = csv.trim().split('\n');
     expect(lines[0]).toBe('id,title,description,availability,condition,price,link,image_link,brand');
     expect(lines[1]).toContain('"Large + Medium, 2 burgers, ""fries"", drink Value Deals. Tax included. Order on WhatsApp: send ""menu""."');
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(5);
   });
 });

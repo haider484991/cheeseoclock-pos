@@ -24,11 +24,48 @@ export interface CatalogRow {
   brand: string;
 }
 
-/** The website photo for an item, as a catalog JPEG address; null when it has none. */
+/**
+ * The catalog's own photos for items the website shows without one (26 Oct 2026): the regular pizzas in the owner's
+ * oven-baked style (the window posters' cut-outs, made from his photos: even golden crust, no char — the shop bakes
+ * pan and thin crust, never wood-fired), the printed deal menus' cut-outs and the owner's own photos
+ * (cheeseoclock-menu assets), keyed by the item's name (with its size, for the drinks) or its name without the size.
+ * public/images/catalog/<slug>.jpg.
+ */
+const CATALOG_PHOTOS: Readonly<Record<string, string>> = {
+  'fajita pizza': 'fajita-pizza',
+  'classic supreme': 'classic-supreme',
+  'malai supreme': 'malai-supreme',
+  'classic pepperoni': 'classic-pepperoni',
+  'chicken tikka pizza': 'chicken-tikka-pizza',
+  'chicken tikka malai': 'chicken-tikka-malai',
+  cheesalious: 'cheesalious',
+  'veggie lovers': 'veggie-lovers',
+  'classic crispy chicken': 'classic-crispy-chicken',
+  'crispy signature': 'crispy-signature',
+  'nashville authentic (hot)': 'nashville-authentic',
+  fries: 'fries',
+  'signature mayo masala fries': 'signature-mayo-masala-fries',
+  // Gemini images (cheeseoclock-menu\catalog-ai, 26 Oct 2026): presentation only until there are real photos.
+  'signature masala fries': 'signature-masala-fries',
+  'signature loaded fries': 'signature-loaded-fries',
+  nuggets: 'nuggets',
+  'baked wings': 'baked-wings',
+  'soft drink — 345 ml': 'soft-drink-345-ml',
+  'soft drink — 1 litre': 'soft-drink-1-litre',
+};
+
+/** The item's photo as a catalog JPEG address — the website's, else the catalog's own; null when it has none. */
 export function catalogPhotoFor(name: string): string | null {
-  const web = dealPhotoFor(name) ?? shopPhotoFor(splitSizedName(name).base);
+  const base = splitSizedName(name).base;
+  const web = dealPhotoFor(name) ?? shopPhotoFor(base);
   const m = web ? /\/images\/(?:deals|menu)\/([a-z0-9-]+)\.webp$/.exec(web) : null;
-  return m ? `${SITE_URL}/images/catalog/${m[1]}.jpg` : null;
+  const slug =
+    m?.[1] ??
+    CATALOG_PHOTOS[name.trim().toLowerCase()] ??
+    CATALOG_PHOTOS[base.trim().toLowerCase()] ??
+    // Every dip shares the dip cups' picture.
+    (/\bdip$/i.test(base.trim()) ? 'dips' : undefined);
+  return slug ? `${SITE_URL}/images/catalog/${slug}.jpg` : null;
 }
 
 function describe(item: PublishedMenuItem, category: string): string {
