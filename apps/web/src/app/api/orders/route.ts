@@ -139,6 +139,12 @@ const PlaceOrderSchema = z
      * a WhatsApp order, and the ad that brought the chat is its ad. An unknown or expired one is ignored.
      */
     waToken: z.string().trim().max(40).optional(),
+    /**
+     * A quote, not an order (the WhatsApp ordering bot's summary before the customer confirms, lib/whatsapp-bot):
+     * every check and the server's pricing as for a real order, then the totals and lines back — nothing stored,
+     * counted or sent to Meta. Prices are public, so anyone may ask.
+     */
+    dryRun: z.boolean().optional(),
     /** Honeypot — real users never fill this hidden field. */
     website: z.string().max(0).optional(),
   })
@@ -519,6 +525,9 @@ export async function POST(req: Request): Promise<Response> {
       (pickup ? store.pickupCategoryPercents : store.deliveryCategoryPercents) ?? [],
     );
     const { discountParts, ...shownTotals } = totals;
+    if (input.dryRun) {
+      return Response.json({ ok: true, data: { dryRun: true, fulfilment: input.fulfilment, ...shownTotals, lines } });
+    }
 
     const id = input.clientOrderId ?? uuidv7();
     const inserted = (await sql()`

@@ -157,7 +157,7 @@ describe('signatureOk', () => {
 });
 
 describe('readCall', () => {
-  it('reads the customer, their WhatsApp name, the kind of message and the ad — not the words', () => {
+  it('reads the customer, their WhatsApp name, the kind of message, the ad, and the words for the bot', () => {
     const call = readCall(inbound({ waId: '923001112233', id: 'wamid.1', ad: true }));
     expect(call.staff).toEqual([]);
     expect(call.inbound).toHaveLength(1);
@@ -169,8 +169,26 @@ describe('readCall', () => {
       profileName: 'Ali Raza',
       kind: 'text',
       ad: { id: '120251373303340193', headline: 'Mega Cheese Box Rs 4,800', sourceUrl: 'https://fb.me/abc', ctwaClid: 'ARAkLkA8' },
+      text: 'Mega box chahiye, kitne ka hai?',
+      reply: null,
     });
-    expect(JSON.stringify(m)).not.toContain('kitne ka hai');
+  });
+
+  it('reads a tapped button or list row by its id', () => {
+    const tap = (interactive: unknown) =>
+      readCall({
+        object: 'whatsapp_business_account',
+        entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: PHONE_ID }, messages: [{ from: '923001112233', id: 'w.t', timestamp: '1', type: 'interactive', interactive }] } }] }],
+      }).inbound[0];
+    expect(tap({ type: 'button_reply', button_reply: { id: 'o:start', title: '🍕 Order karein' } })).toMatchObject({ reply: { id: 'o:start', title: '🍕 Order karein' }, text: null });
+    expect(tap({ type: 'list_reply', list_reply: { id: 'c:0', title: 'Value Deals', description: '10 items' } })?.reply).toEqual({ id: 'c:0', title: 'Value Deals' });
+  });
+
+  it('the words reach the bot but are never stored', async () => {
+    process.env['WHATSAPP_AUTO_REPLY'] = 'off';
+    await post(inbound({ waId: '923001110099', id: 'wamid.words' }));
+    const dump = JSON.stringify((await db.pg.query(`SELECT * FROM wa_events WHERE wa_id = '923001110099'`, [])).rows) + JSON.stringify(await chat('923001110099'));
+    expect(dump).not.toContain('kitne ka hai');
   });
 
   it('reads staff’s replies from the phone app (coexistence echoes) by the customer they went to', () => {

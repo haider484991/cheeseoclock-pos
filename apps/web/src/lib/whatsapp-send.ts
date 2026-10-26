@@ -47,11 +47,74 @@ export function autoReplyText(o: { shop: ShopFacts; open: boolean; link: string;
 
 export type SendResult = { ok: true; messageId: string } | { ok: false; error: string };
 
+/**
+ * A message the shop sends: plain text, up to three reply buttons, or a list to pick one row from (WhatsApp's
+ * interactive messages — free to send inside the 24 hours after the customer wrote, no template needed).
+ */
+export type WaOut =
+  | { type: 'text'; body: string }
+  | { type: 'buttons'; body: string; buttons: Array<{ id: string; title: string }>; footer?: string }
+  | {
+      type: 'list';
+      body: string;
+      button: string;
+      sections: Array<{ title: string; rows: Array<{ id: string; title: string; description?: string }> }>;
+      footer?: string;
+    };
+
+/** WhatsApp refuses anything longer than its limits: cut to fit, with an ellipsis. */
+export function fit(s: string, max: number): string {
+  const t = s.trim();
+  return t.length <= max ? t : `${t.slice(0, max - 1).trimEnd()}…`;
+}
+
+/** The Cloud API's body for one message (WhatsApp's limits: body 1024, button 20, row 24 + 72, section 24). */
+export function payloadOf(to: string, m: WaOut): Record<string, unknown> {
+  const base = { messaging_product: 'whatsapp', recipient_type: 'individual', to };
+  if (m.type === 'text') return { ...base, type: 'text', text: { body: fit(m.body, 4096), preview_url: true } };
+  const footer = m.footer ? { footer: { text: fit(m.footer, 60) } } : {};
+  if (m.type === 'buttons') {
+    return {
+      ...base,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: fit(m.body, 1024) },
+        ...footer,
+        action: { buttons: m.buttons.slice(0, 3).map((b) => ({ type: 'reply', reply: { id: fit(b.id, 256), title: fit(b.title, 20) } })) },
+      },
+    };
+  }
+  let left = 10;
+  const sections = m.sections
+    .map((s) => {
+      const rows = s.rows.slice(0, left).map((r) => ({
+        id: fit(r.id, 200),
+        title: fit(r.title, 24),
+        ...(r.description ? { description: fit(r.description, 72) } : {}),
+      }));
+      left -= rows.length;
+      return { title: fit(s.title, 24), rows };
+    })
+    .filter((s) => s.rows.length > 0)
+    .slice(0, 10);
+  return {
+    ...base,
+    type: 'interactive',
+    interactive: { type: 'list', body: { text: fit(m.body, 1024) }, ...footer, action: { button: fit(m.button, 20), sections } },
+  };
+}
+
 /** One text message from the shop's number to a customer. Never throws: a failure is an answer. */
-export async function sendText(o: {
+export function sendText(o: { phoneNumberId: string; to: string; body: string; token: string; fetchImpl?: typeof fetch }): Promise<SendResult> {
+  return sendMessage({ ...o, message: { type: 'text', body: o.body } });
+}
+
+/** One message of any kind from the shop's number to a customer. Never throws: a failure is an answer. */
+export async function sendMessage(o: {
   phoneNumberId: string;
   to: string;
-  body: string;
+  message: WaOut;
   token: string;
   fetchImpl?: typeof fetch;
 }): Promise<SendResult> {
@@ -59,13 +122,7 @@ export async function sendText(o: {
     const res = await (o.fetchImpl ?? fetch)(`https://graph.facebook.com/${GRAPH_VERSION}/${o.phoneNumberId}/messages`, {
       method: 'POST',
       headers: { authorization: `Bearer ${o.token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: o.to,
-        type: 'text',
-        text: { body: o.body, preview_url: true },
-      }),
+      body: JSON.stringify(payloadOf(o.to, o.message)),
       cache: 'no-store',
       signal: AbortSignal.timeout(8000),
     });

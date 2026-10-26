@@ -23,7 +23,7 @@ let ready: Promise<void> | null = null;
 export function ensureWhatsappSchema(): Promise<void> {
   if (!ready) {
     // The newest table answers for the lot (schema-on-demand): one read per instance, the DDL only when it is missing.
-    ready = probeThenCreate(() => sql()`SELECT order_id FROM wa_orders LIMIT 0`, async () => {
+    ready = probeThenCreate(() => sql()`SELECT status FROM wa_order_updates LIMIT 0`, async () => {
       await sql()`
         CREATE TABLE IF NOT EXISTS wa_chats (
           wa_id         TEXT PRIMARY KEY,
@@ -74,6 +74,25 @@ export function ensureWhatsappSchema(): Promise<void> {
         )
       `;
       await sql()`CREATE INDEX IF NOT EXISTS idx_wa_orders_at ON wa_orders(at)`;
+      // The ordering bot's place in each customer's order (lib/whatsapp-bot): the step and the cart so far.
+      await sql()`
+        CREATE TABLE IF NOT EXISTS wa_sessions (
+          wa_id      TEXT PRIMARY KEY,
+          state      TEXT NOT NULL,
+          data       JSONB NOT NULL,
+          version    INT NOT NULL DEFAULT 1,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `;
+      // Each status a WhatsApp order's customer was told of, once (the till may push a status twice).
+      await sql()`
+        CREATE TABLE IF NOT EXISTS wa_order_updates (
+          order_id UUID NOT NULL,
+          status   TEXT NOT NULL,
+          at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (order_id, status)
+        )
+      `;
     }).catch((e) => {
       // Let the next call retry rather than caching the failure forever.
       ready = null;
@@ -242,6 +261,77 @@ export async function resolveLink(token: string, now: Date = new Date()): Promis
   `) as Array<{ token: string; wa_id: string; ad_id: string | null; profile_name: string | null; phone: string }>;
   const r = rows[0];
   return r ? { token: r.token, waId: r.wa_id, name: r.profile_name, phone: r.phone, adId: r.ad_id } : null;
+}
+
+/** The ordering bot's saved place in a customer's order; `version` guards against two taps handled at once. */
+export interface WaSession {
+  state: string;
+  data: Record<string, unknown>;
+  version: number;
+  updatedAt: Date;
+}
+
+export async function readSession(waId: string): Promise<WaSession | null> {
+  await ensureWhatsappSchema();
+  const rows = (await sql()`SELECT state, data, version, updated_at FROM wa_sessions WHERE wa_id = ${waId}`) as Array<{
+    state: string;
+    data: Record<string, unknown> | string;
+    version: number;
+    updated_at: string | Date;
+  }>;
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    state: r.state,
+    data: typeof r.data === 'string' ? (JSON.parse(r.data) as Record<string, unknown>) : r.data,
+    version: Number(r.version),
+    updatedAt: new Date(r.updated_at),
+  };
+}
+
+/**
+ * Saves the bot's next place. False when another message for this customer saved first (two taps at once): this one's
+ * answer is then not sent, so the customer never sees two steps at once.
+ */
+export async function writeSession(waId: string, state: string, data: Record<string, unknown>, was: number | null): Promise<boolean> {
+  const json = JSON.stringify(data);
+  const rows = (was === null
+    ? await sql()`
+        INSERT INTO wa_sessions (wa_id, state, data) VALUES (${waId}, ${state}, ${json}::jsonb)
+        ON CONFLICT (wa_id) DO NOTHING RETURNING wa_id`
+    : await sql()`
+        UPDATE wa_sessions SET state = ${state}, data = ${json}::jsonb, version = version + 1, updated_at = now()
+         WHERE wa_id = ${waId} AND version = ${was} RETURNING wa_id`) as unknown[];
+  return rows.length > 0;
+}
+
+/** Staff wrote to this customer from the phone app since then: the chat is theirs, and the bot keeps out of it. */
+export async function staffWroteSince(waId: string, since: Date): Promise<boolean> {
+  const rows = (await sql()`
+    SELECT 1 FROM wa_chats WHERE wa_id = ${waId} AND last_staff_at >= ${since.toISOString()}
+  `) as unknown[];
+  return rows.length > 0;
+}
+
+/** The WhatsApp chat a website order belongs to, with when its customer last wrote — null for any other order. */
+export async function whatsappOrderOf(orderId: string): Promise<{ waId: string; lastInAt: Date; fulfilment: string } | null> {
+  await ensureWhatsappSchema();
+  const rows = (await sql()`
+    SELECT w.wa_id, c.last_in_at, o.fulfilment
+      FROM wa_orders w JOIN wa_chats c ON c.wa_id = w.wa_id JOIN web_orders o ON o.id = w.order_id
+     WHERE w.order_id = ${orderId}
+  `) as Array<{ wa_id: string; last_in_at: string | Date; fulfilment: string }>;
+  const r = rows[0];
+  return r ? { waId: r.wa_id, lastInAt: new Date(r.last_in_at), fulfilment: r.fulfilment } : null;
+}
+
+/** Claims telling the customer of this status; false when they were told already. */
+export async function claimOrderUpdate(orderId: string, status: string): Promise<boolean> {
+  const rows = (await sql()`
+    INSERT INTO wa_order_updates (order_id, status) VALUES (${orderId}, ${status})
+    ON CONFLICT (order_id, status) DO NOTHING RETURNING order_id
+  `) as unknown[];
+  return rows.length > 0;
 }
 
 /** "+923001234567" as the checkout's phone box shows a number: "0300 1234567". */

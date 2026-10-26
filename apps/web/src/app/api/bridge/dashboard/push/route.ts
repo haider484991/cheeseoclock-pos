@@ -2,6 +2,7 @@ import { DASH_PUSH_MAX_CHARS } from '@cheeseoclock/shared-types';
 import { dashPushBodySchema } from '@cheeseoclock/shared-schemas/dashboard';
 import { keepPush, stateFor } from '@/lib/dashboard/ingest';
 import { logFailure, noStore, refuseUnlessBridge } from '@/lib/menu-deploy-auth';
+import { sendTillSales } from '@/lib/till-sales-capi';
 
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
@@ -50,7 +51,10 @@ export async function POST(req: Request): Promise<Response> {
       const first = parsed.error.issues[0];
       return noStore({ ok: false, error: 'validation', message: first ? `${first.path.join('.')}: ${first.message}`.slice(0, 200) : undefined }, 400);
     }
-    return noStore({ ok: true, data: await keepPush(parsed.data) });
+    const data = await keepPush(parsed.data);
+    // The till's new paid sales to Meta (lib/till-sales-capi: off unless switched on; never fails the push).
+    await sendTillSales();
+    return noStore({ ok: true, data });
   } catch (e) {
     logFailure('POST /api/bridge/dashboard/push failed', e);
     return noStore({ ok: false, error: 'internal' }, 500);

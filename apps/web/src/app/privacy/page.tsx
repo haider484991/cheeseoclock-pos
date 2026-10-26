@@ -52,7 +52,9 @@ export default async function PrivacyPage() {
           <li>
             <strong className="text-cream">If you message us on WhatsApp:</strong> your WhatsApp number and name, when
             you wrote, and which of our ads brought you, if one did. Not what you wrote: your messages stay in WhatsApp.
-            We may reply once a day with your own order link, which fills in your name and number at checkout.
+            We may reply once a day with your own order link, which fills in your name and number at checkout. If you
+            order in the chat, the details you give there (address, name, a note) are kept with your order, as on the
+            website, and we message you there as it is confirmed and sent out.
           </li>
           <li>
             <strong className="text-cream">On your phone only:</strong> if you tick “Remember my details”, your name,
@@ -77,7 +79,8 @@ export default async function PrivacyPage() {
         <p>
           The site uses the Meta Pixel and Meta’s Conversions API. They tell Meta when someone visits, adds to the cart,
           starts checkout or orders, so Meta can measure our ads. With an order we send your phone number and name only
-          in a scrambled (hashed) form that cannot be read back, plus the order’s value. Meta may set its own cookies;
+          in a scrambled (hashed) form that cannot be read back, plus the order’s value. We do the same for an order you
+          place at the shop, by phone or on WhatsApp when you give us your number. Meta may set its own cookies;
           you can limit this in your Facebook and Instagram ad settings or by blocking cookies in your browser.
         </p>
 

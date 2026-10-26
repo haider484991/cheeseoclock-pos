@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sql } from '@/lib/db';
 import { isBridgeAuthorized, unauthorized } from '@/lib/bridge-auth';
+import { tellWhatsappCustomer } from '@/lib/whatsapp-updates';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +35,8 @@ export async function POST(
        WHERE id = ${params.id} AND status = 'new'
        RETURNING id
     `) as Array<{ id: string }>;
+    // A WhatsApp customer hears that the kitchen has it (lib/whatsapp-updates; never fails the ack).
+    if (rows.length === 1) await tellWhatsappCustomer(params.id, 'accepted', { number: parsed.data.posOrderNumber });
     return Response.json({ ok: true, data: { acked: rows.length === 1 } });
   } catch (e) {
     console.error('POST /api/bridge/orders/[id]/ack failed', e);

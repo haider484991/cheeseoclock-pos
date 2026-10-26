@@ -25,9 +25,18 @@ export interface WaStaffMessage {
   at: Date;
 }
 
+/**
+ * What the customer wrote or tapped, for the ordering bot (lib/whatsapp-bot) to act on in this call only — never
+ * stored: the text of a text message, the id and title of a button or list row they tapped.
+ */
+export interface WaSaid {
+  text: string | null;
+  reply: { id: string; title: string } | null;
+}
+
 /** What one webhook call says: customers' messages (with the shop number they wrote to) and staff's. */
 export interface WaCall {
-  inbound: Array<WaInbound & { phoneNumberId: string }>;
+  inbound: Array<WaInbound & WaSaid & { phoneNumberId: string }>;
   staff: WaStaffMessage[];
 }
 
@@ -65,6 +74,19 @@ function adOf(v: unknown): WaAd | null {
   return ad.id || ad.headline || ad.sourceUrl || ad.ctwaClid ? ad : null;
 }
 
+/** The words of a text message, or of a template's quick-reply button. */
+function textOf(m: Obj): string | null {
+  return text(obj(m['text'])?.['body'], 1000) ?? text(obj(m['button'])?.['text'], 200);
+}
+
+/** A tapped reply button or list row (an interactive message's answer). */
+function replyOf(m: Obj): { id: string; title: string } | null {
+  const i = obj(m['interactive']);
+  const r = obj(i?.['button_reply']) ?? obj(i?.['list_reply']);
+  const id = text(r?.['id'], 200);
+  return id ? { id, title: text(r?.['title'], 100) ?? '' } : null;
+}
+
 /** Reads one webhook call. Anything it does not know (statuses, history, account updates) is left out. */
 export function readCall(body: unknown): WaCall {
   const call: WaCall = { inbound: [], staff: [] };
@@ -98,6 +120,8 @@ export function readCall(body: unknown): WaCall {
             kind: text(m['type'], 30) ?? 'unknown',
             at: atOf(m['timestamp']),
             ad: adOf(m['referral']),
+            text: textOf(m),
+            reply: replyOf(m),
           });
         }
       } else if (c['field'] === 'smb_message_echoes') {

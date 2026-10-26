@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sql } from '@/lib/db';
 import { isBridgeAuthorized, unauthorized } from '@/lib/bridge-auth';
+import { tellWhatsappCustomer } from '@/lib/whatsapp-updates';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,6 +49,8 @@ export async function POST(
       }
       return Response.json({ ok: true, data: { updated: false, finalStatus: found[0]!.status } });
     }
+    // A WhatsApp customer hears of it (lib/whatsapp-updates: each status once; never fails the till's push).
+    await tellWhatsappCustomer(params.id, parsed.data.status);
     return Response.json({ ok: true, data: { updated: true } });
   } catch (e) {
     console.error('POST /api/bridge/orders/[id]/status failed', e);

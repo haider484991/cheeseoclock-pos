@@ -1,6 +1,9 @@
 import { getShopFacts } from '@/lib/site-facts';
 import { getStoreStatus } from '@/lib/store-status';
+import type { OrderAnswer } from '@/lib/whatsapp-bot';
+import { botFor, handleBotMessage } from '@/lib/whatsapp-bot-run';
 import { answersKind, readCall, signatureOk } from '@/lib/whatsapp-webhook';
+import { POST as placeOrder } from '../../orders/route';
 import { autoReplyOn, autoReplyText, orderLinkUrl, sendText } from '@/lib/whatsapp-send';
 import {
   claimAutoReply,
@@ -37,6 +40,30 @@ export function GET(req: Request): Response {
   return new Response('forbidden', { status: 403 });
 }
 
+/**
+ * The bot's orders go through the website's own checkout route (api/orders) in this process: the same checks, the
+ * same prices, the same row for the till. Its answer as the bot reads it.
+ */
+async function orderInProcess(body: Record<string, unknown>): Promise<OrderAnswer> {
+  const res = await placeOrder(
+    new Request('https://www.cheeseoclock.net/api/orders', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+  const json = (await res.json().catch(() => null)) as {
+    ok?: boolean;
+    error?: string;
+    message?: string;
+    details?: Record<string, string[] | undefined>;
+    data?: Extract<OrderAnswer, { ok: true }>;
+  } | null;
+  if (json?.ok && json.data) return { ...json.data, ok: true };
+  const detail = json?.details ? Object.values(json.details).flat().filter(Boolean)[0] : undefined;
+  return { ok: false, error: json?.error ?? `http_${res.status}`, ...(json?.message || detail ? { message: json?.message ?? detail } : {}) };
+}
+
 /** A message older than this (a retry long after it was sent) is kept but not answered. */
 const ANSWER_WITHIN_MS = 15 * 60_000;
 
@@ -59,7 +86,13 @@ export async function POST(req: Request): Promise<Response> {
     for (const m of call.inbound) {
       const fresh = await recordInbound(m);
       const now = new Date();
-      if (!fresh || !answersKind(m.kind) || now.getTime() - m.at.getTime() > ANSWER_WITHIN_MS || !autoReplyOn()) continue;
+      if (!fresh || !answersKind(m.kind) || now.getTime() - m.at.getTime() > ANSWER_WITHIN_MS) continue;
+      // The ordering bot's customers (lib/whatsapp-bot-run: everyone, or the owner's test numbers first).
+      if (botFor(m.waId)) {
+        await handleBotMessage(m, orderInProcess, now);
+        continue;
+      }
+      if (!autoReplyOn()) continue;
       if (!(await claimAutoReply(m.waId, now))) continue;
       const [shop, store, token] = await Promise.all([getShopFacts(), getStoreStatus(), createLink(m.waId)]);
       const sent = await sendText({

@@ -446,3 +446,23 @@ CREATE TABLE IF NOT EXISTS wa_orders (
   at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_wa_orders_at ON wa_orders(at);
+-- The ordering bot's place in each customer's order (src/lib/whatsapp-bot.ts),
+-- and each status a WhatsApp order's customer was told of (once).
+CREATE TABLE IF NOT EXISTS wa_sessions (
+  wa_id      TEXT PRIMARY KEY,
+  state      TEXT NOT NULL,
+  data       JSONB NOT NULL,
+  version    INT NOT NULL DEFAULT 1,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS wa_order_updates (
+  order_id UUID NOT NULL,
+  status   TEXT NOT NULL,
+  at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (order_id, status)
+);
+-- The till's sales already sent to Meta as shop Purchases (src/lib/till-sales-capi.ts), each once.
+CREATE TABLE IF NOT EXISTS capi_till_sales (
+  order_id TEXT PRIMARY KEY,
+  sent_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
