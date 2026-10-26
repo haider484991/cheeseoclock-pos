@@ -21,13 +21,14 @@ const SECRET = 'test-app-secret';
 const BRIDGE = 'test-bridge-secret-0123456789';
 const PHONE_ID = '1356740797521773';
 const TESTER = '923088440608';
+const TESTER_2 = '923001110000';
 Object.assign(process.env, {
   META_APP_SECRET: SECRET,
   BRIDGE_SECRET: BRIDGE,
   WHATSAPP_ACCESS_TOKEN: 'test-token',
   WHATSAPP_PHONE_NUMBER_ID: PHONE_ID,
   WHATSAPP_ORDER_BOT: 'test',
-  WHATSAPP_BOT_TESTERS: `+${TESTER}`,
+  WHATSAPP_BOT_TESTERS: `+${TESTER},+${TESTER_2}`,
   WHATSAPP_AUTO_REPLY: 'on',
 });
 
@@ -68,6 +69,22 @@ async function customer(waId: string, said: { text?: string; tap?: string }) {
   );
   expect(res.status).toBe(200);
   return sent.slice(from);
+}
+
+/** Staff write to the customer from the WhatsApp Business app on the shop's phone (Meta's echo), at `at`. */
+async function staffWrites(waId: string, at: Date) {
+  const raw = JSON.stringify({
+    object: 'whatsapp_business_account',
+    entry: [{ id: '1881791873188347', changes: [{ field: 'smb_message_echoes', value: { metadata: { phone_number_id: PHONE_ID }, message_echoes: [{ from: '923009367865', to: waId, id: `wamid.staff.${++seq}`, timestamp: String(Math.floor(at.getTime() / 1000)), type: 'text', text: { body: 'Ji?' } }] } }] }],
+  });
+  const res = await webhook.POST(
+    new Request('https://site.test/api/whatsapp/webhook', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': `sha256=${createHmac('sha256', SECRET).update(raw).digest('hex')}` },
+      body: raw,
+    }),
+  );
+  expect(res.status).toBe(200);
 }
 const rowIds = (m: (typeof sent)[number] | undefined): string[] => {
   const a = m?.interactive?.action as { buttons?: Array<{ reply: { id: string } }>; sections?: Array<{ rows: Array<{ id: string }> }> } | undefined;
@@ -177,6 +194,23 @@ describe('WhatsApp ordering bot, end to end', () => {
       [TESTER, '✅ Aapka order #42 kitchen ko mil gaya — tayyar ho raha hai 🍕'],
       [TESTER, '🛵 Aapka order rider ke saath nikal gaya — thodi der mein pohanch jayega.'],
     ]);
+  });
+
+  it('the bot takes the address it asked for even if staff wrote from the phone before; once staff write after it, the bot keeps out', async () => {
+    await customer(TESTER_2, { text: 'Salam' });
+    for (const tap of ['o:start', 'c:0', 'i:lc', 'm:pz-tikka', 'm:dr-cola', 'q:1', 'k:checkout']) await customer(TESTER_2, { tap });
+    const zones = await customer(TESTER_2, { tap: 'f:delivery' });
+    await customer(TESTER_2, { tap: rowIds(zones[0]).find((x) => x.startsWith('zg:'))! });
+    // Something went out from the shop's phone (a reply, the app's greeting), then the bot asked for the address.
+    await staffWrites(TESTER_2, new Date(Date.now() - 30_000));
+    expect(words((await customer(TESTER_2, { tap: 'z:dha-6' }))[0])).toContain('address');
+    const named = await customer(TESTER_2, { text: 'Flat B102, Gardens 1, near the park' });
+    expect(named).toHaveLength(1);
+    expect(rowIds(named[0])).toContain('n:ok');
+
+    // Now staff write after the bot's question: the chat is theirs, and the customer's words go to them only.
+    await staffWrites(TESTER_2, new Date(Date.now() + 2_000));
+    expect(await customer(TESTER_2, { text: 'Bhai jaldi bhej dena' })).toEqual([]);
   });
 
   it('a customer who is not a tester still gets the day’s order link, not the bot', async () => {

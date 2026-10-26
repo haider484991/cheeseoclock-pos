@@ -100,8 +100,11 @@ export async function handleBotMessage(
       if (!(await send(welcome))) await releaseAutoReply(m.waId, now);
       return;
     }
-    // Staff wrote to them in the last hour: the words are for staff, not the bot.
-    if (await staffWroteSince(m.waId, new Date(now.getTime() - STAFF_QUIET_MS))) return;
+    // Staff wrote to them in the last hour, after the bot's last step: staff took the chat over and the words are
+    // theirs. A message from the phone before that step does not stop the order the customer is answering now (the
+    // user, 26 Oct 2026: the bot asked for the address, then went quiet when it came).
+    const since = Math.max(now.getTime() - STAFF_QUIET_MS, fresh!.updatedAt.getTime());
+    if (await staffWroteSince(m.waId, new Date(since))) return;
   }
 
   const step = await runBot(
