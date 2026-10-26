@@ -1,5 +1,4 @@
 import type { PublishedMenu, PublishedMenuItem } from '@cheeseoclock/shared-types';
-import { formatCents } from './format';
 import { dealPhotoFor, dealPhotoKey, shopPhotoFor, splitSizedName } from './menu-view';
 import { SITE_URL } from './seo';
 
@@ -104,9 +103,4 @@ const COLUMNS: ReadonlyArray<keyof CatalogRow> = ['id', 'title', 'description', 
 export function catalogCsv(rows: readonly CatalogRow[]): string {
   const cell = (v: string) => (/[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
   return [COLUMNS.join(','), ...rows.map((r) => COLUMNS.map((k) => cell(r[k])).join(','))].join('\n') + '\n';
-}
-
-/** "Rs 4,800" for a row's price, for the bot and the tests. */
-export function rowPriceWords(row: CatalogRow): string {
-  return formatCents(Math.round(Number(row.price.split(' ')[0]) * 100));
 }

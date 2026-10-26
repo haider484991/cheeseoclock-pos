@@ -1,7 +1,7 @@
 /** The shop's Meta catalog feed (lib/meta-catalog, 26 Oct 2026): the items with a shop photo, priced as published. */
 import { describe, expect, it } from 'vitest';
 import type { PublishedMenu, PublishedMenuItem } from '@cheeseoclock/shared-types';
-import { catalogCsv, catalogPhotoFor, catalogRows, rowPriceWords } from './meta-catalog';
+import { catalogCsv, catalogPhotoFor, catalogRows } from './meta-catalog';
 
 const item = (id: string, name: string, rs: number, over: Partial<PublishedMenuItem> = {}): PublishedMenuItem => ({
   posItemId: id, name, description: null, basePriceCents: rs * 100, taxRateBps: 1500, imageUrl: null, sortOrder: 0, modifierGroups: [], ...over,
@@ -27,7 +27,6 @@ describe('Meta catalog feed', () => {
     expect(rows[0]).toMatchObject({ price: '4800.00 PKR', availability: 'in stock', condition: 'new', brand: 'Cheese O’Clock', link: 'https://www.cheeseoclock.net/menu?deal=mega-cheese-box' });
     expect(rows[0]!.description).toContain('Tax included.');
     expect(rows[2]!.description).toContain('Plus tax.');
-    expect(rowPriceWords(rows[0]!)).toBe('Rs 4,800');
     expect(catalogPhotoFor('Soft Drink — 345 ml')).toBe('https://www.cheeseoclock.net/images/catalog/soft-drink-345-ml.jpg');
     expect(catalogPhotoFor('Veggie Lovers — Large')).toBe('https://www.cheeseoclock.net/images/catalog/veggie-lovers.jpg');
     expect(catalogPhotoFor('Mystery Special — Large')).toBeNull();
