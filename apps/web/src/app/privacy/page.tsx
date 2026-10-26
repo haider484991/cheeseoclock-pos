@@ -33,7 +33,8 @@ export default async function PrivacyPage() {
         <p className="font-cond text-sm font-bold uppercase tracking-[0.24em] text-cheese">Last updated {UPDATED}</p>
         <h1 className="mt-2 font-display text-5xl uppercase leading-none tracking-wide text-cream">Privacy policy</h1>
         <p>
-          {name} makes and delivers food in DHA and Clifton, Karachi. This page says what we collect when you use{' '}
+          {name} makes and delivers food in DHA and Clifton, Karachi, and is run by {BUSINESS.legalName}. This page says
+          what we collect when you use{' '}
           <Link href="/" className="text-cheese underline underline-offset-4">cheeseoclock.net</Link> or order from us, why,
           and how to have it deleted. We don’t sell your details to anyone.
         </p>

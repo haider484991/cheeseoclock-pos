@@ -42,4 +42,8 @@ export const BUSINESS = {
 
   // The shop's email (17 Oct 2026; it forwards to the shop's inbox): the footer links it, JSON-LD names it.
   email: 'contact@cheeseoclock.net',
+
+  // The company that runs the shop, as on its FBR NTN paper (26 Oct 2026): Meta's business verification of the shop's
+  // portfolio needs this legal name on the website. The footer's bottom line and /privacy show it.
+  legalName: 'Saaz Global (SMC-Private) Limited',
 } as const;

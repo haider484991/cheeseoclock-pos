@@ -46,7 +46,7 @@ import { DEFAULT_DELIVERY_ZONES, type DeliveryZoneSetting, type PublishedMenu, t
 import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery-charge';
 import { goldenMenu } from './__fixtures__/golden-menu';
 import { MENU_PRICED_ROUTES, htmlWithMenuUnknown } from './__fixtures__/menu-unknown';
-import { FOOTER_CREDIT, withFooterCredit } from './__fixtures__/footer-credit';
+import { FOOTER_CREDIT, FOOTER_LEGAL_NAME, withFooterCredit } from './__fixtures__/footer-credit';
 import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
 import { withDomainVerification } from './__fixtures__/domain-verification';
 import { withAreaListAdditions } from './__fixtures__/area-list';
@@ -407,6 +407,14 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     for (const state of ['a', 'b', 'c']) {
       for (const [route, key] of Object.entries(now.pages[state]!)) {
         expect(now.html[key]!.split(FOOTER_CREDIT).length - 1, `${state} ${route}`).toBe(1);
+      }
+    }
+  });
+
+  it('every page names the company that runs the shop once, under the footer’s bottom line (2026-10-26)', () => {
+    for (const state of ['a', 'b', 'c']) {
+      for (const [route, key] of Object.entries(now.pages[state]!)) {
+        expect(now.html[key]!.split(FOOTER_LEGAL_NAME).length - 1, `${state} ${route}`).toBe(1);
       }
     }
   });

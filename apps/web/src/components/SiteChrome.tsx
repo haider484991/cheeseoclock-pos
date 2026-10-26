@@ -186,6 +186,8 @@ export async function SiteFooter() {
         <a href="https://pixelandoak.com/pos/online-ordering-system/" target="_blank" rel="noopener" className="hover:text-cheese">
           Ordering by Pixel &amp; Oak POS
         </a>
+        {/* The company that runs the shop (26 Oct 2026): Meta's business verification needs its legal name on the site. */}
+        <span className="mt-1 block">{`Operated by ${BUSINESS.legalName}`}</span>
       </div>
     </footer>
   );
