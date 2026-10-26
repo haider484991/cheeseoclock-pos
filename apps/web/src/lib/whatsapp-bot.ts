@@ -7,7 +7,7 @@ import {
 } from '@cheeseoclock/shared-types';
 import { zoneNameWithLocalNames, type FactZone } from './delivery-facts';
 import { formatCents } from './format';
-import { isPickupOnly } from './menu-view';
+import { isDealSection, isPickupOnly } from './menu-view';
 import { validateModifierSelection } from './order-validation';
 import type { WaOut } from './whatsapp-send';
 
@@ -184,6 +184,11 @@ function itemOf(shop: BotShop, posItemId: string): PublishedMenuItem | undefined
     .find((i) => i.posItemId === posItemId);
 }
 
+/** The menu section an item is in ("Value Deals", "Burgers"), or '' when it is in none. */
+function sectionOf(shop: BotShop, posItemId: string): string {
+  return categoriesOf(shop).find((c) => c.items.some((i) => i.posItemId === posItemId))?.name ?? '';
+}
+
 /** The choices the customer must make (a deal's fixed parts are not asked: they come with it). */
 function requiredGroups(item: PublishedMenuItem): PublishedModifierGroup[] {
   return item.modifierGroups.filter((g) => (g.isRequired || g.minSelect > 0) && !isFixedChoiceGroup(g));
@@ -298,15 +303,37 @@ function choiceMessage(item: PublishedMenuItem, group: PublishedModifierGroup, s
   };
 }
 
-function qtyMessage(item: PublishedMenuItem): WaOut {
+/** What one of an item is called when asking how many: a deal, a pizza, a burger… (one, many, the question). */
+function unitWords(section: string): { one: string; many: string; ask: string } {
+  if (isDealSection(section)) return { one: 'deal', many: 'deals', ask: 'Kitni deals chahiye?' };
+  if (/pizza/i.test(section)) return { one: 'pizza', many: 'pizza', ask: 'Kitne pizza chahiye?' };
+  if (/burger/i.test(section)) return { one: 'burger', many: 'burgers', ask: 'Kitne burger chahiye?' };
+  if (/drink/i.test(section)) return { one: 'drink', many: 'drinks', ask: 'Kitni drinks chahiye?' };
+  if (/dip/i.test(section)) return { one: 'dip', many: 'dips', ask: 'Kitni dips chahiye?' };
+  return { one: 'plate', many: 'plates', ask: 'Kitni plates chahiye?' };
+}
+
+/**
+ * How many of the item just put together (the user, 26 Oct 2026: "kitne chahiye 1 2 3" was confusing — it read as
+ * how many pizzas inside the deal). It names what was chosen, asks for whole deals (or burgers, pizzas…), shows the
+ * price of one, and the buttons say "1 deal", "2 deals".
+ */
+function qtyMessage(item: PublishedMenuItem, section: string, ids: readonly string[]): WaOut {
+  const u = unitWords(section);
+  const choices = choiceWords(item, ids);
+  const one = lineCents(item, { posItemId: item.posItemId, quantity: 1, modifierIds: [...ids] });
+  const deal = isDealSection(section);
   return {
     type: 'buttons',
-    body: `*${item.name}* — kitne chahiye?`,
-    buttons: [
-      { id: 'q:1', title: '1' },
-      { id: 'q:2', title: '2' },
-      { id: 'q:3', title: '3' },
-    ],
+    body: [
+      `✅ *${item.name}*`,
+      ...(choices ? [`↳ ${choices}`] : []),
+      '',
+      `*${u.ask}*`,
+      `1 ${u.one} = ${formatCents(one)}${item.taxIncluded ? ' · tax shamil' : ' + tax'}`,
+      ...(deal && choices ? ['', '_Doosri deal mein alag choice chahiye? 1 chunein, phir ➕ Aur add karein._'] : []),
+    ].join('\n'),
+    buttons: [1, 2, 3].map((n) => ({ id: `q:${n}`, title: `${n} ${n === 1 ? u.one : u.many}` })),
   };
 }
 
@@ -528,7 +555,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       addPending(p.quantity);
       return nextFromQueue();
     }
-    say(qtyMessage(item));
+    say(qtyMessage(item, sectionOf(shop, item.posItemId), p.modifierIds));
     go('qty');
   };
 

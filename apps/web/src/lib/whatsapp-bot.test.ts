@@ -115,6 +115,7 @@ function chat(s: BotShop = shop(), deps: BotDeps = fakeDeps().deps, profileName:
 const ids = (m: WaOut | undefined): string[] =>
   !m ? [] : m.type === 'buttons' ? m.buttons.map((b) => b.id) : m.type === 'list' ? m.sections.flatMap((s) => s.rows.map((r) => r.id)) : [];
 const body = (m: WaOut | undefined) => (m && m.type !== 'text' ? m.body : (m?.body ?? ''));
+const titles = (m: WaOut | undefined): string[] => (m?.type === 'buttons' ? m.buttons.map((b) => b.title) : []);
 
 describe('the WhatsApp ordering bot', () => {
   it('a whole delivery order: the deal’s choices, its fries without asking, two of them, DHA Phase 6, then the till’s total', async () => {
@@ -139,6 +140,11 @@ describe('the WhatsApp ordering bot', () => {
     const qty = await c.send({ tap: 'm:dr-cola' });
     expect(qty.state).toBe('qty');
     expect(ids(qty.out[0])).toEqual(['q:1', 'q:2', 'q:3']);
+    // How many WHOLE deals, not how many pizzas in it: what was chosen, the price of one, "1 deal / 2 deals".
+    expect(titles(qty.out[0])).toEqual(['1 deal', '2 deals', '3 deals']);
+    expect(body(qty.out[0])).toContain('↳ Large pizza: Chicken Tikka · 1 litre drink: Cola');
+    expect(body(qty.out[0])).toContain('*Kitni deals chahiye?*\n1 deal = Rs 1,800 · tax shamil');
+    expect(() => payloadOf('923088440608', qty.out[0]!)).not.toThrow();
 
     const cart = await c.send({ tap: 'q:2' });
     expect(cart.state).toBe('cart');
@@ -195,7 +201,10 @@ describe('the WhatsApp ordering bot', () => {
     const c = chat(shop(), deps);
     await c.send({ tap: 'o:start' });
     await c.send({ tap: 'c:1' });
-    expect(ids((await c.send({ tap: 'i:burger' })).out[0])).toEqual(['q:1', 'q:2', 'q:3']);
+    const howMany = (await c.send({ tap: 'i:burger' })).out[0];
+    expect(ids(howMany)).toEqual(['q:1', 'q:2', 'q:3']);
+    expect(titles(howMany)).toEqual(['1 burger', '2 burgers', '3 burgers']);
+    expect(body(howMany)).toContain('*Kitne burger chahiye?*\n1 burger = Rs 700 + tax');
     await c.send({ tap: 'q:1' });
     await c.send({ tap: 'k:checkout' });
     expect((await c.send({ tap: 'f:pickup' })).state).toBe('name');
