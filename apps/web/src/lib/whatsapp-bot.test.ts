@@ -251,6 +251,10 @@ describe('the WhatsApp ordering bot', () => {
     const d = chat(shop({ menu }));
     expect(ids((await d.send({ text: 'zinger burger' })).out[0])).toEqual(['i:burger']);
     expect(ids((await d.send({ text: 'Assalam o alaikum' })).out[0])).toContain('o:menu');
+    // Meta's words when an ad is tapped: the menu, not "not understood".
+    const info = await d.send({ text: 'Hello! Can I get more info on this?' });
+    expect(ids(info.out[0])).toContain('o:menu');
+    expect(body(info.out[0])).not.toContain('samajh nahi aaya');
     const help = await d.send({ text: 'Delivery kitni der mein?' });
     expect(body(help.out[0])).toContain('Ye samajh nahi aaya');
     expect(ids(help.out[0])).toContain('o:staff');

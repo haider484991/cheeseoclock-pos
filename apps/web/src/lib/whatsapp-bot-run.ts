@@ -87,12 +87,19 @@ export async function handleBotMessage(
   const live = fresh !== null && fresh.state !== 'idle';
   // A tapped button or list row, or a cart from the catalog: the customer is talking to the bot.
   const tap = m.reply !== null || (m.order?.length ?? 0) > 0;
+  // A Facebook or Instagram ad (or post) tapped: Meta fills in "Hello! Can I get more info on this?" and the customer
+  // sends it. Each such tap asks for the menu — a second tap later the same day too (27 Oct 2026: it went unanswered
+  // once the day's welcome was used) — unless staff are in the chat.
+  const fromAd = !tap && m.ad !== null;
   const command = !tap && m.text !== null && isBotCommand(m.text);
 
   if (!tap && !command) {
-    if (!live) {
-      // Not in an order: the day's first message gets the welcome (closed: the hours and the link); the rest are staff's.
-      if (!(await claimAutoReply(m.waId, now))) return;
+    if (!live && !(await claimAutoReply(m.waId, now))) {
+      // The day's welcome is used: the words are staff's — but an ad tapped again gets the menu (as "menu" would),
+      // unless staff wrote to them in the last hour.
+      if (!fromAd || (await staffWroteSince(m.waId, new Date(now.getTime() - STAFF_QUIET_MS)))) return;
+    } else if (!live) {
+      // Not in an order, and the day's first message: the welcome (closed: the hours and the link).
       const [shop, bot] = await Promise.all([getShopFacts(), botShop()]);
       if (!bot.open) {
         const closed: WaOut = { type: 'text', body: autoReplyText({ shop, open: false, link: orderLinkUrl(await createLink(m.waId)), profileName: m.profileName }) };
@@ -104,16 +111,17 @@ export async function handleBotMessage(
       if (!(await writeSession(m.waId, 'menu', { cart: [] }, session ? session.version : null))) return;
       if (!(await send(welcomeMessage({ shopName: shopNameProse(shop), profileName: m.profileName, shop: bot })))) await releaseAutoReply(m.waId, now);
       return;
+    } else {
+      // Staff wrote to them in the last hour, after the bot's last step: staff took the chat over and the words are
+      // theirs. A message from the phone before that step does not stop the order the customer is answering now (the
+      // user, 26 Oct 2026: the bot asked for the address, then went quiet when it came).
+      const since = Math.max(now.getTime() - STAFF_QUIET_MS, fresh!.updatedAt.getTime());
+      if (await staffWroteSince(m.waId, new Date(since))) return;
     }
-    // Staff wrote to them in the last hour, after the bot's last step: staff took the chat over and the words are
-    // theirs. A message from the phone before that step does not stop the order the customer is answering now (the
-    // user, 26 Oct 2026: the bot asked for the address, then went quiet when it came).
-    const since = Math.max(now.getTime() - STAFF_QUIET_MS, fresh!.updatedAt.getTime());
-    if (await staffWroteSince(m.waId, new Date(since))) return;
   }
 
   const step = await runBot(
-    { waId: m.waId, profileName: m.profileName, text: m.text, reply: m.reply, order: m.order },
+    { waId: m.waId, profileName: m.profileName, text: fromAd ? 'menu' : m.text, reply: m.reply, order: m.order },
     fresh ? { state: fresh.state as BotState, data: fresh.data as unknown as BotData } : null,
     await botShop(),
     {

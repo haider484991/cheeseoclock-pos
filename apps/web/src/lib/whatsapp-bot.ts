@@ -146,8 +146,14 @@ function saysYes(said: readonly string[]): boolean {
 }
 /** "2", "2x", "2 deals": a count on its own. */
 const COUNT = /^(\d{1,2})x?( (deals?|pizzas?|burgers?|plates?|drinks?|dips?|pcs|pieces?))?$/;
-/** A hello, or "the menu / prices / deals" with nothing more: the menu again. */
-const HELLO = /^(hi+|hello|helo|hey|salam|slam|aoa|assalam.*|as+alam.*|asslam.*|menu.*|price.*|prices|rate.*|list|deals?)$/;
+/**
+ * A hello, or an ask for the menu, the prices or "more info" — Meta's own words when an ad is tapped ("Hello! Can I get
+ * more info on this?"): the menu, never "not understood".
+ */
+const MENU_ASK = new Set(['hello', 'helo', 'hey', 'salam', 'slam', 'aoa', 'menu', 'info', 'information', 'details', 'detail', 'price', 'prices', 'rate', 'rates', 'list', 'deal', 'deals']);
+function asksForMenu(said: readonly string[]): boolean {
+  return said.length > 0 && said.length <= 12 && said.some((w) => MENU_ASK.has(w) || /^hi+$/.test(w) || /^as+a?lam/.test(w));
+}
 
 /** A word that starts, stops or hands over an order whatever the step ("menu", "cancel", "staff"). */
 export function isBotCommand(text: string): boolean {
@@ -891,7 +897,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       say(foundMessage(items));
       return go('items');
     }
-    if (HELLO.test(said.join(' '))) return showStart();
+    if (asksForMenu(said)) return showStart();
     // "coke", "7up": the drinks.
     const cats = categoriesNamed(shop, said.map((w) => (SAID_AS[w] ? 'drink' : w)));
     if (cats.length === 1) {

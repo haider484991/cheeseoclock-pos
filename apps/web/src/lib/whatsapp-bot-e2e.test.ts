@@ -22,13 +22,14 @@ const BRIDGE = 'test-bridge-secret-0123456789';
 const PHONE_ID = '1356740797521773';
 const TESTER = '923088440608';
 const TESTER_2 = '923001110000';
+const TESTER_3 = '923001110003';
 Object.assign(process.env, {
   META_APP_SECRET: SECRET,
   BRIDGE_SECRET: BRIDGE,
   WHATSAPP_ACCESS_TOKEN: 'test-token',
   WHATSAPP_PHONE_NUMBER_ID: PHONE_ID,
   WHATSAPP_ORDER_BOT: 'test',
-  WHATSAPP_BOT_TESTERS: `+${TESTER},+${TESTER_2}`,
+  WHATSAPP_BOT_TESTERS: `+${TESTER},+${TESTER_2},+${TESTER_3}`,
   WHATSAPP_AUTO_REPLY: 'on',
 });
 
@@ -46,7 +47,8 @@ vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
 });
 
 let seq = 0;
-async function customer(waId: string, said: { text?: string; tap?: string }) {
+/** A customer's message; `ad`: sent from a Click-to-WhatsApp ad (Meta's referral, its pre-filled words). */
+async function customer(waId: string, said: { text?: string; tap?: string; ad?: boolean }) {
   const message = {
     from: waId,
     id: `wamid.in.${++seq}`,
@@ -54,6 +56,9 @@ async function customer(waId: string, said: { text?: string; tap?: string }) {
     ...(said.tap
       ? { type: 'interactive', interactive: { type: 'list_reply', list_reply: { id: said.tap, title: 'x' } } }
       : { type: 'text', text: { body: said.text ?? '' } }),
+    ...(said.ad
+      ? { referral: { source_url: 'https://fb.me/abc', source_type: 'ad', source_id: '120251397240540193', headline: 'WhatsApp par order, seedha kitchen', ctwa_clid: `clid-${seq}` } }
+      : {}),
   };
   const raw = JSON.stringify({
     object: 'whatsapp_business_account',
@@ -203,6 +208,23 @@ describe('WhatsApp ordering bot, end to end', () => {
     // Now staff write after the bot's question: the chat is theirs, and the customer's words go to them only.
     await staffWrites(TESTER_2, new Date(Date.now() + 2_000));
     expect(await customer(TESTER_2, { text: 'Bhai jaldi bhej dena' })).toEqual([]);
+  });
+
+  it('an ad tapped again the same day gets the menu again, unless staff are in the chat', async () => {
+    // TESTER ordered above: the day's welcome is used and the order is done. Meta's ad words get the menu all the same.
+    const again = await customer(TESTER, { text: 'Hello! Can I get more info on this?', ad: true });
+    expect(again).toHaveLength(1);
+    expect(rowIds(again[0])).toContain('o:menu');
+    expect(rowIds(again[0])).toContain('i:lc');
+    // The same words typed without an ad, once the day's welcome is used and no order is open: left to staff.
+    await customer(TESTER, { tap: 'o:staff' });
+    expect(await customer(TESTER, { text: 'Kitni der lagegi?' })).toEqual([]);
+
+    // Staff wrote to TESTER_3 in the last hour: their ad tap is staff's to answer.
+    await customer(TESTER_3, { text: 'Salam' });
+    await customer(TESTER_3, { tap: 'o:staff' });
+    await staffWrites(TESTER_3, new Date(Date.now() - 60_000));
+    expect(await customer(TESTER_3, { text: 'Hello! Can I get more info on this?', ad: true })).toEqual([]);
   });
 
   it('a customer who is not a tester still gets the day’s order link, not the bot', async () => {
