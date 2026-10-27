@@ -50,6 +50,17 @@ function usesNeonDriver(url: string): boolean {
 const pools = new Map<string, postgres.Sql>();
 
 /**
+ * On Cloudflare Workers a socket belongs to the request that opened it, so no pool can serve two requests. The
+ * Worker's entry (cloudflare/worker.mjs) runs each request in a scope of its own, holding a map that gives the request
+ * its own small pool, gone with it. Off Workers there is no scope: one pool per instance, as on Vercel.
+ */
+export const REQUEST_SCOPE = Symbol.for('site.request-scope');
+type RequestScope = { getStore(): { pools: Map<string, postgres.Sql> } | undefined };
+function requestPools(): Map<string, postgres.Sql> | null {
+  return (globalThis as unknown as Record<symbol, RequestScope | undefined>)[REQUEST_SCOPE]?.getStore()?.pools ?? null;
+}
+
+/**
  * One statement at a time on a connection. postgres.js otherwise sends the next query before the one ahead has
  * answered, and through Supabase's transaction pooler that later query never answers: the pooler hands the server
  * connection on when the first one ends. The dashboard's pages (eight queries at once) hung until Vercel's 300 s
@@ -62,7 +73,9 @@ const ONE_STATEMENT_AT_A_TIME = { max_pipeline: 0 };
 const passText = (value: unknown) => (typeof value === 'string' ? value : String(value));
 
 function tcpClient(url: string): NeonQueryFunction<false, false> {
-  let pool = pools.get(url);
+  const perRequest = requestPools();
+  const owner = perRequest ?? pools;
+  let pool = owner.get(url);
   if (!pool) {
     const address = new URL(url);
     const host = address.hostname;
@@ -75,11 +88,17 @@ function tcpClient(url: string): NeonQueryFunction<false, false> {
       // server connection, so a prepared statement would not be there next time.
       prepare: false,
       ...ONE_STATEMENT_AT_A_TIME,
-      max: 5,
+      // A request's own pool (Workers) is small and short-lived, and looks up no types on connecting: it connects
+      // on every request, and the types below cover every array the website reads (db-driver.test.ts).
+      max: perRequest ? 2 : 5,
+      fetch_types: !perRequest,
       // Let go of idle connections, so a sleeping function instance holds none.
-      idle_timeout: 20,
+      idle_timeout: perRequest ? 2 : 20,
       connect_timeout: 10,
-      ssl: host === 'localhost' || host === '127.0.0.1' ? false : 'require',
+      // On Workers the database is reached through Cloudflare's Hyperdrive (….hyperdrive.local, inside Cloudflare):
+      // plain TCP to it, and Hyperdrive encrypts on to Supabase, whose certificate (Supabase's own root CA) a
+      // Worker's TLS will not accept.
+      ssl: host === 'localhost' || host === '127.0.0.1' || host.endsWith('.hyperdrive.local') ? false : 'require',
       // postgres.js encodes a value by the type Postgres expects: JSON text
       // would be JSON-encoded again (the website sends ${JSON.stringify(x)}::jsonb
       // everywhere), 'false' would become 't'. Parsing stays postgres.js's own,
@@ -99,7 +118,7 @@ function tcpClient(url: string): NeonQueryFunction<false, false> {
       // Notices (e.g. "relation already exists, skipping" from CREATE … IF NOT EXISTS) are not errors.
       onnotice: () => undefined,
     });
-    pools.set(url, pool);
+    owner.set(url, pool);
   }
   const db = pool;
   const query = (first: TemplateStringsArray | string, ...rest: unknown[]) => {

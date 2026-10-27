@@ -1,0 +1,23 @@
+// The TEST Worker (27 Oct 2026): the same website on its own copy of the data (Supabase schema cftest, login
+// cheeseoclock_cftest, which cannot read the live tables). workers.dev only, never indexed (cloudflare/worker.mjs).
+// Built and deployed by `node scripts/build-cloudflare.mjs test --deploy`.
+// Secrets (never here), with `wrangler secret bulk`: BRIDGE_SECRET, META_APP_SECRET, WHATSAPP_VERIFY_TOKEN (made-up
+// test values). No WhatsApp or Meta tokens: nothing is ever sent from the test.
+{
+  "name": "cheeseoclock-test",
+  "main": "cf-worker.mjs",
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "cheeseoclock-test" }],
+  "kv_namespaces": [
+    { "binding": "NEXT_INC_CACHE_KV", "id": "78c6f3916daa4e2986c9e170a7105779" },
+    { "binding": "NEXT_TAG_CACHE_KV", "id": "ecd8190b0a30498180fb64ad1d88241e" }
+  ],
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "2e803748601d48deb488b8574a5a9b68" }],
+  "placement": { "mode": "targeted", "region": "aws:ap-southeast-1" },
+  "limits": { "cpu_ms": 30000 },
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true }
+}

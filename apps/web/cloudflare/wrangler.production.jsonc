@@ -1,0 +1,32 @@
+// Cheese O'Clock's website on Cloudflare Workers (Workers Paid, 27 Oct 2026), the LIVE database. Built and deployed by
+// `node scripts/build-cloudflare.mjs production --deploy` (DEPLOY-CLOUDFLARE.md).
+// Secrets (never here), with `wrangler secret bulk`: BRIDGE_SECRET, META_APP_SECRET, META_CAPI_ACCESS_TOKEN,
+// META_PAGE_TOKEN, META_PAGE_ID, META_IG_USER_ID, WHATSAPP_ACCESS_TOKEN, WHATSAPP_VERIFY_TOKEN, WHATSAPP_PHONE_NUMBER_ID,
+// WHATSAPP_ORDER_BOT, WHATSAPP_AUTO_REPLY, WHATSAPP_BOT_TESTERS, COMMENT_REPLIES, TILL_SALES_TO_META (Vercel's values).
+// The database needs none here: Hyperdrive holds the login (cloudflare/worker.mjs makes it the DATABASE_URL).
+{
+  "name": "cheeseoclock",
+  "main": "cf-worker.mjs",
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "cheeseoclock" }],
+  // The kept pages (open-next.config.ts): KV cheeseoclock-pages and cheeseoclock-tags.
+  "kv_namespaces": [
+    { "binding": "NEXT_INC_CACHE_KV", "id": "a60e9d554dfe4cc9959ad5d38ca742d1" },
+    { "binding": "NEXT_TAG_CACHE_KV", "id": "891b4726f1fa435d9b9e767a35ce5a15" }
+  ],
+  // Hyperdrive cheeseoclock-db: the website's own login (cheeseoclock_web) through Supabase's session pooler, no query
+  // caching, at most about 5 connections.
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "89623f68cae0475d8f9cf8978f2b3b44" }],
+  // Next to the database (Supabase, Singapore): every query is a round trip.
+  "placement": { "mode": "targeted", "region": "aws:ap-southeast-1" },
+  // Workers Paid allows 30 s of CPU a request, but a Worker made before the upgrade was still stopped at 50 ms until
+  // this was set (27 Oct 2026). The free plan's 10 ms cut about 1 request in 5.
+  "limits": { "cpu_ms": 30000 },
+  // workers.dev until the domain moves (never indexed: cloudflare/worker.mjs). At the switch, add:
+  // "routes": [{ "pattern": "www.cheeseoclock.net", "custom_domain": true }, { "pattern": "cheeseoclock.net", "custom_domain": true }]
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true }
+}
