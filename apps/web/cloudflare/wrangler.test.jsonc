@@ -15,6 +15,7 @@
     { "binding": "NEXT_TAG_CACHE_KV", "id": "ecd8190b0a30498180fb64ad1d88241e" }
   ],
   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "2e803748601d48deb488b8574a5a9b68" }],
+  "r2_buckets": [{ "binding": "TILL_BACKUPS", "bucket_name": "cheeseoclock-till-backups-test" }],
   "placement": { "mode": "targeted", "region": "aws:ap-southeast-1" },
   "limits": { "cpu_ms": 30000 },
   "workers_dev": true,

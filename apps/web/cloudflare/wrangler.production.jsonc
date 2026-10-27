@@ -19,6 +19,8 @@
   // Hyperdrive cheeseoclock-db: the website's own login (cheeseoclock_web) through Supabase's session pooler, no query
   // caching, at most about 5 connections.
   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "89623f68cae0475d8f9cf8978f2b3b44" }],
+  // The till's cloud copies (lib/backup-objects.ts): a private bucket, no public access, read and written only here.
+  "r2_buckets": [{ "binding": "TILL_BACKUPS", "bucket_name": "cheeseoclock-till-backups" }],
   // Next to the database (Supabase, Singapore): every query is a round trip.
   "placement": { "mode": "targeted", "region": "aws:ap-southeast-1" },
   // Workers Paid allows 30 s of CPU a request, but a Worker made before the upgrade was still stopped at 50 ms until

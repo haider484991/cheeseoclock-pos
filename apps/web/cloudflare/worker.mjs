@@ -5,6 +5,7 @@
 //  - @vercel/functions' waitUntil (the WhatsApp webhook, the till's order pull) reaches this request's ctx.waitUntil.
 // The database is reached through Hyperdrive: Supabase's certificate is from Supabase's own root CA, which a Worker's
 // TLS will not accept, and Hyperdrive encrypts on to Supabase. The address it gives is the website's DATABASE_URL.
+// The till's cloud copies go in the R2 bucket bound as TILL_BACKUPS (lib/backup-objects.ts finds it on globalThis).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import handler from './.open-next/worker.js';
 
@@ -33,6 +34,7 @@ export default {
       return new Response(null, { status: 308, headers: { location: `https://${SITE_HOST}${url.pathname}${url.search}` } });
     }
     if (env.HYPERDRIVE) process.env.DATABASE_URL = env.HYPERDRIVE.connectionString;
+    if (env.TILL_BACKUPS) globalThis[Symbol.for('site.backups-bucket')] = env.TILL_BACKUPS;
     const store = { pools: new Map(), vercel: { waitUntil: (promise) => ctx.waitUntil(promise) } };
     const response = await scope.run(store, () => handler.fetch(request, env, ctx));
     const cacheControl = response.headers.get('cache-control') ?? '';

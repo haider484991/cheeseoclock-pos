@@ -9,8 +9,12 @@ import { del, get, list, put } from '@vercel/blob';
  *   pos-backups/chunks/<sha256>-<rawBytes>.gz   one chunk, gzip as the till sent it (content-addressed, stored once)
  *   pos-backups/copies/<deviceId>/<id>.json     one copy's record: its chunk list, checksum, manifest, server time
  *
- * Without a store (BLOB_STORE_ID / BLOB_READ_WRITE_TOKEN unset) the routes keep the database tables, as before.
- * Copies already in the database stay readable from there and rotate out as new ones arrive.
+ * On Cloudflare (the live site since 27 Oct 2026 11:20 UTC) the same names go in the private R2 bucket
+ * cheeseoclock-till-backups instead (the user: "Yes, move the till's cloud backups to Cloudflare R2"): the Worker's
+ * TILL_BACKUPS binding, handed over by cloudflare/worker.mjs. The bucket has no public access and no other key.
+ *
+ * Without a store (no bucket; BLOB_STORE_ID / BLOB_READ_WRITE_TOKEN unset) the routes keep the database tables, as
+ * before. Copies already in the database stay readable from there and rotate out as new ones arrive.
  */
 
 export interface CopyRecord {
@@ -116,6 +120,89 @@ export const vercelBlobObjects: BackupObjects = {
   },
 };
 
+/** The part of a Workers R2 bucket binding used here (the app has no @cloudflare/workers-types). */
+export interface R2BucketLike {
+  head(key: string): Promise<unknown>;
+  get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
+  put(key: string, value: Uint8Array | string, options?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
+  delete(keys: string[]): Promise<void>;
+  list(options: { prefix: string; cursor?: string; limit?: number }): Promise<{
+    objects: Array<{ key: string; size: number; uploaded: Date }>;
+    truncated: boolean;
+    cursor?: string;
+  }>;
+}
+
+/** R2 deletes at most 1000 keys a call. */
+const R2_DELETE_BATCH = 1000;
+
+/** The private R2 bucket the Worker is bound to: the same names and contract as the Blob store. */
+export function r2Objects(bucket: R2BucketLike): BackupObjects {
+  const listAllR2 = async (prefix: string) => {
+    const out: Array<{ key: string; size: number; uploaded: Date }> = [];
+    let cursor: string | undefined;
+    do {
+      const page = await bucket.list({ prefix, cursor, limit: 1000 });
+      out.push(...page.objects);
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
+    return out;
+  };
+  const readAllR2 = async (key: string) => {
+    const got = await bucket.get(key);
+    return got ? Buffer.from(await got.arrayBuffer()) : null;
+  };
+  const deleteAll = async (keys: string[]) => {
+    for (let i = 0; i < keys.length; i += R2_DELETE_BATCH) await bucket.delete(keys.slice(i, i + R2_DELETE_BATCH));
+  };
+  return {
+    async chunks() {
+      const out = new Map<string, StoredChunk>();
+      for (const o of await listAllR2(CHUNK_PREFIX)) {
+        const m = CHUNK_PATH.exec(o.key);
+        if (m) out.set(m[1]!, { hash: m[1]!, rawBytes: Number(m[2]), storedBytes: o.size, uploadedAt: o.uploaded });
+      }
+      return out;
+    },
+    async putChunk(hash, rawBytes, gz) {
+      // Content-addressed: the same name always holds the same bytes, so a second upload is harmless.
+      await bucket.put(chunkPath(hash, rawBytes), gz, { httpMetadata: { contentType: 'application/gzip' } });
+    },
+    async getChunk(c) {
+      return readAllR2(chunkPath(c.hash, c.rawBytes));
+    },
+    async deleteChunks(cs) {
+      await deleteAll(cs.map((c) => chunkPath(c.hash, c.rawBytes)));
+    },
+    async putCopy(r) {
+      // A record is written once and never changed. The website makes the id, so only a repeat of the same call can
+      // find one there.
+      if (await bucket.head(copyPath(r))) throw new Error('a copy record is never overwritten');
+      await bucket.put(copyPath(r), JSON.stringify(r), { httpMetadata: { contentType: 'application/json' } });
+    },
+    async copies() {
+      const out: CopyRecord[] = [];
+      for (const o of await listAllR2(COPY_PREFIX)) {
+        const raw = await readAllR2(o.key);
+        if (!raw) continue;
+        try {
+          out.push(JSON.parse(raw.toString('utf8')) as CopyRecord);
+        } catch {
+          // A record that does not read is left out, never guessed at.
+        }
+      }
+      return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    },
+    async deleteCopies(rs) {
+      await deleteAll(rs.map(copyPath));
+    },
+  };
+}
+
+/** The Worker's R2 bucket, when cloudflare/worker.mjs has handed one over. */
+const BUCKET = Symbol.for('site.backups-bucket');
+const boundBucket = () => (globalThis as Record<symbol, unknown>)[BUCKET] as R2BucketLike | undefined;
+
 /** In memory, for tests: the same contract as the Blob store. */
 export function memoryObjects(clock: () => Date = () => new Date()): BackupObjects & {
   chunkBytes: Map<string, Buffer>;
@@ -163,8 +250,10 @@ export function setBackupObjectsForTests(objects: BackupObjects | null | undefin
   override = objects;
 }
 
-/** The Blob store when this website has one, else null (the copies stay in the database tables). */
+/** The R2 bucket on Cloudflare, the Blob store on Vercel, else null (the copies stay in the database tables). */
 export function backupObjects(): BackupObjects | null {
   if (override !== undefined) return override;
+  const bucket = boundBucket();
+  if (bucket) return r2Objects(bucket);
   return process.env['BLOB_STORE_ID'] || process.env['BLOB_READ_WRITE_TOKEN'] ? vercelBlobObjects : null;
 }

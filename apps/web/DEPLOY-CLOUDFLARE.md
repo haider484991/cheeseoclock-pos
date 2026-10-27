@@ -18,7 +18,7 @@ on only inside the Worker's entry.
 | The kept pages (ISR) | `cloudflare/open-next.config.ts`: Workers KV for the pages and for `revalidatePath`'s tags, regeneration as a request of the Worker to itself |
 | The Workers | `cloudflare/wrangler.production.jsonc` (`cheeseoclock`, the live database) and `cloudflare/wrangler.test.jsonc` (`cheeseoclock-test`, a copy: Supabase schema `cftest`) |
 | The database | Hyperdrive `cheeseoclock-db` → the website's own login through Supabase's session pooler, no query caching, about 5 connections. A Worker cannot reach Supabase itself: Supabase's certificate is from its own root CA, and a Worker's TLS verifies against public ones |
-| The till's cloud copies | With no Blob store on Cloudflare they stay in the database tables (lib/backup-objects.ts), as before the Blob store |
+| The till's cloud copies | The private R2 bucket `cheeseoclock-till-backups` (test: `cheeseoclock-till-backups-test`), bound as `TILL_BACKUPS` and handed to lib/backup-objects.ts by `cloudflare/worker.mjs`: the same names as Vercel's Blob store, out of the database, so a database outage does not take them down. Copies still in the database stay listed. On the way back to Vercel the till writes to the Blob store again and the bucket's copies are not listed there |
 
 ## Build and deploy
 
