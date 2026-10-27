@@ -46,6 +46,10 @@ describe('pages a publish refreshes keep answering', () => {
     expect(wrong).toEqual([]);
   });
 
+  it('the home share image is drawn on request (the Vercel build has no database: a prerendered one keeps the build\'s details)', () => {
+    expect(readFileSync(join(APP, 'opengraph-image.tsx'), 'utf8')).toMatch(/export const dynamic\s*=\s*'force-dynamic'/);
+  });
+
   it('the area page still 404s an unknown slug by itself', () => {
     const src = readFileSync(join(APP, 'delivery/[area]/page.tsx'), 'utf8');
     expect(src).toMatch(/const found = getArea\(params\.area\);\s*\n\s*if \(!found\) notFound\(\);/);

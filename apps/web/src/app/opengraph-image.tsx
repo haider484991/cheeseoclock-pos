@@ -6,6 +6,9 @@ import { OG_TITLE } from '@/lib/page-copy';
 import { getCopyFacts } from '@/lib/site-facts';
 
 // Node, as every other route (27 Oct 2026): the database client is TCP now, and Cloudflare's adapter takes no Edge routes.
+// Drawn on request, as it was on Edge: the Vercel build has no database, so a prerendered image kept the build's
+// details, and each later redraw stopped at the database client's noStore() ("Dynamic server usage").
+export const dynamic = 'force-dynamic';
 export const alt =
   "Cheese O'Clock — Pizza & Burger Delivery in DHA Karachi";
 export const size = OG_SIZE;
