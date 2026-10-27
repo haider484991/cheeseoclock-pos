@@ -49,6 +49,15 @@ function usesNeonDriver(url: string): boolean {
 /** One small pool per database and server instance (a function instance serves many requests). */
 const pools = new Map<string, postgres.Sql>();
 
+/**
+ * One statement at a time on a connection. postgres.js otherwise sends the next query before the one ahead has
+ * answered, and through Supabase's transaction pooler that later query never answers: the pooler hands the server
+ * connection on when the first one ends. The dashboard's pages (eight queries at once) hung until Vercel's 300 s
+ * limit (27 Oct 2026; reproduced against the pooler, and gone with this). postgres.js reads max_pipeline
+ * (src/index.js), but its type definitions leave it out, hence a spread rather than a line in the options.
+ */
+const ONE_STATEMENT_AT_A_TIME = { max_pipeline: 0 };
+
 /** Values arrive here already as Postgres text (asText): sent as they are, never encoded a second time. */
 const passText = (value: unknown) => (typeof value === 'string' ? value : String(value));
 
@@ -65,6 +74,7 @@ function tcpClient(url: string): NeonQueryFunction<false, false> {
       // Supabase's transaction pooler (port 6543) hands each statement to any
       // server connection, so a prepared statement would not be there next time.
       prepare: false,
+      ...ONE_STATEMENT_AT_A_TIME,
       max: 5,
       // Let go of idle connections, so a sleeping function instance holds none.
       idle_timeout: 20,
