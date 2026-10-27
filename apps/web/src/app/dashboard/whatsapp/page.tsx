@@ -6,14 +6,7 @@ import { count, counted, dayClock, money, percent } from '@/lib/dashboard/format
 import { periodFrom, todayOf } from '@/lib/dashboard/period';
 import { seesReports } from '@/lib/dashboard/perms';
 import { requireUser } from '@/lib/dashboard/session';
-import {
-  FREE_SERVICE_MESSAGES,
-  ORDER_WINDOW_DAYS,
-  getBotMessagesThisMonth,
-  getWhatsappByAd,
-  getWhatsappChats,
-  getWhatsappSummary,
-} from '@/lib/dashboard/whatsapp';
+import { FREE_SERVICE_MESSAGES, ORDER_WINDOW_DAYS, getWhatsappPage } from '@/lib/dashboard/whatsapp';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'WhatsApp' };
@@ -34,12 +27,7 @@ export default async function WhatsappPage({ searchParams }: { searchParams: { p
   }
   const now = new Date();
   const period = periodFrom(searchParams, now);
-  const [summary, byAd, chats, botThisMonth] = await Promise.all([
-    getWhatsappSummary(period.from, period.to),
-    getWhatsappByAd(period.from, period.to),
-    getWhatsappChats(period.from, period.to),
-    getBotMessagesThisMonth(now),
-  ]);
+  const { summary, byAd, chats, botThisMonth } = await getWhatsappPage(period.from, period.to, now);
   const freeLeft = Math.max(0, FREE_SERVICE_MESSAGES - botThisMonth);
   return (
     <Shell user={user}>

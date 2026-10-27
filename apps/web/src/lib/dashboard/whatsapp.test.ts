@@ -107,4 +107,13 @@ describe('dashboard WhatsApp', () => {
     expect(await wa.getWhatsappSummary('2026-10-20', '2026-10-21')).toMatchObject({ customers: 0, orders: 0, salesCents: 0 });
     expect(await wa.getWhatsappChats('2026-10-20', '2026-10-21')).toEqual([]);
   });
+
+  it('the page’s one read gives what the four parts give on their own', async () => {
+    const now = new Date('2026-10-27T12:00:00Z');
+    const page = await wa.getWhatsappPage('2026-10-26', '2026-10-28', now);
+    expect(page.summary).toEqual(await wa.getWhatsappSummary('2026-10-26', '2026-10-28'));
+    expect(page.byAd).toEqual(await wa.getWhatsappByAd('2026-10-26', '2026-10-28'));
+    expect(page.chats).toEqual(await wa.getWhatsappChats('2026-10-26', '2026-10-28'));
+    expect(page.botThisMonth).toBe(await wa.getBotMessagesThisMonth(now));
+  });
 });

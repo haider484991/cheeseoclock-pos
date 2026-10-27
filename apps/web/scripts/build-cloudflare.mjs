@@ -130,6 +130,20 @@ for (const f of ['server-functions/default/apps/web/handler.mjs', 'server-functi
   const path = join(OUT_WEB, '.open-next', f);
   if (existsSync(path)) writeFileSync(path, readFileSync(path, 'utf8').split('.wasm?module').join('.wasm'));
 }
+// OpenNext's page loader picks a page's module by how its path ENDS, the home page's check first:
+// "…/app/dashboard/whatsapp/page.js" ends in "app/page.js" too, so /dashboard/whatsapp got the home page (27 Oct 2026).
+// Every app check names the server folder before it ("server/app/page.js"), which only the home page's path ends in.
+{
+  const path = join(OUT_WEB, '.open-next/server-functions/default/apps/web/handler.mjs');
+  const text = readFileSync(path, 'utf8');
+  const check = /(pagePath\.replaceAll\("\\\\","\/"\)\.endsWith\(")app\//g;
+  const found = text.match(check)?.length ?? 0;
+  if (found === 0) throw new Error('OpenNext page loader: no "app/" checks found (OpenNext changed?): see the page-path fix in this script');
+  const fixed = text.replace(check, '$1server/app/');
+  if (/\.endsWith\("app\//.test(fixed)) throw new Error('OpenNext page loader: an "app/" check is left after the page-path fix');
+  writeFileSync(path, fixed);
+  console.log(`page loader: ${found} app page checks now name server/app/`);
+}
 run('npx wrangler deploy --dry-run', OUT_WEB, env);
 
 // 4. Deploy: the build's kept pages into the KV page cache, then the Worker. OpenNext's helper starts a local Miniflare,

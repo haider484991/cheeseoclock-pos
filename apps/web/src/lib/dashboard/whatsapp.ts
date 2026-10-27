@@ -43,56 +43,81 @@ export interface WaSummary {
   linkSalesCents: number;
 }
 
+/** A till order after a chat (ORDERS_AFTER_CHATS). */
+interface AfterRow {
+  id: string;
+  net_cents: unknown;
+  wa_id: string;
+  ad_id: string | null;
+  ad_headline: string | null;
+}
+
 /**
  * The till orders after a chat: each counted order (dash_orders) whose number wrote to the shop in the
  * ORDER_WINDOW_DAYS before it, once, with that chat's latest ad.
  */
-const ORDERS_AFTER_CHATS = (start: string, end: string) => sql()`
-  SELECT DISTINCT ON (o.id) o.id, o.net_cents, c.wa_id, c.ad_id, c.ad_headline
-    FROM dash_orders o
-    JOIN wa_chats c ON right(regexp_replace(COALESCE(o.customer_phone, ''), '\\D', '', 'g'), 10) = right(c.wa_id, 10)
-    JOIN wa_events e ON e.wa_id = c.wa_id AND e.direction = 'in'
-                    AND e.at <= o.created_at AND e.at > o.created_at - make_interval(days => ${ORDER_WINDOW_DAYS})
-   WHERE o.created_at >= ${start} AND o.created_at < ${end} AND o.counted
-   ORDER BY o.id`;
+async function ordersAfterChats(start: string, end: string): Promise<AfterRow[]> {
+  return (await sql()`
+    SELECT DISTINCT ON (o.id) o.id, o.net_cents, c.wa_id, c.ad_id, c.ad_headline
+      FROM dash_orders o
+      JOIN wa_chats c ON right(regexp_replace(COALESCE(o.customer_phone, ''), '\\D', '', 'g'), 10) = right(c.wa_id, 10)
+      JOIN wa_events e ON e.wa_id = c.wa_id AND e.direction = 'in'
+                      AND e.at <= o.created_at AND e.at > o.created_at - make_interval(days => ${ORDER_WINDOW_DAYS})
+     WHERE o.created_at >= ${start} AND o.created_at < ${end} AND o.counted
+     ORDER BY o.id`) as AfterRow[];
+}
 
 export async function getWhatsappSummary(from: string, to: string): Promise<WaSummary> {
   await ready();
   const { start, end } = span(from, to);
-  const [chats, sends, after, links] = await Promise.all([
-    sql()`
-      SELECT count(DISTINCT e.wa_id) AS customers,
-             count(DISTINCT e.wa_id) FILTER (WHERE c.first_at >= ${start}) AS first_time,
-             count(DISTINCT e.wa_id) FILTER (WHERE e.ad_id IS NOT NULL) AS from_ads,
-             count(*) AS messages
-        FROM wa_events e JOIN wa_chats c ON c.wa_id = e.wa_id
-       WHERE e.direction = 'in' AND e.at >= ${start} AND e.at < ${end}`,
-    sql()`
-      SELECT count(*) FILTER (WHERE direction = 'bot') AS bot, count(*) FILTER (WHERE direction = 'staff') AS staff
-        FROM wa_events WHERE direction <> 'in' AND at >= ${start} AND at < ${end}`,
-    ORDERS_AFTER_CHATS(start, end),
-    sql()`
-      SELECT count(*) AS orders, COALESCE(sum(w.total_cents), 0) AS cents
-        FROM wa_orders l JOIN web_orders w ON w.id = l.order_id
-       WHERE l.at >= ${start} AND l.at < ${end} AND w.status <> 'cancelled'`,
-  ]);
-  const c = (chats as Array<Record<string, unknown>>)[0] ?? {};
-  const s = (sends as Array<Record<string, unknown>>)[0] ?? {};
-  const a = after as Array<{ wa_id: string; net_cents: unknown }>;
-  const l = (links as Array<Record<string, unknown>>)[0] ?? {};
+  return summaryOf(start, end, await ordersAfterChats(start, end));
+}
+
+/** The period's figures in one statement: who wrote, the bot's and staff's messages, the orders through the link. */
+async function summaryOf(start: string, end: string, after: readonly AfterRow[]): Promise<WaSummary> {
+  const rows = (await sql()`
+    SELECT c.customers, c.first_time, c.from_ads, c.messages, s.bot, s.staff, l.orders, l.cents
+      FROM (SELECT count(DISTINCT e.wa_id) AS customers,
+                   count(DISTINCT e.wa_id) FILTER (WHERE ch.first_at >= ${start}) AS first_time,
+                   count(DISTINCT e.wa_id) FILTER (WHERE e.ad_id IS NOT NULL) AS from_ads,
+                   count(*) AS messages
+              FROM wa_events e JOIN wa_chats ch ON ch.wa_id = e.wa_id
+             WHERE e.direction = 'in' AND e.at >= ${start} AND e.at < ${end}) c,
+           (SELECT count(*) FILTER (WHERE direction = 'bot') AS bot, count(*) FILTER (WHERE direction = 'staff') AS staff
+              FROM wa_events WHERE direction <> 'in' AND at >= ${start} AND at < ${end}) s,
+           (SELECT count(*) AS orders, COALESCE(sum(w.total_cents), 0) AS cents
+              FROM wa_orders l JOIN web_orders w ON w.id = l.order_id
+             WHERE l.at >= ${start} AND l.at < ${end} AND w.status <> 'cancelled') l`) as Array<Record<string, unknown>>;
+  const r = rows[0] ?? {};
   return {
-    customers: n(c['customers']),
-    firstTime: n(c['first_time']),
-    fromAds: n(c['from_ads']),
-    messagesIn: n(c['messages']),
-    botReplies: n(s['bot']),
-    staffReplies: n(s['staff']),
-    buyers: new Set(a.map((r) => r.wa_id)).size,
-    orders: a.length,
-    salesCents: a.reduce((sum, r) => sum + n(r.net_cents), 0),
-    linkOrders: n(l['orders']),
-    linkSalesCents: n(l['cents']),
+    customers: n(r['customers']),
+    firstTime: n(r['first_time']),
+    fromAds: n(r['from_ads']),
+    messagesIn: n(r['messages']),
+    botReplies: n(r['bot']),
+    staffReplies: n(r['staff']),
+    buyers: new Set(after.map((a) => a.wa_id)).size,
+    orders: after.length,
+    salesCents: after.reduce((sum, a) => sum + n(a.net_cents), 0),
+    linkOrders: n(r['orders']),
+    linkSalesCents: n(r['cents']),
   };
+}
+
+/**
+ * Everything the WhatsApp page shows, in five reads (27 Oct 2026: the page made nine, three of them the same orders
+ * read again, and each read waits its turn on a Cloudflare request's two connections).
+ */
+export async function getWhatsappPage(
+  from: string,
+  to: string,
+  now: Date = new Date(),
+): Promise<{ summary: WaSummary; byAd: WaAdRow[]; chats: WaChatRow[]; botThisMonth: number }> {
+  await ready();
+  const { start, end } = span(from, to);
+  const [after, botThisMonth] = await Promise.all([ordersAfterChats(start, end), botMessagesSince(monthStart(now))]);
+  const [summary, byAd, chats] = await Promise.all([summaryOf(start, end, after), byAdOf(start, end, after), chatsOf(start, end, after, 30)]);
+  return { summary, byAd, chats, botThisMonth };
 }
 
 /**
@@ -105,7 +130,15 @@ export const FREE_SERVICE_MESSAGES = 1000;
 /** The bot's messages (and order updates) sent since the 1st of this month (UTC, as Meta counts). */
 export async function getBotMessagesThisMonth(now: Date = new Date()): Promise<number> {
   await ready();
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+  return botMessagesSince(monthStart(now));
+}
+
+/** The 1st of `now`'s month, UTC (as Meta counts). */
+function monthStart(now: Date): string {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+}
+
+async function botMessagesSince(start: string): Promise<number> {
   const rows = (await sql()`
     SELECT count(*) AS n FROM wa_events WHERE direction = 'bot' AND at >= ${start}
   `) as Array<{ n: unknown }>;
@@ -125,19 +158,20 @@ export interface WaAdRow {
 export async function getWhatsappByAd(from: string, to: string): Promise<WaAdRow[]> {
   await ready();
   const { start, end } = span(from, to);
-  const [chats, after] = await Promise.all([
-    sql()`
-      SELECT c.ad_id, max(c.ad_headline) AS headline, count(DISTINCT c.wa_id) AS customers
-        FROM wa_chats c
-       WHERE EXISTS (SELECT 1 FROM wa_events e WHERE e.wa_id = c.wa_id AND e.direction = 'in' AND e.at >= ${start} AND e.at < ${end})
-       GROUP BY c.ad_id`,
-    ORDERS_AFTER_CHATS(start, end),
-  ]);
+  return byAdOf(start, end, await ordersAfterChats(start, end));
+}
+
+async function byAdOf(start: string, end: string, after: readonly AfterRow[]): Promise<WaAdRow[]> {
+  const chats = await sql()`
+    SELECT c.ad_id, max(c.ad_headline) AS headline, count(DISTINCT c.wa_id) AS customers
+      FROM wa_chats c
+     WHERE EXISTS (SELECT 1 FROM wa_events e WHERE e.wa_id = c.wa_id AND e.direction = 'in' AND e.at >= ${start} AND e.at < ${end})
+     GROUP BY c.ad_id`;
   const rows = new Map<string, WaAdRow>();
   for (const r of chats as Array<{ ad_id: string | null; headline: string | null; customers: unknown }>) {
     rows.set(r.ad_id ?? '', { adId: r.ad_id, headline: r.headline, customers: n(r.customers), orders: 0, salesCents: 0 });
   }
-  for (const r of after as Array<{ ad_id: string | null; ad_headline: string | null; net_cents: unknown }>) {
+  for (const r of after) {
     const row = rows.get(r.ad_id ?? '') ?? { adId: r.ad_id, headline: r.ad_headline, customers: 0, orders: 0, salesCents: 0 };
     row.orders += 1;
     row.salesCents += n(r.net_cents);
@@ -164,23 +198,24 @@ export interface WaChatRow {
 export async function getWhatsappChats(from: string, to: string, limit = 30): Promise<WaChatRow[]> {
   await ready();
   const { start, end } = span(from, to);
-  const [chats, after] = await Promise.all([
-    sql()`
-      SELECT c.wa_id, c.profile_name, c.phone, c.ad_headline,
-             min(e.at) FILTER (WHERE e.direction = 'in') AS first_at,
-             max(e.at) FILTER (WHERE e.direction = 'in') AS last_at,
-             count(*) FILTER (WHERE e.direction = 'in') AS messages,
-             bool_or(e.direction = 'bot') AS bot, bool_or(e.direction = 'staff') AS staff
-        FROM wa_chats c JOIN wa_events e ON e.wa_id = c.wa_id
-       WHERE e.at >= ${start} AND e.at < ${end}
-       GROUP BY c.wa_id, c.profile_name, c.phone, c.ad_headline
-      HAVING count(*) FILTER (WHERE e.direction = 'in') > 0
-       ORDER BY max(e.at) FILTER (WHERE e.direction = 'in') DESC
-       LIMIT ${limit}`,
-    ORDERS_AFTER_CHATS(start, end),
-  ]);
+  return chatsOf(start, end, await ordersAfterChats(start, end), limit);
+}
+
+async function chatsOf(start: string, end: string, after: readonly AfterRow[], limit: number): Promise<WaChatRow[]> {
+  const chats = await sql()`
+    SELECT c.wa_id, c.profile_name, c.phone, c.ad_headline,
+           min(e.at) FILTER (WHERE e.direction = 'in') AS first_at,
+           max(e.at) FILTER (WHERE e.direction = 'in') AS last_at,
+           count(*) FILTER (WHERE e.direction = 'in') AS messages,
+           bool_or(e.direction = 'bot') AS bot, bool_or(e.direction = 'staff') AS staff
+      FROM wa_chats c JOIN wa_events e ON e.wa_id = c.wa_id
+     WHERE e.at >= ${start} AND e.at < ${end}
+     GROUP BY c.wa_id, c.profile_name, c.phone, c.ad_headline
+    HAVING count(*) FILTER (WHERE e.direction = 'in') > 0
+     ORDER BY max(e.at) FILTER (WHERE e.direction = 'in') DESC
+     LIMIT ${limit}`;
   const orders = new Map<string, number>();
-  for (const r of after as Array<{ wa_id: string }>) orders.set(r.wa_id, (orders.get(r.wa_id) ?? 0) + 1);
+  for (const r of after) orders.set(r.wa_id, (orders.get(r.wa_id) ?? 0) + 1);
   return (chats as Array<Record<string, unknown>>).map((r) => ({
     waId: String(r['wa_id']),
     name: (r['profile_name'] as string | null) ?? null,

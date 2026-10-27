@@ -49,7 +49,7 @@ const password = await import('@/app/dashboard/api/password/route');
 const signOut = await import('@/app/dashboard/api/sign-out/route');
 const queries = await import('@/lib/dashboard/queries');
 const session = await import('@/lib/dashboard/session');
-const { DASH_SCHEMA_STATEMENTS } = await import('@/lib/dashboard/schema');
+const { DASH_SCHEMA_STATEMENTS, schemaObjectOf } = await import('@/lib/dashboard/schema');
 
 const SECRET = 'test-bridge-secret-0123456789';
 const SITE = 'https://site.test';
@@ -242,6 +242,44 @@ describe('the schema', () => {
   it('db/schema.sql carries every on-demand statement word for word', () => {
     const file = readFileSync(new URL('../../../db/schema.sql', import.meta.url), 'utf8').replace(/\s+/g, ' ');
     for (const s of DASH_SCHEMA_STATEMENTS) expect(file.includes(`${s.trim().replace(/\s+/g, ' ')};`), s.slice(0, 60)).toBe(true);
+  });
+
+  it('every statement makes a table or an index the probe can look for (a column added later must teach the probe)', () => {
+    for (const s of DASH_SCHEMA_STATEMENTS) expect(schemaObjectOf(s), s.slice(0, 60)).not.toBeNull();
+  });
+
+  it('a new server instance on a database that has them all reads once and runs none of the statements', async () => {
+    vi.resetModules();
+    const fresh = await import('@/lib/dashboard/schema');
+    const real = db.pg.query.bind(db.pg);
+    const seen: string[] = [];
+    db.pg.query = (t, v) => {
+      seen.push(t);
+      return real(t, v);
+    };
+    try {
+      await fresh.ensureDashSchema();
+    } finally {
+      db.pg.query = real;
+    }
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('to_regclass');
+  });
+
+  it('on a database without them, it makes every table and index', async () => {
+    vi.resetModules();
+    const fresh = await import('@/lib/dashboard/schema');
+    const before = db.pg;
+    const empty = new PGlite();
+    db.pg = empty as unknown as typeof db.pg;
+    try {
+      await fresh.ensureDashSchema();
+      const missing = (await empty.query<{ missing: number }>(fresh.dashSchemaProbe())).rows[0]?.missing;
+      expect(Number(missing)).toBe(0);
+    } finally {
+      db.pg = before;
+      await empty.close();
+    }
   });
 });
 

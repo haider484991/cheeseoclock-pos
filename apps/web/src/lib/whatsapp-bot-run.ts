@@ -93,11 +93,16 @@ export async function handleBotMessage(
     if (!live) {
       // Not in an order: the day's first message gets the welcome (closed: the hours and the link); the rest are staff's.
       if (!(await claimAutoReply(m.waId, now))) return;
-      const [shop, store] = await Promise.all([getShopFacts(), getStoreStatus()]);
-      const welcome: WaOut = store.acceptingOrders
-        ? welcomeMessage({ shopName: shopNameProse(shop), profileName: m.profileName })
-        : { type: 'text', body: autoReplyText({ shop, open: false, link: orderLinkUrl(await createLink(m.waId)), profileName: m.profileName }) };
-      if (!(await send(welcome))) await releaseAutoReply(m.waId, now);
+      const [shop, bot] = await Promise.all([getShopFacts(), botShop()]);
+      if (!bot.open) {
+        const closed: WaOut = { type: 'text', body: autoReplyText({ shop, open: false, link: orderLinkUrl(await createLink(m.waId)), profileName: m.profileName }) };
+        if (!(await send(closed))) await releaseAutoReply(m.waId, now);
+        return;
+      }
+      // The welcome is the menu (27 Oct 2026), and the chat is in it from now: what they type next — an item's name,
+      // a hello — is the bot's to answer, not left for staff.
+      if (!(await writeSession(m.waId, 'menu', { cart: [] }, session ? session.version : null))) return;
+      if (!(await send(welcomeMessage({ shopName: shopNameProse(shop), profileName: m.profileName, shop: bot })))) await releaseAutoReply(m.waId, now);
       return;
     }
     // Staff wrote to them in the last hour, after the bot's last step: staff took the chat over and the words are

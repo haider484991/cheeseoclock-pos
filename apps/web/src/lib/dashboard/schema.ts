@@ -6,7 +6,14 @@ import { sql } from '@/lib/db';
  * database is migrated by hand and no existing route waits on them.
  * Idempotent; run once per server instance; a failure is never remembered.
  * Later columns may only ever be added with ADD COLUMN IF NOT EXISTS, here
- * and in schema.sql together.
+ * and in schema.sql together (and the probe below taught to look for them:
+ * a test holds every statement to a CREATE … IF NOT EXISTS it can check).
+ *
+ * One read goes first, and the statements run only when a table or index of
+ * theirs is missing (lib/schema-on-demand's way). Each new instance used to
+ * run all of them, one after another, before its first page — and on
+ * Cloudflare (since 27 Oct 2026) new instances start often (the user, that
+ * day: the dashboard "really slow loading").
  *
  * Two families:
  *  - dash_logins / dash_sessions / dash_events: who may sign in;
@@ -25,6 +32,8 @@ export function ensureDashSchema(): Promise<void> {
   if (!schemaReady) {
     schemaReady = (async () => {
       const q = sql();
+      const probe = (await q(statementParts(dashSchemaProbe()))) as Array<{ missing: unknown }>;
+      if (Number(probe[0]?.missing ?? 1) === 0) return;
       for (const statement of DASH_SCHEMA_STATEMENTS) await q(statementParts(statement));
     })().catch((e: unknown) => {
       schemaReady = null;
@@ -231,3 +240,14 @@ export const DASH_SCHEMA_STATEMENTS: readonly string[] = [
     PRIMARY KEY (device_id, day)
   )`,
 ];
+
+/** The table or index a statement makes ("CREATE INDEX IF NOT EXISTS idx_x ON …" → "idx_x"), or null for any other. */
+export function schemaObjectOf(statement: string): string | null {
+  return /^CREATE (?:UNIQUE )?(?:TABLE|INDEX) IF NOT EXISTS ([a-z0-9_]+)\b/i.exec(statement.trim())?.[1] ?? null;
+}
+
+/** One read: how many of the statements' tables and indexes the database lacks (0 = nothing to run). */
+export function dashSchemaProbe(): string {
+  const names = DASH_SCHEMA_STATEMENTS.map(schemaObjectOf).filter((n): n is string => n !== null);
+  return `SELECT count(*) AS missing FROM (VALUES ${names.map((n) => `('${n}')`).join(', ')}) AS o(name) WHERE to_regclass(o.name) IS NULL`;
+}

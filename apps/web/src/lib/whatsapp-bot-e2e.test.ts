@@ -140,26 +140,18 @@ beforeEach(async () => {
 
 describe('WhatsApp ordering bot, end to end', () => {
   it('a tester orders in the chat; the order reaches the till as a WhatsApp order; the customer hears each step', async () => {
+    // The welcome is the menu: the deal is one pick away.
     const hello = await customer(TESTER, { text: 'Salam' });
-    expect(rowIds(hello[0])).toEqual(['o:start', 'o:web', 'o:staff']);
+    expect(rowIds(hello[0])).toEqual(['i:lc', 'o:menu', 'o:web', 'o:staff']);
     expect(words(hello[0])).toContain('Assalam o Alaikum Haider!');
 
-    expect(rowIds((await customer(TESTER, { tap: 'o:start' }))[0])).toEqual(['c:0', 'c:1']);
-    expect(rowIds((await customer(TESTER, { tap: 'c:0' }))[0])).toEqual(['i:lc']);
-    await customer(TESTER, { tap: 'i:lc' });
+    expect(rowIds((await customer(TESTER, { tap: 'i:lc' }))[0])).toEqual(['m:pz-tikka', 'm:pz-fajita']);
     await customer(TESTER, { tap: 'm:pz-tikka' });
-    expect(rowIds((await customer(TESTER, { tap: 'm:dr-cola' }))[0])).toEqual(['q:1', 'q:2', 'q:3']);
-    await customer(TESTER, { tap: 'q:1' });
-    await customer(TESTER, { tap: 'k:checkout' });
-    const zones = await customer(TESTER, { tap: 'f:delivery' });
-    const dha = rowIds(zones[0]).find((x) => x.startsWith('zg:'))!;
-    expect(rowIds((await customer(TESTER, { tap: dha }))[0])).toContain('z:dha-6');
-    await customer(TESTER, { tap: 'z:dha-6' });
-    await customer(TESTER, { text: 'House 12, Street 4, Rahat Lane' });
-    await customer(TESTER, { tap: 'n:ok' });
+    expect(rowIds((await customer(TESTER, { tap: 'm:dr-cola' }))[0])).toEqual(['f:delivery', 'f:pickup', 'k:add']);
+    expect(words((await customer(TESTER, { tap: 'f:delivery' }))[0])).toContain('Delivery address likh dein');
 
-    // The website's own route prices it: the deal (tax included) and the area's Rs 200 charge.
-    const confirm = await customer(TESTER, { tap: 'x:none' });
+    // The area is read from the address; the website's own route prices it: the deal (tax included) and the area's Rs 200 charge.
+    const confirm = await customer(TESTER, { text: 'House 12, Street 4, Rahat Lane, DHA Phase 6' });
     expect(words(confirm[0])).toContain('1× Large & Chilled — Rs 1,800');
     expect(words(confirm[0])).toContain('1× Delivery Charge (Rs 200) — Rs 200');
     expect(words(confirm[0])).toContain('*Total Rs 2,000* · cash on delivery');
@@ -170,7 +162,7 @@ describe('WhatsApp ordering bot, end to end', () => {
     await customer(TESTER, { tap: 'y:confirm' }); // a second tap places nothing more
     const rows = (await db.pg.query(`SELECT id, customer_name, customer_phone, area, address_line, notes, total_cents FROM web_orders`, [])).rows as Array<Record<string, unknown>>;
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ customer_name: 'Haider Ali', customer_phone: '+923088440608', area: 'DHA Phase 6', address_line: 'House 12, Street 4, Rahat Lane', notes: 'WhatsApp order', total_cents: 200_000 });
+    expect(rows[0]).toMatchObject({ customer_name: 'Haider Ali', customer_phone: '+923088440608', area: 'DHA Phase 6', address_line: 'House 12, Street 4, Rahat Lane, DHA Phase 6', notes: 'WhatsApp order', total_cents: 200_000 });
     const orderId = String(rows[0]!['id']);
     expect((await db.pg.query(`SELECT wa_id FROM wa_orders WHERE order_id = $1`, [orderId])).rows).toEqual([{ wa_id: TESTER }]);
 
@@ -196,17 +188,17 @@ describe('WhatsApp ordering bot, end to end', () => {
     ]);
   });
 
-  it('the bot takes the address it asked for even if staff wrote from the phone before; once staff write after it, the bot keeps out', async () => {
+  it('what they type after the welcome is the bot’s; it takes the address it asked for even if staff wrote from the phone before; once staff write after it, the bot keeps out', async () => {
     await customer(TESTER_2, { text: 'Salam' });
-    for (const tap of ['o:start', 'c:0', 'i:lc', 'm:pz-tikka', 'm:dr-cola', 'q:1', 'k:checkout']) await customer(TESTER_2, { tap });
-    const zones = await customer(TESTER_2, { tap: 'f:delivery' });
-    await customer(TESTER_2, { tap: rowIds(zones[0]).find((x) => x.startsWith('zg:'))! });
-    // Something went out from the shop's phone (a reply, the app's greeting), then the bot asked for the address.
+    // Typed, not tapped: the item's name finds it.
+    expect(rowIds((await customer(TESTER_2, { text: 'Large and chilled chahiye' }))[0])).toEqual(['m:pz-tikka', 'm:pz-fajita']);
+    for (const tap of ['m:pz-tikka', 'm:dr-cola']) await customer(TESTER_2, { tap });
+    expect(words((await customer(TESTER_2, { tap: 'f:delivery' }))[0])).toContain('address');
+    // Something went out from the shop's phone (a reply, the app's greeting) before the bot asked for the address.
     await staffWrites(TESTER_2, new Date(Date.now() - 30_000));
-    expect(words((await customer(TESTER_2, { tap: 'z:dha-6' }))[0])).toContain('address');
-    const named = await customer(TESTER_2, { text: 'Flat B102, Gardens 1, near the park' });
-    expect(named).toHaveLength(1);
-    expect(rowIds(named[0])).toContain('n:ok');
+    const areas = await customer(TESTER_2, { text: 'Flat B102, Gardens 1, near the park' });
+    expect(areas).toHaveLength(1);
+    expect(rowIds(areas[0])).toContain('z:none');
 
     // Now staff write after the bot's question: the chat is theirs, and the customer's words go to them only.
     await staffWrites(TESTER_2, new Date(Date.now() + 2_000));
