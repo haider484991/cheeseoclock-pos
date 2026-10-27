@@ -24,8 +24,14 @@
   // Workers Paid allows 30 s of CPU a request, but a Worker made before the upgrade was still stopped at 50 ms until
   // this was set (27 Oct 2026). The free plan's 10 ms cut about 1 request in 5.
   "limits": { "cpu_ms": 30000 },
-  // workers.dev until the domain moves (never indexed: cloudflare/worker.mjs). At the switch, add:
-  // "routes": [{ "pattern": "www.cheeseoclock.net", "custom_domain": true }, { "pattern": "cheeseoclock.net", "custom_domain": true }]
+  // The live addresses since 27 Oct 2026 11:20 UTC: routes on the zone's two records, which stay as they were (the A and
+  // the CNAME to Vercel), now proxied. Not custom domains: Cloudflare will not put one over an existing record, and
+  // deleting the records first leaves the names missing for a moment, which resolvers remember for up to 30 minutes.
+  "routes": [
+    { "pattern": "www.cheeseoclock.net/*", "zone_name": "cheeseoclock.net" },
+    { "pattern": "cheeseoclock.net/*", "zone_name": "cheeseoclock.net" }
+  ],
+  // workers.dev stays, never indexed (cloudflare/worker.mjs).
   "workers_dev": true,
   "preview_urls": false,
   "observability": { "enabled": true }

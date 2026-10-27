@@ -16,6 +16,16 @@ const scope = new AsyncLocalStorage();
 globalThis[Symbol.for('@vercel/request-context')] = { get: () => scope.getStore()?.vercel };
 globalThis[Symbol.for('site.request-scope')] = scope;
 
+/**
+ * What Vercel's CDN hands a browser for an answer meant for a CDN ("s-maxage=…"): the CDN's parts taken out and, with no
+ * max-age of its own, "public, max-age=0, must-revalidate". No CDN keeps a Worker's answers, and a browser given a kept
+ * page's "s-maxage=…, stale-while-revalidate=2592000" (or /api/store-status's) may show its own old copy meanwhile.
+ */
+function forBrowser(cacheControl) {
+  const kept = cacheControl.split(',').map((d) => d.trim()).filter((d) => d && !/^(s-maxage|stale-while-revalidate)\b/i.test(d));
+  return kept.some((d) => /^max-age\b/i.test(d)) ? kept.join(', ') : 'public, max-age=0, must-revalidate';
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -25,10 +35,14 @@ export default {
     if (env.HYPERDRIVE) process.env.DATABASE_URL = env.HYPERDRIVE.connectionString;
     const store = { pools: new Map(), vercel: { waitUntil: (promise) => ctx.waitUntil(promise) } };
     const response = await scope.run(store, () => handler.fetch(request, env, ctx));
+    const cacheControl = response.headers.get('cache-control') ?? '';
+    const forCdn = /s-maxage/i.test(cacheControl);
     // A workers.dev address (the test address before the domain moves) is never indexed.
-    if (!url.hostname.endsWith('.workers.dev')) return response;
-    const marked = new Response(response.body, response);
-    marked.headers.set('X-Robots-Tag', 'noindex, nofollow');
-    return marked;
+    const unindexed = url.hostname.endsWith('.workers.dev');
+    if (!forCdn && !unindexed) return response;
+    const out = new Response(response.body, response);
+    if (forCdn) out.headers.set('cache-control', forBrowser(cacheControl));
+    if (unindexed) out.headers.set('X-Robots-Tag', 'noindex, nofollow');
+    return out;
   },
 };
