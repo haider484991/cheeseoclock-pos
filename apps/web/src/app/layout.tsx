@@ -134,7 +134,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           className="bg-noise pointer-events-none fixed inset-0 z-[90] opacity-[0.05] mix-blend-overlay"
         />
         <JsonLd nodes={[restaurantNode(shop), webSiteNode(shop)]} />
-        {/* Vercel Web Analytics: visits and page views on the Vercel dashboard (not the owner's /dashboard). Cookieless; the script only loads on Vercel. */}
+        {/* Google Analytics 4: page views and the ordering funnel (never the owner's /dashboard or a tracking page; lib/google-analytics). */}
         <SiteAnalytics />
       </body>
     </html>

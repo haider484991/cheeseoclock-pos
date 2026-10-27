@@ -7,7 +7,7 @@ import { getShopFacts, requireStoredFacts } from '@/lib/site-facts';
 
 /**
  * The privacy policy (26 Oct 2026, the user: "Add a short privacy policy page to cheeseoclock.net"): what an order
- * collects and why, the Meta Pixel and Vercel Analytics, and how to have it deleted (#delete, also the data deletion
+ * collects and why, the Meta Pixel and Google Analytics (Vercel Analytics until 27 Oct 2026), and how to have it deleted (#delete, also the data deletion
  * instructions for the shop's Meta app). Built once like /_not-found: the header and footer read the shop's details.
  * Not in the sitemap, so the routes golden is unchanged.
  */
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/privacy' },
 };
 
-const UPDATED = '26 October 2026';
+const UPDATED = '27 October 2026';
 
 export default async function PrivacyPage() {
   await requireStoredFacts();
@@ -63,7 +63,7 @@ export default async function PrivacyPage() {
           </li>
           <li>
             <strong className="text-cream">How the site is used:</strong> pages visited and steps like “added to cart”,
-            through Vercel Web Analytics (no cookies, no names) and the Meta Pixel (below).
+            through Google Analytics and the Meta Pixel (both below).
           </li>
         </ul>
 
@@ -74,6 +74,23 @@ export default async function PrivacyPage() {
           <li>To keep the shop’s sales and tax records.</li>
           <li>To see which of our ads lead to orders, so we spend less on ads that don’t work.</li>
         </ul>
+
+        <h2>Google Analytics</h2>
+        <p>
+          The site uses Google Analytics to count visits, the pages seen and the steps of an order (added to cart,
+          checkout opened, order placed). It never receives your name, number or address, and nothing is sent from an
+          order’s tracking page. Google Analytics sets its own cookies (named _ga) to tell one visit from the next; you
+          can block them in your browser or with{' '}
+          <a
+            href="https://tools.google.com/dlpage/gaoptout"
+            className="text-cheese underline underline-offset-4"
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            Google’s opt-out add-on
+          </a>
+          .
+        </p>
 
         <h2>Meta (Facebook, Instagram and WhatsApp)</h2>
         <p>
@@ -88,7 +105,7 @@ export default async function PrivacyPage() {
         <ul>
           <li>Our staff and riders, to make and deliver your order.</li>
           <li>The companies that host the website and its database, only to run it for us.</li>
-          <li>Meta, as described above.</li>
+          <li>Google and Meta, as described above.</li>
         </ul>
 
         <h2>How long we keep it</h2>
