@@ -227,6 +227,32 @@ describe('WhatsApp ordering bot, end to end', () => {
     expect(await customer(TESTER_3, { text: 'Hello! Can I get more info on this?', ad: true })).toEqual([]);
   });
 
+  it('an order from an ad’s chat reaches Meta as a Purchase with the ad’s click, after the customer has the confirmation', async () => {
+    Object.assign(process.env, { WHATSAPP_DATASET_ID: '2142301696356802', WHATSAPP_BUSINESS_ACCOUNT_ID: '1881791873188347' });
+    try {
+      // TESTER_3's chat is staff's (the test above): the ad's words get no reply, but the click is kept, and taps still order.
+      await customer(TESTER_3, { text: 'Hello! Can I get more info on this?', ad: true });
+      const click = (await db.pg.query(`SELECT ctwa_clid FROM wa_events WHERE wa_id = $1 AND ctwa_clid IS NOT NULL ORDER BY at DESC LIMIT 1`, [TESTER_3])).rows as Array<{ ctwa_clid: string }>;
+      for (const tap of ['i:lc', 'm:pz-tikka', 'm:dr-cola', 'f:pickup']) await customer(TESTER_3, { tap });
+      const done = (await customer(TESTER_3, { tap: 'y:confirm' })) as unknown as Array<Record<string, unknown>>;
+      expect(words(done[0] as (typeof sent)[number])).toContain('Aapka order place ho gaya.');
+      const toMeta = done.slice(1) as Array<{ data?: Array<Record<string, unknown>> }>;
+      expect(toMeta).toHaveLength(1);
+      expect(toMeta[0]!.data).toEqual([
+        expect.objectContaining({
+          event_name: 'Purchase',
+          action_source: 'business_messaging',
+          messaging_channel: 'whatsapp',
+          user_data: { whatsapp_business_account_id: '1881791873188347', ctwa_clid: click[0]!.ctwa_clid },
+          custom_data: expect.objectContaining({ currency: 'PKR' }),
+        }),
+      ]);
+    } finally {
+      delete process.env['WHATSAPP_DATASET_ID'];
+      delete process.env['WHATSAPP_BUSINESS_ACCOUNT_ID'];
+    }
+  });
+
   it('a customer who is not a tester still gets the day’s order link, not the bot', async () => {
     const r = await customer('923001234599', { text: 'Menu?' });
     expect(r).toHaveLength(1);

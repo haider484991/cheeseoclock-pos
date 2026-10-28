@@ -466,6 +466,13 @@ CREATE TABLE IF NOT EXISTS capi_till_sales (
   order_id TEXT PRIMARY KEY,
   sent_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Orders a WhatsApp ad's chat led to, already sent to Meta with the ad's click (src/lib/whatsapp-conversions.ts),
+-- each once: "web-<order id>" for the bot's, "till-<till order id>" for those staff took.
+CREATE TABLE IF NOT EXISTS capi_wa_orders (
+  order_key TEXT PRIMARY KEY,
+  wa_id     TEXT NOT NULL,
+  sent_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 -- Comment auto-replies (src/lib/comment-replies.ts): each Facebook / Instagram comment acted on once, and when the
 -- last sweep ran (at most every 3 minutes).
 CREATE TABLE IF NOT EXISTS comment_actions (

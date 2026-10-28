@@ -117,6 +117,8 @@ export interface BotDeps {
   trackUrl(orderId: string, phone: string): string;
   /** The day's link message (the "Website" row). */
   websiteText(token: string): string;
+  /** An order went through (the route tells Meta when an ad brought the chat: lib/whatsapp-conversions). */
+  placed?(order: { orderId: string; totalCents: number }): void;
 }
 
 export interface BotTurn {
@@ -856,6 +858,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     const placed = await deps.order({ ...orderBody(), clientOrderId: data.orderId });
     if (!placed.ok) return refused(placed);
     const orderId = placed.orderId ?? data.orderId;
+    deps.placed?.({ orderId, totalCents: placed.totalCents });
     say({
       type: 'text',
       body: [

@@ -390,6 +390,24 @@ describe('the WhatsApp ordering bot', () => {
     expect(bodies.every((b) => b['customerName'] === 'Haider Ali')).toBe(true);
   });
 
+  it('tells the route once an order went through (for Meta), never when the till refuses it', async () => {
+    const seen: Array<{ orderId: string; totalCents: number }> = [];
+    const { deps } = fakeDeps();
+    const c = chat(shop(), { ...deps, placed: (o) => seen.push(o) });
+    await c.send({ tap: 'i:burger' });
+    await c.send({ tap: 'f:pickup' });
+    await c.send({ tap: 'y:confirm' });
+    expect(seen).toEqual([{ orderId: '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000', totalCents: 380_000 }]);
+
+    const refusedSeen: unknown[] = [];
+    const closing = fakeDeps((b) => (b['dryRun'] ? { ok: true, subtotalCents: 70_000, discountCents: 0, taxCents: 0, totalCents: 70_000, lines: [] } : { ok: false, error: 'store_closed' }));
+    const d = chat(shop(), { ...closing.deps, placed: (o) => refusedSeen.push(o) });
+    await d.send({ tap: 'i:burger' });
+    await d.send({ tap: 'f:pickup' });
+    await d.send({ tap: 'y:confirm' });
+    expect(refusedSeen).toEqual([]);
+  });
+
   it('a second Confirm after the order went through places nothing and shows the menu', async () => {
     const { deps, bodies } = fakeDeps();
     const c = chat(shop(), deps);

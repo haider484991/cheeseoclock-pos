@@ -10,6 +10,7 @@ import { shopHoursInSentence, shopNameProse } from './shop-facts';
 import { getShopFacts, parseStoredSettings } from './site-facts';
 import { getStoreStatus } from './store-status';
 import { isBotCommand, runBot, welcomeMessage, type BotData, type BotShop, type BotState, type OrderAnswer } from './whatsapp-bot';
+import { sendBotOrderToMeta } from './whatsapp-conversions';
 import { autoReplyText, orderLinkUrl, sendMessage, type WaOut } from './whatsapp-send';
 import {
   STAFF_QUIET_MS,
@@ -120,6 +121,7 @@ export async function handleBotMessage(
     }
   }
 
+  const placed: { order?: { orderId: string; totalCents: number } } = {};
   const step = await runBot(
     { waId: m.waId, profileName: m.profileName, text: fromAd ? 'menu' : m.text, reply: m.reply, order: m.order },
     fresh ? { state: fresh.state as BotState, data: fresh.data as unknown as BotData } : null,
@@ -130,9 +132,14 @@ export async function handleBotMessage(
       newId: () => uuidv7(),
       trackUrl: (orderId, phone) => `${SITE_URL}${trackPath(orderId, phone)}`,
       websiteText: (t) => `🌐 Website par order karein — aapka naam aur number pehle se bhara hoga:\n${orderLinkUrl(t)}`,
+      placed: (o) => {
+        placed.order = o;
+      },
     },
   );
   // Another message for this customer saved first (two taps at once): its answer stands, this one is dropped.
   if (!(await writeSession(m.waId, step.state, step.data as unknown as Record<string, unknown>, session ? session.version : null))) return;
   for (const message of step.out) await send(message);
+  // An order went through, and the customer has its confirmation: Meta hears of it when an ad brought the chat.
+  if (placed.order) await sendBotOrderToMeta({ waId: m.waId, orderId: placed.order.orderId, totalCents: placed.order.totalCents, at: now });
 }

@@ -3,6 +3,7 @@ import { dashPushBodySchema } from '@cheeseoclock/shared-schemas/dashboard';
 import { keepPush, stateFor } from '@/lib/dashboard/ingest';
 import { logFailure, noStore, refuseUnlessBridge } from '@/lib/menu-deploy-auth';
 import { sendTillSales } from '@/lib/till-sales-capi';
+import { sendTillOrdersToMeta } from '@/lib/whatsapp-conversions';
 
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
@@ -52,8 +53,10 @@ export async function POST(req: Request): Promise<Response> {
       return noStore({ ok: false, error: 'validation', message: first ? `${first.path.join('.')}: ${first.message}`.slice(0, 200) : undefined }, 400);
     }
     const data = await keepPush(parsed.data);
-    // The till's new paid sales to Meta (lib/till-sales-capi: off unless switched on; never fails the push).
+    // The till's new paid sales to Meta (lib/till-sales-capi: off unless switched on; never fails the push), and those
+    // a WhatsApp ad's chat led to, with the ad's click (lib/whatsapp-conversions: off unless set up; never fails it).
     await sendTillSales();
+    await sendTillOrdersToMeta();
     return noStore({ ok: true, data });
   } catch (e) {
     logFailure('POST /api/bridge/dashboard/push failed', e);
