@@ -92,10 +92,9 @@ async function staffWrites(waId: string, at: Date) {
   );
   expect(res.status).toBe(200);
 }
-const rowIds = (m: (typeof sent)[number] | undefined): string[] => {
-  const a = m?.interactive?.action as { buttons?: Array<{ reply: { id: string } }>; sections?: Array<{ rows: Array<{ id: string }> }> } | undefined;
-  return a?.buttons?.map((b) => b.reply.id) ?? a?.sections?.flatMap((s) => s.rows.map((r) => r.id)) ?? [];
-};
+/** The options the bot's last message to a customer numbered (kept with the chat's step): a number typed picks one. */
+const optionsOf = async (waId: string): Promise<string[]> =>
+  ((await db.pg.query(`SELECT data FROM wa_sessions WHERE wa_id = $1`, [waId])).rows as Array<{ data: { choices?: string[] } }>)[0]?.data.choices ?? [];
 const words = (m: (typeof sent)[number] | undefined) => m?.text?.body ?? m?.interactive?.body.text ?? '';
 
 function item(id: string, name: string, rs: number, over: Partial<PublishedMenuItem> = {}): PublishedMenuItem {
@@ -146,15 +145,19 @@ beforeEach(async () => {
 
 describe('WhatsApp ordering bot, end to end', () => {
   it('a tester orders in the chat; the order reaches the till as a WhatsApp order; the customer hears each step', async () => {
-    // The welcome is the menu: the deal is one pick away.
+    // The welcome is the whole menu as text, numbered, the prices in it: the deal is a number away.
     const hello = await customer(TESTER, { text: 'Salam' });
-    expect(rowIds(hello[0])).toEqual(['i:lc', 'o:menu', 'o:web', 'o:staff']);
+    expect(hello.every((m) => m.type === 'text')).toBe(true);
     expect(words(hello[0])).toContain('Assalam o Alaikum Haider!');
+    expect(words(hello[0])).toContain('1. *Large & Chilled* — Rs 1,800');
+    expect(await optionsOf(TESTER)).toEqual(['i:lc', 'i:burger']);
 
-    expect(rowIds((await customer(TESTER, { tap: 'i:lc' }))[0])).toEqual(['m:pz-tikka', 'm:pz-fajita']);
-    await customer(TESTER, { tap: 'm:pz-tikka' });
-    expect(rowIds((await customer(TESTER, { tap: 'm:dr-cola' }))[0])).toEqual(['f:delivery', 'f:pickup', 'k:add']);
-    expect(words((await customer(TESTER, { tap: 'f:delivery' }))[0])).toContain('Delivery address likh dein');
+    expect(words((await customer(TESTER, { text: '1' }))[0])).toContain('Large pizza chunein — 1/2:\n1. Chicken Tikka\n2. Fajita');
+    expect(await optionsOf(TESTER)).toEqual(['m:pz-tikka', 'm:pz-fajita']);
+    await customer(TESTER, { text: '1' });
+    expect(words((await customer(TESTER, { text: '1' }))[0])).toContain('1. 🛵 Delivery');
+    expect(await optionsOf(TESTER)).toEqual(['f:delivery', 'f:pickup', 'k:add']);
+    expect(words((await customer(TESTER, { text: '1' }))[0])).toContain('Delivery address likh dein');
 
     // The area is read from the address; the website's own route prices it: the deal (tax included) and the area's Rs 200 charge.
     const confirm = await customer(TESTER, { text: 'House 12, Street 4, Rahat Lane, DHA Phase 6' });
@@ -163,7 +166,7 @@ describe('WhatsApp ordering bot, end to end', () => {
     expect(words(confirm[0])).toContain('*Total Rs 2,000* · cash on delivery');
     expect(await db.pg.query(`SELECT 1 FROM web_orders`, []).then((r) => r.rows)).toHaveLength(0);
 
-    const placed = await customer(TESTER, { tap: 'y:confirm' });
+    const placed = await customer(TESTER, { text: '1' });
     expect(words(placed[0])).toContain('Aapka order place ho gaya.');
     await customer(TESTER, { tap: 'y:confirm' }); // a second tap places nothing more
     const rows = (await db.pg.query(`SELECT id, customer_name, customer_phone, area, address_line, notes, total_cents FROM web_orders`, [])).rows as Array<Record<string, unknown>>;
@@ -196,43 +199,50 @@ describe('WhatsApp ordering bot, end to end', () => {
 
   it('what they type after the welcome is the bot’s; it takes the address it asked for even if staff wrote from the phone before; once staff write after it, the bot keeps out', async () => {
     await customer(TESTER_2, { text: 'Salam' });
-    // Typed, not tapped: the item's name finds it.
-    expect(rowIds((await customer(TESTER_2, { text: 'Large and chilled chahiye' }))[0])).toEqual(['m:pz-tikka', 'm:pz-fajita']);
+    // The item's name finds it; a tap on an older message still works.
+    expect(words((await customer(TESTER_2, { text: 'Large and chilled chahiye' }))[0])).toContain('Large pizza chunein');
+    expect(await optionsOf(TESTER_2)).toEqual(['m:pz-tikka', 'm:pz-fajita']);
     for (const tap of ['m:pz-tikka', 'm:dr-cola']) await customer(TESTER_2, { tap });
     expect(words((await customer(TESTER_2, { tap: 'f:delivery' }))[0])).toContain('address');
     // Something went out from the shop's phone (a reply, the app's greeting) before the bot asked for the address.
     await staffWrites(TESTER_2, new Date(Date.now() - 30_000));
     const areas = await customer(TESTER_2, { text: 'Flat B102, Gardens 1, near the park' });
     expect(areas).toHaveLength(1);
-    expect(rowIds(areas[0])).toContain('z:none');
+    expect(words(areas[0])).toContain('Mera area nahi hai');
+    expect(await optionsOf(TESTER_2)).toContain('z:none');
 
     // Now staff write after the bot's question: the chat is theirs, and the customer's words go to them only.
     await staffWrites(TESTER_2, new Date(Date.now() + 2_000));
     expect(await customer(TESTER_2, { text: 'Bhai jaldi bhej dena' })).toEqual([]);
   });
 
-  it('an ad tapped again the same day gets the menu again, unless staff are in the chat', async () => {
+  it('an ad tapped again the same day gets the menu again, unless staff are in the chat; so does a price or menu ask', async () => {
     // TESTER ordered above: the day's welcome is used and the order is done. Meta's ad words get the menu all the same.
     const again = await customer(TESTER, { text: 'Hello! Can I get more info on this?', ad: true });
-    expect(again).toHaveLength(1);
-    expect(rowIds(again[0])).toContain('o:menu');
-    expect(rowIds(again[0])).toContain('i:lc');
-    // The same words typed without an ad, once the day's welcome is used and no order is open: left to staff.
+    expect(again).toHaveLength(2); // the deals, then the rest of the menu
+    expect(words(again[0])).toContain('1. *Large & Chilled*');
+    expect(await optionsOf(TESTER)).toEqual(['i:lc', 'i:burger']);
+    // Words that are not an ask, once the day's welcome is used and no order is open: left to staff.
     await customer(TESTER, { tap: 'o:staff' });
     expect(await customer(TESTER, { text: 'Kitni der lagegi?' })).toEqual([]);
+    // A price or menu ask is the bot's while staff are not in the chat (28 Oct 2026: staff could not keep up).
+    const prices = await customer(TESTER, { text: 'Price list bhej dein' });
+    expect(prices).toHaveLength(2);
+    expect(words(prices[1])).toContain('2. Classic Crispy Chicken — Rs 700');
 
     // Staff wrote to TESTER_3 in the last hour: their ad tap is staff's to answer.
     await customer(TESTER_3, { text: 'Salam' });
     await customer(TESTER_3, { tap: 'o:staff' });
     await staffWrites(TESTER_3, new Date(Date.now() - 60_000));
     expect(await customer(TESTER_3, { text: 'Hello! Can I get more info on this?', ad: true })).toEqual([]);
+    expect(await customer(TESTER_3, { text: 'Price list?' })).toEqual([]);
   });
 
   it('a new customer from a deal ad: its pre-filled words go straight to that deal’s first choice', async () => {
     const first = await customer(TESTER_4, { text: 'Large & Chilled deal order karni hai', ad: true });
     expect(first).toHaveLength(1);
-    expect(rowIds(first[0])).toEqual(['m:pz-tikka', 'm:pz-fajita']);
-    expect(words(first[0])).toContain('Large & Chilled');
+    expect(words(first[0])).toContain('*Large & Chilled* — Rs 1,800 · tax shamil');
+    expect(await optionsOf(TESTER_4)).toEqual(['m:pz-tikka', 'm:pz-fajita']);
     expect(((await db.pg.query(`SELECT state FROM wa_sessions WHERE wa_id = $1`, [TESTER_4])).rows as Array<{ state: string }>)[0]?.state).toBe('choice');
   });
 

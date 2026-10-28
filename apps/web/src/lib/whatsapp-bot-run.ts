@@ -1,5 +1,5 @@
 import { v7 as uuidv7 } from 'uuid';
-import type { PublishedMenu } from '@cheeseoclock/shared-types';
+import { buy1Get1WindowWords, type PublishedMenu } from '@cheeseoclock/shared-types';
 import { sql } from './db';
 import { factsFromBlock } from './delivery-facts';
 import { menuWithoutDrinkBrand } from './menu-view';
@@ -9,7 +9,7 @@ import { SITE_URL } from './seo';
 import { shopHoursInSentence, shopNameProse } from './shop-facts';
 import { getShopFacts, parseStoredSettings } from './site-facts';
 import { getStoreStatus } from './store-status';
-import { helloLine, isBotCommand, runBot, welcomeMessage, type BotData, type BotShop, type BotState, type OrderAnswer } from './whatsapp-bot';
+import { asksBot, helloLine, isBotCommand, runBot, welcomeStep, type BotData, type BotShop, type BotState, type OrderAnswer } from './whatsapp-bot';
 import { sendBotOrderToMeta } from './whatsapp-conversions';
 import { autoReplyText, orderLinkUrl, sendMessage, type WaOut } from './whatsapp-send';
 import {
@@ -62,6 +62,11 @@ async function botShop(): Promise<BotShop> {
     open: store.acceptingOrders,
     pickupAvailable: store.pickupAvailable,
     pickupPercent: store.pickupDiscountPercent,
+    // The website's % off as it charges it (the regular pizzas' 20%, 10% on the rest of the food): the prices shown match.
+    deliveryPercent: store.deliveryDiscountPercent,
+    pickupCategoryPercents: store.pickupCategoryPercents ?? [],
+    deliveryCategoryPercents: store.deliveryCategoryPercents ?? [],
+    buy1Get1Hours: facts.buy1Get1.on ? buy1Get1WindowWords(facts.buy1Get1) : null,
     closedText: `Abhi online orders band hain (${shopHoursInSentence(shop)}). Khulte hi yahin *menu* likh kar order karein 🧀`,
   };
 }
@@ -111,8 +116,10 @@ export async function handleBotMessage(
       }
       if (first) hello = helloLine({ shopName: shopNameProse(shop), profileName: m.profileName });
     } else if (!live && !(await claimAutoReply(m.waId, now))) {
-      // The day's welcome is used: the words are staff's.
-      return;
+      // The day's welcome is used: the words are staff's — unless they ask for the prices, the deals or the menu while
+      // staff are not in the chat (the user, 28 Oct 2026: staff could not keep up, "bot should reply every deals and
+      // menu prices according to keyword").
+      if (!asksBot(m.text ?? '') || (await staffWroteSince(m.waId, new Date(now.getTime() - STAFF_QUIET_MS)))) return;
     } else if (!live) {
       // Not in an order, and the day's first message: the welcome (closed: the hours and the link).
       const shop = await getShopFacts();
@@ -122,10 +129,15 @@ export async function handleBotMessage(
         if (!(await send(closed))) await releaseAutoReply(m.waId, now);
         return;
       }
-      // The welcome is the menu (27 Oct 2026), and the chat is in it from now: what they type next — an item's name,
-      // a hello — is the bot's to answer, not left for staff.
-      if (!(await writeSession(m.waId, 'menu', { cart: [] }, session ? session.version : null))) return;
-      if (!(await send(welcomeMessage({ shopName: shopNameProse(shop), profileName: m.profileName, shop: shopFor })))) await releaseAutoReply(m.waId, now);
+      // The welcome is the whole menu, numbered (27 Oct 2026; as text 28 Oct), and the chat is in it from now: what they
+      // type next — a number, an item's name, a hello — is the bot's to answer, not left for staff.
+      const step = welcomeStep({ shopName: shopNameProse(shop), profileName: m.profileName, shop: shopFor });
+      if (!(await writeSession(m.waId, step.state, step.data as unknown as Record<string, unknown>, session ? session.version : null))) return;
+      for (const [k, message] of step.out.entries()) {
+        if (await send(message)) continue;
+        if (k === 0) await releaseAutoReply(m.waId, now);
+        return;
+      }
       return;
     } else {
       // Staff wrote to them in the last hour, after the bot's last step: staff took the chat over and the words are
