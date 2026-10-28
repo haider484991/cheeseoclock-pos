@@ -1,5 +1,5 @@
 import { v7 as uuidv7 } from 'uuid';
-import { buy1Get1WindowWords, type PublishedMenu } from '@cheeseoclock/shared-types';
+import { buy1Get1OpenAt, buy1Get1WindowWords, type PublishedMenu } from '@cheeseoclock/shared-types';
 import { sql } from './db';
 import { factsFromBlock } from './delivery-facts';
 import { menuWithoutDrinkBrand } from './menu-view';
@@ -46,6 +46,16 @@ export function botFor(waId: string, env: NodeJS.ProcessEnv = process.env): bool
 /** An order half-built longer ago than this starts over. */
 export const SESSION_TTL_MS = 3 * 60 * 60_000;
 
+/**
+ * The printed deal menu the bot sends first (cheeseoclock-menu deals-menu-yellow v18, the owner's Bright Yellow, 29 Oct
+ * 2026), and its deals in the order its cards number them 1–10. A new picture gets a new file name (Cloudflare keeps
+ * the old one); while a name here is missing from the menu, the bot sends the deals as text instead.
+ */
+export const MENU_PICTURE = {
+  path: '/images/whatsapp/deal-menu-2026-10-29.jpg',
+  deals: ['Mega Cheese Box', 'Double Large', 'Pizzas & Nuggets', 'Loaded Combo', 'Large & Chilled', 'Cheese Partners', 'Burger Duo', 'Classic Crispy', 'Signature Crispy', 'Cheese Dipped'],
+} as const;
+
 /** The shop for the bot: the menu customers can order from, the areas, open or not. */
 async function botShop(): Promise<BotShop> {
   const [rows, store, shop] = await Promise.all([
@@ -67,6 +77,8 @@ async function botShop(): Promise<BotShop> {
     pickupCategoryPercents: store.pickupCategoryPercents ?? [],
     deliveryCategoryPercents: store.deliveryCategoryPercents ?? [],
     buy1Get1Hours: facts.buy1Get1.on ? buy1Get1WindowWords(facts.buy1Get1) : null,
+    buy1Get1Open: facts.buy1Get1.on && buy1Get1OpenAt(Date.now(), facts.buy1Get1),
+    menuPicture: { url: `${SITE_URL}${MENU_PICTURE.path}`, deals: MENU_PICTURE.deals },
     closedText: `Abhi online orders band hain (${shopHoursInSentence(shop)}). Khulte hi yahin *menu* likh kar order karein 🧀`,
   };
 }

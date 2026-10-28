@@ -53,6 +53,8 @@ export type SendResult = { ok: true; messageId: string } | { ok: false; error: s
  */
 export type WaOut =
   | { type: 'text'; body: string }
+  /** A picture (a public https address WhatsApp fetches) with words under it: the bot's deal menu (28 Oct 2026). */
+  | { type: 'image'; link: string; caption: string }
   | { type: 'buttons'; body: string; buttons: Array<{ id: string; title: string }>; footer?: string }
   | {
       type: 'list';
@@ -72,6 +74,7 @@ export function fit(s: string, max: number): string {
 export function payloadOf(to: string, m: WaOut): Record<string, unknown> {
   const base = { messaging_product: 'whatsapp', recipient_type: 'individual', to };
   if (m.type === 'text') return { ...base, type: 'text', text: { body: fit(m.body, 4096), preview_url: true } };
+  if (m.type === 'image') return { ...base, type: 'image', image: { link: m.link, caption: fit(m.caption, 1024) } };
   const footer = m.footer ? { footer: { text: fit(m.footer, 60) } } : {};
   if (m.type === 'buttons') {
     return {

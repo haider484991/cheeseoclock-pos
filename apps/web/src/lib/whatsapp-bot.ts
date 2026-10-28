@@ -106,8 +106,15 @@ export interface BotShop {
   deliveryPercent?: number;
   pickupCategoryPercents?: ReadonlyArray<{ categoryId: string; percent: number }>;
   deliveryCategoryPercents?: ReadonlyArray<{ categoryId: string; percent: number }>;
-  /** Buy 1 Get 1's hours in words ("12–7 PM") while the offer is on. */
+  /** Buy 1 Get 1's hours in words ("12–7 PM") while the offer is on, and whether it sells right now. */
   buy1Get1Hours?: string | null;
+  buy1Get1Open?: boolean;
+  /**
+   * The printed deal menu as a picture (28 Oct 2026, the user: customers are "really uneducated"): its address, and
+   * the deals' names in the order the picture numbers them. The bot sends it while every one of those names is on the
+   * menu, so a number typed is the deal printed with it; else the deals go out as text.
+   */
+  menuPicture?: { url: string; deals: readonly string[] } | null;
   /** What to say while the shop takes no orders (the hours). */
   closedText: string;
 }
@@ -239,7 +246,7 @@ export function isBotCommand(text: string): boolean {
  */
 export function welcomeStep(o: { shopName: string; profileName: string | null; shop: BotShop }): BotStep {
   const data: BotData = { cart: [] };
-  const v = menuView(o.shop, data, { first: helloLine(o) });
+  const v = startView(o.shop, helloLine(o));
   return { state: 'menu', data: { ...data, choices: v.choices }, out: v.out };
 }
 
@@ -299,15 +306,41 @@ function requiredGroups(item: PublishedMenuItem): PublishedModifierGroup[] {
   return item.modifierGroups.filter((g) => (g.isRequired || g.minSelect > 0) && !isFixedChoiceGroup(g));
 }
 
-/** What an item starts with, as the website's sheet does: its fixed parts, and the till's defaults where nothing is asked. */
+/**
+ * A choice the bot makes itself, the usual one, shown on the order and changed by typing its name (28 Oct 2026, the
+ * user: the steps were too many for customers who are "really uneducated"): a deal's or a burger's drink and dip. A
+ * drink's own flavour is asked: the drink is what they ordered.
+ */
+function usualGroup(item: PublishedMenuItem, g: PublishedModifierGroup): boolean {
+  return !/\bdrinks?\b/i.test(item.name) && /\b(drinks?|dips?|sauces?|flavours?)\b/i.test(g.name);
+}
+
+/** The usual pick of a group: the till's default, else its first (cola, the signature dip), as many as it needs. */
+function usualIds(g: PublishedModifierGroup): string[] {
+  const ordered = [...g.modifiers.filter((m) => m.isDefault), ...g.modifiers.filter((m) => !m.isDefault)];
+  return ordered.slice(0, Math.max(1, g.minSelect)).map((m) => m.posModifierId);
+}
+
+/** The choices the customer is asked: the required ones that are not the bot's usual picks. */
+function askedGroups(item: PublishedMenuItem): PublishedModifierGroup[] {
+  return requiredGroups(item).filter((g) => !usualGroup(item, g));
+}
+
+/**
+ * What an item starts with, as the website's sheet does: its fixed parts, the usual drink and dip, and the till's
+ * defaults where nothing is asked.
+ */
 function startIds(item: PublishedMenuItem): string[] {
-  const asked = new Set(requiredGroups(item).map((g) => g.posGroupId));
+  const asked = new Set(askedGroups(item).map((g) => g.posGroupId));
+  const required = new Set(requiredGroups(item).map((g) => g.posGroupId));
   return item.modifierGroups.flatMap((g) =>
     isFixedChoiceGroup(g)
       ? g.modifiers.map((m) => m.posModifierId)
       : asked.has(g.posGroupId)
         ? []
-        : g.modifiers.filter((m) => m.isDefault).map((m) => m.posModifierId),
+        : required.has(g.posGroupId)
+          ? usualIds(g)
+          : g.modifiers.filter((m) => m.isDefault).map((m) => m.posModifierId),
   );
 }
 
@@ -331,14 +364,10 @@ function lineCents(item: PublishedMenuItem, line: CartLine): number {
   return (item.basePriceCents + deltas) * line.quantity;
 }
 
-/** The choices the customer made on a line, in words ("Large pizza: Fajita · Drink: Pepsi"). */
-function choiceWords(item: PublishedMenuItem, ids: readonly string[]): string {
+/** What was picked on a line, in short words ("Fajita · Cola 1 litre · Signature Orange Dip"). */
+function pickedWords(item: PublishedMenuItem, ids: readonly string[]): string {
   return requiredGroups(item)
-    .map((g) => {
-      const picked = g.modifiers.filter((m) => ids.includes(m.posModifierId)).map((m) => choiceName(m.name));
-      return picked.length ? `${groupLabelOf(g)}: ${picked.join(', ')}` : null;
-    })
-    .filter(Boolean)
+    .flatMap((g) => g.modifiers.filter((m) => ids.includes(m.posModifierId)).map((m) => choiceName(m.name)))
     .join(' · ');
 }
 
@@ -464,7 +493,8 @@ export function zoneInText(zones: readonly FactZone[], text: string): FactZone |
 }
 
 // ---------------------------------------------------------------------------
-// The steps' messages: plain text, every option numbered, the prices in the message (28 Oct 2026, see the top)
+// The steps' messages (28 Oct 2026, simple): the printed deal menu as a picture, then one short question at a time,
+// each option on its own line under a big number key (1️⃣ 2️⃣ 3️⃣), prices in the message with the website's % off.
 
 /** A step's messages and the options they number, in order (the ids a tap would have sent). */
 interface View {
@@ -485,9 +515,26 @@ function texts(blocks: ReadonlyArray<string | null | undefined>): WaOut[] {
   for (const b of blocks) {
     if (!b) continue;
     if (b.length <= TEXT_MAX) add(b, '\n\n');
-    else b.split('\n').forEach((line, k) => add(line, k === 0 ? '\n\n' : '\n')); // a category too long for one message
+    else b.split('\n').forEach((line, k) => add(line, k === 0 ? '\n\n' : '\n')); // a list too long for one message
   }
   return bodies.map((body) => ({ type: 'text', body }));
+}
+
+const KEYS = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+
+/** Option numbers: big number keys (1️⃣ … 🔟) while a list has ten or fewer, plain bold numbers in a longer one. */
+function keyFor(count: number): (n: number) => string {
+  return count <= 10 ? (n) => KEYS[n]! : (n) => `*${n}.*`;
+}
+
+/** An item's emoji: pizza (the deals are pizza-led), fries and sides, a drink, a dip, a burger. */
+function emojiOf(name: string): string {
+  if (/pizza/i.test(name)) return '🍕';
+  if (/fries|nuggets|wings/i.test(name)) return '🍟';
+  if (/drink|\bcola\b/i.test(name)) return '🥤';
+  if (/\bdip\b/i.test(name)) return '🥫';
+  if (/burger|crispy|nashville|dipped/i.test(name) && !/large|medium/i.test(name)) return '🍔';
+  return '🍕';
 }
 
 /**
@@ -511,163 +558,241 @@ function priceShown(cents: number, off: number): string {
   return off > 0 ? `~${formatCents(cents)}~ *${formatCents(Math.round((cents * (100 - off)) / 100))}*` : formatCents(cents);
 }
 
-/** An item and its price in one line: "Fajita Pizza — Medium — ~1,500~ *1,200* + tax" (`bold`: the name in bold). */
-function itemLine(shop: BotShop, item: PublishedMenuItem, bold = false): string {
-  const name = bold ? `*${item.name}*` : item.name;
-  return `${name} — ${priceShown(item.basePriceCents, offPercent(shop, item))}${item.taxIncluded ? ' · tax shamil' : ' + tax'}${isPickupOnly(item) ? ' · sirf pick-up' : ''}`;
-}
-
 /** A category's name as shown: the till's "Pizza" is the regular pizzas (the signature ones have their own category). */
 function categoryTitle(name: string): string {
   return /^pizzas?$/i.test(name.trim()) ? 'Regular pizza' : name;
 }
 
-/** The website's offers in a line: "🔥 *Regular pizza par 20% OFF* · baqi items par 10% OFF (deals ke ilawa)", or null. */
-function offersLine(shop: BotShop): string | null {
-  const general = shop.pickupAvailable ? Math.min(shop.pickupPercent, shop.deliveryPercent ?? 0) : (shop.deliveryPercent ?? 0);
-  const own = categoriesOf(shop)
-    .filter((c) => !isDealSection(c.name))
-    .map((c) => ({ name: categoryTitle(c.name), percent: categoryPercent(shop, c.id) }))
-    .filter((c) => c.percent > 0 && c.percent !== general);
-  const parts = [
-    ...own.map((c) => `*${c.name} par ${c.percent}% OFF*`),
-    ...(general > 0 ? [`${own.length > 0 ? 'baqi items' : 'har item'} par ${general}% OFF`] : []),
-  ];
-  return parts.length > 0 ? `🔥 ${parts.join(' · ')} (deals ke ilawa)` : null;
+/** "Fajita Pizza — Medium" and "— Large" are one family in two sizes: a category's families, in its order. */
+function familiesOf(cat: BotCategory): Array<{ name: string; items: PublishedMenuItem[] }> {
+  const out: Array<{ name: string; items: PublishedMenuItem[] }> = [];
+  for (const i of cat.items) {
+    const name = (i.name.split(' — ')[0] ?? i.name).trim();
+    const f = out.find((x) => x.name === name);
+    if (f) f.items.push(i);
+    else out.push({ name, items: [i] });
+  }
+  return out;
 }
 
-/**
- * A category as a numbered block, from `from`: its name with Buy 1 Get 1's hours, the % off and the tax said once,
- * then a line per item (a deal's contents under it, since a deal's name does not say what comes in it).
- */
-function sectionText(shop: BotShop, cat: BotCategory, from: number): string {
-  const offs = cat.items.map((i) => offPercent(shop, i));
-  const off = offs.every((p) => p === offs[0]) ? (offs[0] ?? 0) : 0;
-  const tax = cat.items.every((i) => i.taxIncluded) ? 'tax shamil' : cat.items.every((i) => !i.taxIncluded) ? '+ tax' : null;
-  const deal = isDealSection(cat.name);
-  const head = [
-    `*${categoryTitle(cat.name).toUpperCase()}*`,
-    ...(isBuy1Get1Category(cat.name) && shop.buy1Get1Hours ? [`roz ${shop.buy1Get1Hours}`] : []),
-    ...(off > 0 ? [`🔥 ${off}% OFF`] : []),
-    ...(tax ? [tax] : []),
-  ].join(' · ');
-  const lines = cat.items.flatMap((i, k) => {
-    const line = `${from + k}. ${deal ? `*${i.name}*` : i.name} — ${priceShown(i.basePriceCents, offs[k]!)}${tax ? '' : i.taxIncluded ? ' · tax shamil' : ' + tax'}${isPickupOnly(i) ? ' · sirf pick-up' : ''}`;
-    return deal && i.description ? [line, `      ${i.description}`] : [line];
-  });
-  return [head, ...lines].join('\n');
+/** An item's size ("Fajita Pizza — Large" → "Large"), or its name when it has none. */
+function sizeOf(item: PublishedMenuItem): string {
+  return item.name.split(' — ')[1]?.trim() ?? item.name;
 }
 
-function countOf(data: BotData): number {
-  return data.cart.reduce((n, l) => n + l.quantity, 0);
+/** An item's name to read on the order: "Fajita Pizza — Large" → "Fajita Pizza (Large)". */
+function shownName(name: string): string {
+  return name.replace(/ — (.+)$/, ' ($1)');
 }
 
-/** How to choose, the order so far, the full menu (when this is part of it), the website, staff. */
-function chooseLines(data: BotData, o: { example?: string; whole: boolean }): string {
-  return [
-    `👉 Jo chahiye uska *number* likhein (jaise *1*)${o.example ? ` ya naam (jaise _${o.example}_)` : ''}.`,
-    ...(data.cart.length > 0 ? [`🛒 Aapka order (${countOf(data)}): *cart* likhein`] : []),
-    ...(o.whole ? [] : ['📋 Poora menu: *menu* likhein']),
-    '🌐 Website se order: *website* · 👤 Staff se baat: *staff*',
-  ].join('\n');
+/** The picture's deals on today's menu, in its order; null when one is missing or unclear (then the deals as text). */
+function pictureDeals(shop: BotShop): PublishedMenuItem[] | null {
+  const p = shop.menuPicture;
+  if (!p || p.deals.length === 0) return null;
+  const deals = categoriesOf(shop)
+    .filter((c) => isDealSection(c.name) && !isBuy1Get1Category(c.name))
+    .flatMap((c) => c.items);
+  const found = p.deals.map((name) => deals.filter((i) => ` ${wordsOf(i.name).join(' ')} `.startsWith(` ${wordsOf(name).join(' ')} `)));
+  return found.every((f) => f.length === 1) ? found.map((f) => f[0]!) : null;
 }
 
-/**
- * The menu as numbered text: every category, the deals first as on the website's order page (the deals in one message,
- * the rest in the next: two short reads, not one long one), or only `only` (categoriesOf indexes); `first` (the day's
- * hello) and the offers on top.
- */
-function menuView(shop: BotShop, data: BotData, o: { first?: string; only?: readonly number[]; offers?: boolean } = {}): View {
-  const cats = categoriesOf(shop);
-  const at = cats.map((_, i) => i).filter((i) => !o.only || o.only.includes(i));
-  const order = [...at.filter((i) => isDealSection(cats[i]!.name)), ...at.filter((i) => !isDealSection(cats[i]!.name))];
-  const choices: string[] = [];
-  const block = (i: number) => {
-    const cat = cats[i]!;
-    const text = sectionText(shop, cat, choices.length + 1);
-    choices.push(...cat.items.map((x) => `i:${x.posItemId}`));
-    return text;
-  };
-  const deals = order.filter((i) => isDealSection(cats[i]!.name)).map(block);
-  const rest = order.filter((i) => !isDealSection(cats[i]!.name)).map(block);
-  const top = [o.first, o.offers === false ? null : offersLine(shop)].filter(Boolean).join('\n');
-  const foot = chooseLines(data, { example: cats[order[0] ?? -1]?.items[0]?.name, whole: !o.only });
-  const out = deals.length > 0 && rest.length > 0 ? [...texts([top, ...deals]), ...texts([...rest, foot])] : texts([top, ...deals, ...rest, foot]);
-  return { out, choices };
+/** The Buy 1 Get 1 deals on the menu. */
+function buy1Get1Items(shop: BotShop): PublishedMenuItem[] {
+  return categoriesOf(shop)
+    .filter((c) => isBuy1Get1Category(c.name))
+    .flatMap((c) => c.items);
 }
 
-/** One category (an older list's row "c:2"), or null when there is no such category now. */
-function categoryView(shop: BotShop, data: BotData, at: number): View | null {
-  return categoriesOf(shop)[at] ? menuView(shop, data, { only: [at], offers: false }) : null;
+/** The regular pizzas' % off, for the start message's "Pizza alag se?" line. */
+function pizzaPercent(shop: BotShop): number {
+  const pizza = categoriesOf(shop).find((c) => /^pizzas?$/i.test(c.name.trim()));
+  return pizza ? categoryPercent(shop, pizza.id) : 0;
 }
 
-/** The items a typed message named, numbered with their prices (a deal's contents under it), to pick one. */
-function foundView(shop: BotShop, items: readonly PublishedMenuItem[]): View {
-  const shown = items.slice(0, 40);
-  const lines = shown.flatMap((i, k) => {
-    const deal = isDealSection(categoryOfItem(shop, i.posItemId)?.name ?? '');
-    return [`${k + 1}. ${itemLine(shop, i)}`, ...(deal && i.description ? [`      ${i.description}`] : [])];
-  });
+/** The start message's last lines: Buy 1 Get 1 (its deals while it sells, else its hours), pizza and burger, staff. */
+function startTail(shop: BotShop, from: number): { lines: string[]; choices: string[] } {
+  const b1 = buy1Get1Items(shop);
+  const open = shop.buy1Get1Open !== false && b1.length > 0;
+  const off = pizzaPercent(shop);
   return {
-    out: [{ type: 'text', body: ['Ye mile 👇', ...lines, '', '👉 Jo chahiye uska *number* likhein (jaise *1*).'].join('\n') }],
+    lines: [
+      ...(open
+        ? ['', `🎁 *Buy 1 Get 1*${shop.buy1Get1Hours ? ` (${shop.buy1Get1Hours})` : ''}`, ...b1.map((i, k) => `*${from + k}.* ${i.name} — ${formatCents(i.basePriceCents)}`)]
+        : b1.length > 0 && shop.buy1Get1Hours
+          ? ['', `🎁 Buy 1 Get 1: roz ${shop.buy1Get1Hours}`]
+          : []),
+      '',
+      `🍕 Pizza alag se? *pizza* likhein${off > 0 ? ` (🔥 ${off}% OFF)` : ''}`,
+      '🍔 Burger? *burger* likhein',
+      '👤 Staff se baat: *staff*',
+    ],
+    choices: open ? b1.map((i) => `i:${i.posItemId}`) : [],
+  };
+}
+
+/**
+ * Where an order starts (the day's welcome, "menu", a price or deals ask): the printed deal menu as a picture, its
+ * numbers the choices, with a short caption; the deals as text when there is no picture for today's menu.
+ */
+function startView(shop: BotShop, first?: string): View {
+  const pictured = pictureDeals(shop);
+  if (shop.menuPicture && pictured) {
+    const tail = startTail(shop, pictured.length + 1);
+    const caption = [...(first ? [first] : []), '👆 Jo deal chahiye uska *number* bhejein (jaise *5*)', ...tail.lines].join('\n');
+    return { out: [{ type: 'image', link: shop.menuPicture.url, caption }], choices: [...pictured.map((i) => `i:${i.posItemId}`), ...tail.choices] };
+  }
+  const deals = categoriesOf(shop)
+    .filter((c) => isDealSection(c.name) && !isBuy1Get1Category(c.name))
+    .flatMap((c) => c.items);
+  const key = keyFor(deals.length);
+  const tail = startTail(shop, deals.length + 1);
+  const body = [
+    ...(first ? [first, ''] : []),
+    '🔥 *DEALS* (tax shamil)',
+    ...deals.flatMap((i, k) => [`${key(k + 1)} *${i.name}* — ${formatCents(i.basePriceCents)}`, ...(i.description ? [`      _${i.description}_`] : [])]),
+    '',
+    '👆 Jo deal chahiye uska *number* bhejein',
+    ...tail.lines,
+  ].join('\n');
+  return { out: texts([body]), choices: [...deals.map((i) => `i:${i.posItemId}`), ...tail.choices] };
+}
+
+/**
+ * Categories as short lists (pizza, burgers, fries, drinks): one line per family ("Fajita Pizza", its sizes asked
+ * next), the sizes' prices once on top when every family has the same ones, the % off said once.
+ */
+function familyView(shop: BotShop, at: readonly number[], more: readonly string[] = []): View {
+  const cats = categoriesOf(shop);
+  // the regular pizzas before the signature ones; otherwise the till's order
+  const order = [...at].sort((a, b) => Number(/^pizzas?$/i.test(cats[b]!.name.trim())) - Number(/^pizzas?$/i.test(cats[a]!.name.trim())));
+  const fams = order.map((i) => ({ cat: cats[i]!, families: familiesOf(cats[i]!) }));
+  const count = fams.reduce((n, f) => n + f.families.length, 0);
+  const key = keyFor(count);
+  const choices: string[] = [];
+  const blocks = fams.map(({ cat, families }) => {
+    const offs = cat.items.map((i) => offPercent(shop, i));
+    const off = offs.every((p) => p === offs[0]) ? (offs[0] ?? 0) : 0;
+    const tax = cat.items.every((i) => i.taxIncluded) ? ' (tax shamil)' : cat.items.every((i) => !i.taxIncluded) ? ' (+ tax)' : '';
+    const sizes = (f: { items: PublishedMenuItem[] }) => f.items.map((i) => `${sizeOf(i)} ${priceShown(i.basePriceCents, offPercent(shop, i))}`).join(' · ');
+    const same = families.every((f) => f.items.length > 1 && f.items.map((i) => `${sizeOf(i)}${i.basePriceCents}`).join() === families[0]!.items.map((i) => `${sizeOf(i)}${i.basePriceCents}`).join());
+    const lines = families.map((f) => {
+      choices.push(f.items.length > 1 ? `p:${f.items[0]!.posItemId}` : `i:${f.items[0]!.posItemId}`);
+      const price = same ? '' : f.items.length > 1 ? ` — ${sizes(f)}` : ` — ${priceShown(f.items[0]!.basePriceCents, offPercent(shop, f.items[0]!))}`;
+      return `${key(choices.length)} ${f.name}${price}`;
+    });
+    const hours = isBuy1Get1Category(cat.name) && shop.buy1Get1Hours ? ` · roz ${shop.buy1Get1Hours}` : '';
+    return [
+      `${emojiOf(cat.items[0]?.name ?? cat.name)} *${categoryTitle(cat.name)}*${off > 0 ? ` — 🔥 *${off}% OFF*` : ''}${tax}${hours}`,
+      ...(same ? [sizes(families[0]!)] : []),
+      '',
+      ...lines,
+    ].join('\n');
+  });
+  return { out: texts([...blocks, [...more, `👉 *Number* bhejein${count > 0 ? ` (jaise *1*)` : ''}`].join('\n')]), choices };
+}
+
+/** A family's sizes, numbered, with their prices. */
+function sizeView(shop: BotShop, items: readonly PublishedMenuItem[]): View {
+  const key = keyFor(items.length);
+  const name = (items[0]?.name.split(' — ')[0] ?? '').trim();
+  return {
+    out: [
+      {
+        type: 'text',
+        body: [
+          `${emojiOf(name)} *${name}* — size?`,
+          '',
+          ...items.map((i, k) => `${key(k + 1)} ${sizeOf(i)} — ${priceShown(i.basePriceCents, offPercent(shop, i))}`),
+          ...(items.some((i) => !i.taxIncluded) ? ['_(+ tax)_'] : []),
+          '',
+          '👉 *Number* bhejein',
+        ].join('\n'),
+      },
+    ],
+    choices: items.map((i) => `i:${i.posItemId}`),
+  };
+}
+
+/** The items a typed message named, numbered with their prices, to pick one. */
+function foundView(shop: BotShop, items: readonly PublishedMenuItem[]): View {
+  const shown = items.slice(0, 30);
+  const key = keyFor(shown.length);
+  return {
+    out: [
+      {
+        type: 'text',
+        body: [
+          'Ye mile 👇',
+          '',
+          ...shown.map((i, k) => `${key(k + 1)} ${emojiOf(i.name)} ${shownName(i.name)} — ${priceShown(i.basePriceCents, offPercent(shop, i))}${i.taxIncluded ? '' : ' + tax'}`),
+          '',
+          '👉 *Number* bhejein',
+        ].join('\n'),
+      },
+    ],
     choices: shown.map((i) => `i:${i.posItemId}`),
   };
 }
 
-/** One choice an item needs, numbered, with the item and its price on top (so "Price?" at this step is answered too). */
+/** One choice an item needs, numbered, the item and its price on top (so "Price?" at this step is answered too). */
 function choiceView(shop: BotShop, item: PublishedMenuItem, group: PublishedModifierGroup, step: number, of: number, picked: readonly string[]): View {
   const left = group.modifiers.filter((m) => !picked.includes(m.posModifierId));
   const need = Math.max(1, group.minSelect) - picked.length;
+  const key = keyFor(left.length);
+  const label = groupLabelOf(group);
+  const ask = need > 1 ? `${label}: koi *${need}* chunein (jaise *1 2 3*)` : `${label} kaunsa?`;
   const body = [
-    itemLine(shop, item, true),
-    `${groupLabelOf(group)} chunein${need > 1 ? ` (${need} chahiye — jaise *1 2 3*)` : ''}${of > 1 ? ` — ${step + 1}/${of}` : ''}:`,
-    ...left.map((m, k) => `${k + 1}. ${choiceName(m.name)}${m.priceDeltaCents > 0 ? ` (+${formatCents(m.priceDeltaCents)})` : ''}`),
+    `${emojiOf(item.name)} *${item.name}* — ${priceShown(item.basePriceCents, offPercent(shop, item))}${item.taxIncluded ? '' : ' + tax'} ✅`,
     '',
-    `👉 Number likhein (jaise *1*)${left[0] ? ` ya naam (jaise _${choiceName(left[0].name)}_)` : ''}.`,
+    `${ask}${of > 1 ? ` (${step + 1}/${of})` : ''} 👇`,
+    ...left.map((m, k) => `${key(k + 1)} ${choiceName(m.name)}${m.priceDeltaCents > 0 ? ` (+${formatCents(m.priceDeltaCents)})` : ''}`),
+    '',
+    '👉 *Number* bhejein',
   ].join('\n');
   return { out: [{ type: 'text', body }], choices: left.map((m) => `m:${m.posModifierId}`) };
 }
 
-/** Numbered options under a message: "1. 🛵 Delivery" … */
+/** Numbered options under a message: "1️⃣ 🛵 Delivery" … */
 function numbered(head: readonly string[], options: ReadonlyArray<readonly [string, string]>, tail: readonly string[] = []): View {
+  const key = keyFor(options.length);
   return {
-    out: [{ type: 'text', body: [...head, ...options.map(([, t], k) => `${k + 1}. ${t}`), ...tail].join('\n') }],
+    out: [{ type: 'text', body: [...head, ...options.map(([, t], k) => `${key(k + 1)} ${t}`), ...tail].join('\n') }],
     choices: options.map(([id]) => id),
   };
 }
 
+/** A line of the order: emoji, count, name and its price after the % off, the picks under it. */
+function orderLines(shop: BotShop, line: CartLine): string[] {
+  const item = itemOf(shop, line.posItemId);
+  if (!item) return [];
+  const picks = pickedWords(item, line.modifierIds);
+  return [
+    `${emojiOf(item.name)} *${line.quantity > 1 ? `${line.quantity}× ` : ''}${shownName(item.name)}* — ${priceShown(lineCents(item, line), offPercent(shop, item))}`,
+    ...(picks ? [`      ${picks}`] : []),
+  ];
+}
+
 /**
- * The order so far, then what next, numbered: Delivery or Pick-up (or more items). `added` when an item has just gone
- * in. How many of the last line: "2x" typed (a bare "2" is option 2).
+ * The order so far, then what next, numbered: Delivery, Pick-up or more items. `note`: "added", "changed" on top.
+ * A deal's usual drink and dip are on it, and how to change them.
  */
-function cartView(shop: BotShop, data: BotData, added: boolean): View {
-  let total = 0;
-  let discounted = false;
-  const lines = data.cart.flatMap((l) => {
+function cartView(shop: BotShop, data: BotData, note?: string): View {
+  const usual = data.cart.some((l) => {
     const item = itemOf(shop, l.posItemId);
-    if (!item) return [];
-    const cents = lineCents(item, l);
-    total += cents;
-    discounted ||= offPercent(shop, item) > 0;
-    const choices = choiceWords(item, l.modifierIds);
-    return [`${l.quantity}× ${item.name} — ${formatCents(cents)}`, ...(choices ? [`   ↳ ${choices}`] : [])];
+    return item ? requiredGroups(item).some((g) => usualGroup(item, g)) : false;
   });
-  const last = data.cart.at(-1);
-  const lastName = last ? itemOf(shop, last.posItemId)?.name : undefined;
   const options: Array<readonly [string, string]> = shop.pickupAvailable
-    ? [['f:delivery', '🛵 Delivery'], ['f:pickup', pickupTitle(shop)], ['k:add', '➕ Aur add karein']]
-    : [['f:delivery', '🛵 Delivery'], ['k:add', '➕ Aur add karein'], ['k:clear', '🗑️ Order khali karein']];
+    ? [['f:delivery', '🛵 Delivery'], ['f:pickup', `🏃 ${pickupTitle(shop).replace('🏃 ', '')} (khud lene aayenge)`], ['k:add', '➕ Aur kuch add karein']]
+    : [['f:delivery', '🛵 Delivery'], ['k:add', '➕ Aur kuch add karein'], ['k:clear', '🗑️ Order khali karein']];
   return numbered(
     [
-      ...(added ? ['✅ Order mein add ho gaya!'] : []),
-      '🛒 *Aapka order*',
-      ...lines,
-      `Items: ${formatCents(total)} (${discounted ? 'discount, ' : ''}delivery aur tax agle step mein)`,
+      ...(note ? [note, ''] : []),
+      ...data.cart.flatMap((l) => orderLines(shop, l)),
+      ...(usual ? ['', '_Drink ya dip badalni ho to naam likh dein (jaise *7up*)_'] : []),
       '',
-      shop.pickupAvailable ? '*Delivery ya pick-up?* Number likhein 👇' : 'Order ke liye *1* likhein 👇',
+      'Ab batayein 👇',
     ],
     options,
-    lastName ? ['', `_${lastName} ek se zyada chahiye? Jaise *2x* likhein._`] : [],
   );
 }
 
@@ -678,15 +803,15 @@ function pickupTitle(shop: BotShop): string {
 
 /** The old bot's question after Checkout (a session saved before 27 Oct 2026 may still tap Checkout). */
 function fulfilmentView(shop: BotShop): View {
-  return numbered(['Delivery ya pick-up? Number likhein 👇'], [['f:delivery', '🛵 Delivery'], ['f:pickup', pickupTitle(shop)]]);
+  return numbered(['Delivery ya pick-up? 👇'], [['f:delivery', '🛵 Delivery'], ['f:pickup', pickupTitle(shop)]]);
 }
 
 function addressMessage(zone: FactZone | undefined): WaOut {
   return {
     type: 'text',
     body: zone
-      ? `📍 ${zone.name} — ghar no. aur street likh dein:`
-      : '📍 Delivery address likh dein — ghar no., street aur area\n(jaise: House 12, Street 4, DHA Phase 6)',
+      ? `📍 *${zone.name}* — ghar no. aur street bhejein`
+      : '📍 Apna *address* bhejein\n_(ghar no., street aur area — jaise House 12, Street 4, DHA Phase 6)_',
   };
 }
 
@@ -706,58 +831,61 @@ function zoneLine(z: FactZone): string {
 }
 
 /** The open areas numbered under their groups (or one group: an older list's row "zg:1"), then "not my area". */
-function zonesView(shop: BotShop, body = '🛵 Delivery kahan karni hai? Area ka *number* ya naam likhein 👇', only?: number): View {
+function zonesView(shop: BotShop, body = '📍 Aapka area kaunsa hai? *Number* bhejein 👇', only?: number): View {
+  const groups = zoneGroups(shop).filter((_, gi) => only === undefined || gi === only);
+  const key = keyFor(groups.reduce((n, g) => n + g.zones.length, 0) + 1);
   const choices: string[] = [];
   const lines = [body];
-  zoneGroups(shop).forEach((g, gi) => {
-    if (only !== undefined && gi !== only) return;
+  for (const g of groups) {
     lines.push('', `*${g.group}*`);
     for (const z of g.zones) {
       choices.push(`z:${z.id}`);
-      lines.push(`${choices.length}. ${zoneLine(z)}`);
+      lines.push(`${key(choices.length)} ${zoneLine(z)}`);
     }
-  });
+  }
   choices.push('z:none');
-  lines.push('', `${choices.length}. Mera area nahi hai`);
-  return { out: [{ type: 'text', body: lines.join('\n') }], choices };
+  lines.push('', `${key(choices.length)} ❌ Mera area list mein nahi`);
+  return { out: texts([lines.join('\n')]), choices };
 }
 
 function confirmView(shop: BotShop, data: BotData, q: Extract<OrderAnswer, { ok: true }>, phone: string): View {
+  const fees = feeIds(shop);
   const lines = (q.lines ?? []).flatMap((l) => {
+    if (fees.has(l.posItemId) || /delivery charge/i.test(l.name)) return [`🛵 Delivery — ${formatCents(l.unitPriceCents * l.quantity)}`];
     const item = itemOf(shop, l.posItemId);
-    const choices = item ? choiceWords(item, l.modifiers.map((m) => m.posModifierId)) : '';
-    return [`${l.quantity}× ${l.name} — ${formatCents(l.unitPriceCents * l.quantity)}`, ...(choices ? [`   ↳ ${choices}`] : [])];
+    const picks = item ? pickedWords(item, l.modifiers.map((m) => m.posModifierId)) : '';
+    return [`${emojiOf(l.name)} ${l.quantity > 1 ? `${l.quantity}× ` : ''}${shownName(l.name)} — ${formatCents(l.unitPriceCents * l.quantity)}`, ...(picks ? [`      ${picks}`] : [])];
   });
   const zone = shop.zones.find((z) => z.id === data.zoneId);
-  const where = data.fulfilment === 'pickup' ? '🏃 Pick-up: shop se le jayein' : `🛵 ${zone?.name ?? ''} · ${data.address ?? ''}`;
+  // the area once: not again when the address already says it
+  const area = zone && !normalizeAreaText(data.address ?? '').includes(normalizeAreaText(zone.name)) ? ` (${zone.name})` : '';
   return numbered(
     [
       '🧾 *Aapka order*',
+      '',
       ...lines,
+      ...(q.discountCents > 0 ? [`🔥 Discount — −${formatCents(q.discountCents)}`] : []),
+      ...(q.taxCents > 0 ? [`Tax — ${formatCents(q.taxCents)}`] : []),
       '',
-      `Subtotal ${formatCents(q.subtotalCents)}`,
-      ...(q.discountCents > 0 ? [`Discount −${formatCents(q.discountCents)}`] : []),
-      ...(q.taxCents > 0 ? [`Tax ${formatCents(q.taxCents)}`] : []),
-      `*Total ${formatCents(q.totalCents)}* · ${data.fulfilment === 'pickup' ? 'payment shop par' : 'cash on delivery'}`,
-      '',
-      where,
+      `💰 *Total: ${formatCents(q.totalCents)}* · ${data.fulfilment === 'pickup' ? 'payment shop par' : 'cash on delivery'}`,
+      data.fulfilment === 'pickup' ? '🏃 Pick-up: shop se le jayein' : `📍 ${data.address ?? ''}${area}`,
       `👤 ${data.name ?? ''} · ${phone}`,
       ...(data.notes ? [`📝 ${data.notes}`] : []),
       '',
     ],
     [
-      ['y:confirm', '✅ Confirm order'],
+      ['y:confirm', '✅ *OK — order kar dein*'],
       ['y:edit', '✏️ Badlein'],
       ['y:cancel', '❌ Cancel'],
     ],
-    ['', '👉 Confirm ke liye *1* ya *ok* likhein. Kuch kehna ho (jaise bina pyaz)? Yahin likh dein.'],
+    ['', '_Kuch kehna ho (jaise bina pyaz)? Yahin likh dein._'],
   );
 }
 
 /** A message the step could not use (said once; after that the chat is staff's), or a tap from no list we know. */
 const HELP: WaOut = {
   type: 'text',
-  body: '🙏 Ye samajh nahi aaya. Upar ki list se *number* likhein, ya *menu* likh kar poori list dekhein. Hamare staff se baat ke liye *staff* likhein.',
+  body: '🙏 Samajh nahi aaya.\nUpar wali list se *number* bhejein, ya *menu* likhein.\n👤 Staff se baat: *staff*',
 };
 
 /** "+923001234567" as the order's number. */
@@ -795,21 +923,21 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
   if (typed?.length === 1 && data.choices && data.choices.length > 0) {
     const pick = data.choices[typed[0]! - 1];
     if (!pick) {
-      say({ type: 'text', body: `Ye number upar ki list mein nahi 🙏 1 se ${data.choices.length} tak koi number likhein.` });
+      say({ type: 'text', body: `🙏 Ye number list mein nahi — *1* se *${data.choices.length}* tak bhejein.` });
       return { state, data, out };
     }
     id = pick;
   }
 
-  /** The whole menu, numbered (with the day's hello on top when there is one). */
+  /** Where an order starts: the deal menu picture (with the day's hello on top when there is one). */
   const showStart = (first?: string) => {
-    offer(menuView(shop, data, { first }));
+    offer(startView(shop, first));
     go('menu');
   };
   const showMenu = () => showStart();
-  const showCart = (added = false) => {
+  const showCart = (note?: string) => {
     if (data.cart.length === 0) return showMenu();
-    offer(cartView(shop, data, added));
+    offer(cartView(shop, data, note));
     go('cart');
   };
   const askZones = (body?: string) => {
@@ -835,7 +963,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     const p = data.pending;
     const item = p ? itemOf(shop, p.posItemId) : undefined;
     if (!p || !item) return showMenu();
-    const groups = requiredGroups(item);
+    const groups = askedGroups(item);
     while (p.step < groups.length) {
       const g = groups[p.step]!;
       const inGroup = g.modifiers.filter((m) => p.modifierIds.includes(m.posModifierId)).map((m) => m.posModifierId);
@@ -846,6 +974,10 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       offer(choiceView(shop, item, g, p.step, groups.length, inGroup));
       return go('choice');
     }
+    // The usual drink and dip (an item started before they were the bot's to pick gets them now).
+    for (const g of requiredGroups(item).filter((x) => usualGroup(item, x))) {
+      if (!g.modifiers.some((m) => p.modifierIds.includes(m.posModifierId))) p.modifierIds.push(...usualIds(g));
+    }
     const problem = validateModifierSelection(item, p.modifierIds);
     if (problem) {
       say({ type: 'text', body: `Ye item abhi is tarah nahi ban sakta (${problem}). Menu se dobara chunein.` });
@@ -855,7 +987,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     addPending(p.quantity ?? 1);
     // From a catalog cart (or several numbers typed): on to its next item (the order once none are left).
     if (data.queue) return nextFromQueue();
-    showCart(true);
+    showCart('✅ *Order mein add ho gaya!*');
   };
 
   /** The pending item into the order (the same item with the same choices adds up). */
@@ -890,6 +1022,38 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     askNext();
   };
 
+  /** "7up", "ranch" at the order or its confirm: the usual drink or dip of an item in it changed (the last item first). */
+  const swapUsual = (): boolean => {
+    for (const line of [...data.cart].reverse()) {
+      const item = itemOf(shop, line.posItemId);
+      if (!item) continue;
+      for (const g of requiredGroups(item).filter((x) => usualGroup(item, x))) {
+        const named = choiceNamed(g, [], text);
+        if (!named) continue;
+        const inGroup = new Set(g.modifiers.map((m) => m.posModifierId));
+        const kept = line.modifierIds.filter((x) => inGroup.has(x) && x !== named);
+        line.modifierIds = [...line.modifierIds.filter((x) => !inGroup.has(x)), named, ...kept.slice(0, Math.max(1, g.minSelect) - 1)];
+        delete data.orderId;
+        return true;
+      }
+    }
+    return false;
+  };
+
+  /** A family picked ("Fajita Pizza"): its sizes, or the item itself when it comes in one. */
+  const pickFamily = (firstItemId: string) => {
+    const cat = categoryOfItem(shop, firstItemId);
+    const family = cat ? familiesOf(cat).find((f) => f.items[0]?.posItemId === firstItemId) : undefined;
+    if (!family) return showMenu();
+    if (family.items.length === 1) return pickItem(family.items[0]!);
+    offer(sizeView(shop, family.items));
+    go('items');
+  };
+
+  /** A family's sizes are the items named ("fajita": its Medium and Large): one family, its sizes asked. */
+  const oneFamily = (items: readonly PublishedMenuItem[]): boolean =>
+    items.length > 1 && items.every((i) => (i.name.split(' — ')[0] ?? '').trim() === (items[0]!.name.split(' — ')[0] ?? '').trim());
+
   /** A catalog cart's next item: its choices asked (if it has any), then the next; the order when none are left. */
   function nextFromQueue(): void {
     while (data.queue && data.queue.length > 0) {
@@ -903,7 +1067,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       return askNext();
     }
     delete data.queue;
-    showCart();
+    showCart('✅ *Order mein add ho gaya!*');
   }
 
   const orderBody = (): Record<string, unknown> => {
@@ -955,7 +1119,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
   /** Delivery or pick-up known (and the area): the WhatsApp name as the order's name (asked when it is none), then the price. */
   const finish = async () => {
     data.name ??= orderName(turn.profileName) ?? undefined;
-    if (!data.name) return askWords({ type: 'text', body: '👤 Order kis naam par? Apna naam likhein:' }, 'name');
+    if (!data.name) return askWords({ type: 'text', body: '👤 Order kis naam par? Apna *naam* bhejein' }, 'name');
     await quote();
   };
 
@@ -968,10 +1132,11 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     say({
       type: 'text',
       body: [
-        `✅ Shukriya${data.name ? ` ${firstName(data.name) ?? data.name}` : ''}! Aapka order place ho gaya.`,
-        `Total ${formatCents(placed.totalCents)} · ${data.fulfilment === 'pickup' ? 'payment shop par' : 'cash on delivery'}`,
-        'Kitchen confirm karte hi hum yahin bata denge.',
-        `Order dekhein: ${deps.trackUrl(orderId, localOf(turn.waId))}`,
+        `✅ *Order ho gaya!*${data.name ? ` Shukriya ${firstName(data.name) ?? data.name}` : ' Shukriya'} 🙏`,
+        '',
+        `💰 ${formatCents(placed.totalCents)} · ${data.fulfilment === 'pickup' ? 'payment shop par' : 'cash on delivery'}`,
+        '🍕 Kitchen confirm karte hi yahin batayenge.',
+        `📦 Order dekhein: ${deps.trackUrl(orderId, localOf(turn.waId))}`,
       ].join('\n'),
     });
     data = { cart: [], ...(data.token ? { token: data.token } : {}) };
@@ -998,8 +1163,8 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
   };
 
   /**
-   * Words that ask for something: an item by name (one named goes in, unless they only ask its price), the deals or
-   * the offers, Buy 1 Get 1, a category or a size, the prices or the menu. False when they ask none of these.
+   * Words that ask for something: an item by name (one named goes in, unless they only ask its price), Buy 1 Get 1,
+   * the deals or the offers, a category or a size, the prices or the menu. False when they ask none of these.
    * `greet`: a hello counts as asking for the menu (not in the middle of an order: there it is more likely "anyone
    * there?", for staff).
    */
@@ -1012,6 +1177,11 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       pickItem(items[0]!, countSaid(said));
       return true;
     }
+    if (oneFamily(items)) {
+      offer(sizeView(shop, items));
+      go('items');
+      return true;
+    }
     if (items.length > 0) {
       offer(foundView(shop, items));
       go('items');
@@ -1021,20 +1191,23 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     const where = (test: (c: BotCategory) => boolean) => cats.map((c, i) => (test(c) ? i : -1)).filter((i) => i >= 0);
     const b1g1 = where((c) => isBuy1Get1Category(c.name));
     if (b1g1.length > 0 && asksBuy1Get1(text, said)) {
-      offer(menuView(shop, data, { only: b1g1, offers: false }));
+      offer(familyView(shop, b1g1));
       go('items');
       return true;
     }
     if (said.some((w) => DEAL_WORDS.has(w))) {
-      offer(menuView(shop, data, { only: where((c) => isDealSection(c.name)) }));
-      go('menu');
+      showStart();
       return true;
     }
     // "coke", "7up": the drinks; "medium", "large": the pizzas.
-    let named = categoriesNamed(shop, said.map((w) => (SAID_AS[w] ? 'drink' : w)));
+    let named = categoriesNamed(shop, said.map((w) => (SAID_AS[w] ? 'drink' : w))).filter((i) => !isDealSection(cats[i]!.name));
     if (named.length === 0 && said.some((w) => SIZE_WORDS.has(w))) named = where((c) => /pizza/i.test(c.name));
+    // "pizza": the regular pizzas, short enough for the big number keys; the other pizza categories one word away
+    const regular = named.filter((i) => /^pizzas?$/i.test(cats[i]!.name.trim()));
+    const more = regular.length > 0 && named.length > regular.length ? named.filter((i) => !regular.includes(i)) : [];
     if (named.length > 0) {
-      offer(menuView(shop, data, { only: named, offers: false }));
+      const hints = more.map((i) => `⭐ ${categoryTitle(cats[i]!.name)} bhi hain: *${wordsOf(cats[i]!.name)[0] ?? ''}* likhein`);
+      offer(familyView(shop, more.length > 0 ? regular : named, hints));
       go('items');
       return true;
     }
@@ -1066,7 +1239,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     return { state: 'idle', data, out };
   }
   if (starting) {
-    // The whole menu (an order already started stays: "cart" shows it).
+    // The deal menu (an order already started stays: "cart" shows it).
     showStart(turn.hello ?? undefined);
     return { state, data, out };
   }
@@ -1086,19 +1259,20 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     const [kind, a = ''] = id.split(':');
     switch (kind) {
       case 'o':
-        // 'o:menu': the full menu.
+        // 'o:menu': where an order starts.
         showMenu();
         break;
       case 'c':
-      case 'cp': {
+      case 'cp':
         // An older list's category (and its pages): the category, all of it.
-        const v = categoryView(shop, data, Number(a));
-        if (v) {
-          offer(v);
+        if (categoriesOf(shop)[Number(a)]) {
+          offer(familyView(shop, [Number(a)]));
           go('items');
         } else showMenu();
         break;
-      }
+      case 'p':
+        pickFamily(a);
+        break;
       case 'i': {
         const item = itemOf(shop, a);
         if (!item) {
@@ -1119,7 +1293,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       case 'q':
         // The old bot's "how many" buttons.
         if (data.pending) addPending(Math.min(9, Math.max(1, Number(a) || 1)));
-        showCart(true);
+        showCart('✅ *Order mein add ho gaya!*');
         break;
       case 'k':
         if (a === 'add') showMenu();
@@ -1153,8 +1327,8 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
         if (a === 'none') {
           offer(
             numbered(
-              ['Hamari delivery abhi upar wale areas tak hai. Number likhein 👇'],
-              [...(shop.pickupAvailable ? [['f:pickup', '🏃 Pick-up karein'] as const] : []), ['o:staff', '👤 Staff se baat'] as const],
+              ['😔 Hamari delivery abhi upar wale areas tak hai.', ''],
+              [...(shop.pickupAvailable ? [['f:pickup', '🏃 Pick-up karein (khud lene aayenge)'] as const] : []), ['o:staff', '👤 Staff se baat'] as const],
             ),
           );
           break;
@@ -1173,7 +1347,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
         if (a === 'ok' && orderName(turn.profileName)) {
           data.name = orderName(turn.profileName)!;
           await quote();
-        } else askWords({ type: 'text', body: '👤 Apna naam likhein:' }, 'name');
+        } else askWords({ type: 'text', body: '👤 Apna *naam* bhejein' }, 'name');
         break;
       case 'x':
         // The old bot's "no note" button.
@@ -1199,22 +1373,22 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
 
   // Words, at the steps that ask for them.
   if (state === 'address') {
-    if (text.length < 5) say({ type: 'text', body: 'Address thora tafseel se likhein — ghar no., street aur area:' });
+    if (text.length < 5) say({ type: 'text', body: '📍 Address thora tafseel se bhejein — ghar no., street aur area' });
     else {
       data.address = text.slice(0, 300);
       data.zoneId ??= zoneInText(shop.zones, text)?.id;
       if (data.zoneId) await finish();
-      else askZones('📍 Aapka area kaunsa hai? Area ka *number* ya naam likhein 👇');
+      else askZones();
     }
   } else if (state === 'zones') {
     const zone = zoneInText(shop.zones, text);
     if (zone) await chooseZone(zone);
-    else if (!answerWords(false)) helpOnce(() => askZones('📍 Neeche se apne area ka *number* likhein 👇'));
+    else if (!answerWords(false)) helpOnce(() => askZones());
   } else if (state === 'name') {
     if (text.length >= 2) {
       data.name = text.slice(0, 80);
       await quote();
-    } else say({ type: 'text', body: '👤 Apna naam likhein:' });
+    } else say({ type: 'text', body: '👤 Apna *naam* bhejein' });
   } else if (state === 'notes') {
     data.notes = text.slice(0, 300) || null;
     await quote();
@@ -1225,6 +1399,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     } else say({ type: 'text', body: 'Apna Instagram ya Facebook naam likhein:' });
   } else if (state === 'confirm') {
     if (saysYes(wordsOf(text))) await place();
+    else if (swapUsual()) await quote(); // "7up" at the end changes the drink, not a note
     else if (text.length >= 2) {
       // Their words at the end go on the order as its note ("bina pyaz", "ghanti mat bajayein").
       data.notes = [data.notes, text].filter(Boolean).join(' · ').slice(0, 300);
@@ -1233,7 +1408,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
   } else if (state === 'choice') {
     const p = data.pending;
     const item = p ? itemOf(shop, p.posItemId) : undefined;
-    const group = item && p ? requiredGroups(item)[p.step] : undefined;
+    const group = item && p ? askedGroups(item)[p.step] : undefined;
     if (typed && typed.length > 1 && p && group) {
       // Several numbers for a choice that takes several ("1 3 4 5 6" of the veggies), up to what it allows.
       const ids = typed.map((n) => data.choices?.[n - 1]).filter((x): x is string => !!x?.startsWith('m:')).map((x) => x.slice(2));
@@ -1259,8 +1434,9 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       if (data.pending) addPending(n);
       else if (last) last.quantity = n;
       delete data.orderId;
-      showCart(false);
-    } else if (said.some((w) => ['delivery', 'deliver', 'ghar', 'home'].includes(w))) await deliver();
+      showCart();
+    } else if (swapUsual()) showCart('✅ Badal diya');
+    else if (said.some((w) => ['delivery', 'deliver', 'ghar', 'home'].includes(w))) await deliver();
     else if (shop.pickupAvailable && said.some((w) => ['pickup', 'pick', 'khud', 'takeaway'].includes(w))) await pickUp();
     else if (!answerWords(false)) helpOnce(() => say(HELP));
   } else if (state === 'menu' || state === 'items') {
