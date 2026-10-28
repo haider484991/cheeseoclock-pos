@@ -493,17 +493,30 @@ export function zoneInText(zones: readonly FactZone[], text: string): FactZone |
 }
 
 // ---------------------------------------------------------------------------
-// The steps' messages (28 Oct 2026, simple): the printed deal menu as a picture, then one short question at a time,
-// each option on its own line under a big number key (1️⃣ 2️⃣ 3️⃣), prices in the message with the website's % off.
+// The steps' messages (29 Oct 2026, buttons): the printed deal menu as a picture with three tap buttons under it, then
+// one short question at a time — its options as WhatsApp's own tap buttons (three or fewer) or behind one clearly named
+// list button (more), the message ending with what to tap ("👇 Neeche button dabayein"). A number or a name typed
+// still picks (the picture's printed numbers above all).
 
-/** A step's messages and the options they number, in order (the ids a tap would have sent). */
+/** A step's messages and the options they offer, in order (what a tap sends; a number typed picks one of them too). */
 interface View {
   out: WaOut[];
   choices: string[];
 }
 
+/** An option to tap: its id (what a tap sends), what the button or row says, and a row's second line. */
+interface Option {
+  id: string;
+  title: string;
+  description?: string;
+}
+
 /** WhatsApp takes 4,096 letters in a text message: a longer one goes out as more, split between its blocks. */
 const TEXT_MAX = 3900;
+/** The most rows in one WhatsApp list; a button's words at most 20 letters, a row's title 24. */
+const LIST_ROWS = 10;
+const BUTTON_WORDS = 20;
+const ROW_TITLE = 24;
 
 function texts(blocks: ReadonlyArray<string | null | undefined>): WaOut[] {
   const bodies: string[] = [];
@@ -522,9 +535,49 @@ function texts(blocks: ReadonlyArray<string | null | undefined>): WaOut[] {
 
 const KEYS = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
-/** Option numbers: big number keys (1️⃣ … 🔟) while a list has ten or fewer, plain bold numbers in a longer one. */
+/** Option numbers in text: big number keys (1️⃣ … 🔟) while a list has ten or fewer, plain bold numbers in a longer one. */
 function keyFor(count: number): (n: number) => string {
   return count <= 10 ? (n) => KEYS[n]! : (n) => `*${n}.*`;
+}
+
+/**
+ * Options as WhatsApp's own: three or fewer whose words fit a button are tap buttons under the message (`image` on
+ * top when given); more, up to a list's ten, go behind one clearly named list button (`label`); more than that go as
+ * numbered text. The message ends with what to tap.
+ */
+function tapView(body: readonly string[], options: readonly Option[], label: string, image?: string): View {
+  const choices = options.map((o) => o.id);
+  if (options.length > 0 && options.length <= 3 && options.every((o) => o.title.length <= BUTTON_WORDS)) {
+    return {
+      out: [{ type: 'buttons', body: [...body, '', '👇 *Neeche button dabayein*'].join('\n'), buttons: options.map((o) => ({ id: o.id, title: o.title })), ...(image ? { image } : {}) }],
+      choices,
+    };
+  }
+  if (options.length > 0 && options.length <= LIST_ROWS) {
+    return {
+      out: [
+        {
+          type: 'list',
+          body: [...body, '', `👇 Neeche *${label}* button dabayein`].join('\n'),
+          button: label,
+          sections: [
+            {
+              title: label,
+              rows: options.map((o) => ({
+                id: o.id,
+                title: o.title,
+                // a title too long for a row is said in full under it
+                ...(o.title.length > ROW_TITLE || o.description ? { description: [o.title.length > ROW_TITLE ? o.title : null, o.description].filter(Boolean).join(' · ') } : {}),
+              })),
+            },
+          ],
+        },
+      ],
+      choices,
+    };
+  }
+  const key = keyFor(options.length);
+  return { out: texts([[...body, '', ...options.map((o, k) => `${key(k + 1)} ${o.title}${o.description ? ` — ${o.description}` : ''}`), '', '👉 *Number* bhejein'].join('\n')]), choices };
 }
 
 /** An item's emoji: pizza (the deals are pizza-led), fries and sides, a drink, a dip, a burger. */
@@ -553,9 +606,19 @@ function offPercent(shop: BotShop, item: PublishedMenuItem): number {
   return item.noDiscount || !cat ? 0 : categoryPercent(shop, cat.id);
 }
 
-/** The price, or with a % off the menu price struck through and the price after it in bold ("~1,500~ *1,200*"). */
+/** A price after its % off. */
+function afterOff(cents: number, off: number): number {
+  return Math.round((cents * (100 - off)) / 100);
+}
+
+/** In a message: the price, or with a % off the menu price struck through and the price after it in bold. */
 function priceShown(cents: number, off: number): string {
-  return off > 0 ? `~${formatCents(cents)}~ *${formatCents(Math.round((cents * (100 - off)) / 100))}*` : formatCents(cents);
+  return off > 0 ? `~${formatCents(cents)}~ *${formatCents(afterOff(cents, off))}*` : formatCents(cents);
+}
+
+/** On a button or a list row (no bold or strike there): the price, with "pehle" (before) when a % is off. */
+function pricePlain(cents: number, off: number): string {
+  return off > 0 ? `${formatCents(afterOff(cents, off))} (pehle ${formatCents(cents)})` : formatCents(cents);
 }
 
 /** A category's name as shown: the till's "Pizza" is the regular pizzas (the signature ones have their own category). */
@@ -585,15 +648,20 @@ function shownName(name: string): string {
   return name.replace(/ — (.+)$/, ' ($1)');
 }
 
-/** The picture's deals on today's menu, in its order; null when one is missing or unclear (then the deals as text). */
+/** The picture's deals on today's menu, in its order; null when one is missing or unclear (then the deals as a list). */
 function pictureDeals(shop: BotShop): PublishedMenuItem[] | null {
   const p = shop.menuPicture;
   if (!p || p.deals.length === 0) return null;
-  const deals = categoriesOf(shop)
-    .filter((c) => isDealSection(c.name) && !isBuy1Get1Category(c.name))
-    .flatMap((c) => c.items);
+  const deals = valueDeals(shop);
   const found = p.deals.map((name) => deals.filter((i) => ` ${wordsOf(i.name).join(' ')} `.startsWith(` ${wordsOf(name).join(' ')} `)));
   return found.every((f) => f.length === 1) ? found.map((f) => f[0]!) : null;
+}
+
+/** The deals that are not Buy 1 Get 1, in the menu's order. */
+function valueDeals(shop: BotShop): PublishedMenuItem[] {
+  return categoriesOf(shop)
+    .filter((c) => isDealSection(c.name) && !isBuy1Get1Category(c.name))
+    .flatMap((c) => c.items);
 }
 
 /** The Buy 1 Get 1 deals on the menu. */
@@ -603,162 +671,136 @@ function buy1Get1Items(shop: BotShop): PublishedMenuItem[] {
     .flatMap((c) => c.items);
 }
 
-/** The regular pizzas' % off, for the start message's "Pizza alag se?" line. */
-function pizzaPercent(shop: BotShop): number {
-  const pizza = categoriesOf(shop).find((c) => /^pizzas?$/i.test(c.name.trim()));
-  return pizza ? categoryPercent(shop, pizza.id) : 0;
-}
-
-/** The start message's last lines: Buy 1 Get 1 (its deals while it sells, else its hours), pizza and burger, staff. */
-function startTail(shop: BotShop, from: number): { lines: string[]; choices: string[] } {
-  const b1 = buy1Get1Items(shop);
-  const open = shop.buy1Get1Open !== false && b1.length > 0;
-  const off = pizzaPercent(shop);
-  return {
-    lines: [
-      ...(open
-        ? ['', `🎁 *Buy 1 Get 1*${shop.buy1Get1Hours ? ` (${shop.buy1Get1Hours})` : ''}`, ...b1.map((i, k) => `*${from + k}.* ${i.name} — ${formatCents(i.basePriceCents)}`)]
-        : b1.length > 0 && shop.buy1Get1Hours
-          ? ['', `🎁 Buy 1 Get 1: roz ${shop.buy1Get1Hours}`]
-          : []),
-      '',
-      `🍕 Pizza alag se? *pizza* likhein${off > 0 ? ` (🔥 ${off}% OFF)` : ''}`,
-      '🍔 Burger? *burger* likhein',
-      '👤 Staff se baat: *staff*',
-    ],
-    choices: open ? b1.map((i) => `i:${i.posItemId}`) : [],
-  };
+/** Buy 1 Get 1 sells now (its deals are offered only then). */
+function buy1Get1Now(shop: BotShop): boolean {
+  return shop.buy1Get1Open !== false && buy1Get1Items(shop).length > 0;
 }
 
 /**
- * Where an order starts (the day's welcome, "menu", a price or deals ask): the printed deal menu as a picture, its
- * numbers the choices, with a short caption; the deals as text when there is no picture for today's menu.
+ * Where an order starts (the day's welcome, "menu", a price ask): the printed deal menu as a picture with three tap
+ * buttons under it (the deals, Buy 1 Get 1 while it sells or the pizzas, the burgers); a deal's printed number typed
+ * picks it. Without a picture for today's menu: the deals behind a list button.
  */
 function startView(shop: BotShop, first?: string): View {
   const pictured = pictureDeals(shop);
+  const b1 = buy1Get1Now(shop) ? buy1Get1Items(shop) : [];
+  const b1Line = b1.length > 0 ? `🎁 Buy 1 Get 1 abhi chal raha hai${shop.buy1Get1Hours ? ` (${shop.buy1Get1Hours})` : ''}` : buy1Get1Items(shop).length > 0 && shop.buy1Get1Hours ? `🎁 Buy 1 Get 1: roz ${shop.buy1Get1Hours}` : null;
   if (shop.menuPicture && pictured) {
-    const tail = startTail(shop, pictured.length + 1);
-    const caption = [...(first ? [first] : []), '👆 Jo deal chahiye uska *number* bhejein (jaise *5*)', ...tail.lines].join('\n');
-    return { out: [{ type: 'image', link: shop.menuPicture.url, caption }], choices: [...pictured.map((i) => `i:${i.posItemId}`), ...tail.choices] };
+    const buttons: Option[] = [
+      { id: 'o:deals', title: '🔥 Deals' },
+      ...(b1.length > 0 ? [{ id: 'o:b1g1', title: '🎁 Buy 1 Get 1' }] : []),
+      { id: 'o:pizza', title: '🍕 Pizza' },
+      ...(b1.length > 0 ? [] : [{ id: 'o:burger', title: '🍔 Burger' }]),
+    ];
+    const v = tapView([...(first ? [first] : []), '👆 Picture mein hamari deals hain — deal ka *number* bhejein (jaise *5*)', ...(b1Line ? [b1Line] : [])], buttons, 'Chunein', shop.menuPicture.url);
+    // A number typed is the deal printed with it (Buy 1 Get 1 after them while it sells).
+    return { out: v.out, choices: [...pictured.map((i) => `i:${i.posItemId}`), ...b1.map((i) => `i:${i.posItemId}`)] };
   }
-  const deals = categoriesOf(shop)
-    .filter((c) => isDealSection(c.name) && !isBuy1Get1Category(c.name))
-    .flatMap((c) => c.items);
-  const key = keyFor(deals.length);
-  const tail = startTail(shop, deals.length + 1);
-  const body = [
-    ...(first ? [first, ''] : []),
-    '🔥 *DEALS* (tax shamil)',
-    ...deals.flatMap((i, k) => [`${key(k + 1)} *${i.name}* — ${formatCents(i.basePriceCents)}`, ...(i.description ? [`      _${i.description}_`] : [])]),
-    '',
-    '👆 Jo deal chahiye uska *number* bhejein',
-    ...tail.lines,
-  ].join('\n');
-  return { out: texts([body]), choices: [...deals.map((i) => `i:${i.posItemId}`), ...tail.choices] };
+  return dealsView(shop, first);
+}
+
+/** The deals behind one list button, numbered as the picture numbers them, their price and contents under each. */
+function dealsView(shop: BotShop, first?: string): View {
+  const deals = pictureDeals(shop) ?? valueDeals(shop);
+  const b1 = buy1Get1Now(shop) ? buy1Get1Items(shop) : [];
+  const rows: Option[] = [
+    ...deals.map((i, k) => ({ id: `i:${i.posItemId}`, title: `${k + 1}. ${i.name}`, description: [formatCents(i.basePriceCents), i.description].filter(Boolean).join(' · ') })),
+    ...b1.map((i) => ({ id: `i:${i.posItemId}`, title: `🎁 ${i.name}`, description: [formatCents(i.basePriceCents), i.description].filter(Boolean).join(' · ') })),
+  ];
+  // a list takes ten rows: the deals first; Buy 1 Get 1 (its own button and words) and the pizzas and burgers if they fit
+  const more: Option[] = [{ id: 'o:pizza', title: '🍕 Pizza' }, { id: 'o:burger', title: '🍔 Burger' }];
+  const b1Cut = rows.length > LIST_ROWS && b1.length > 0;
+  const kept = b1Cut ? rows.slice(0, deals.length).slice(0, LIST_ROWS) : rows.slice(0, LIST_ROWS);
+  const fitted = [...kept, ...(kept.length + more.length <= LIST_ROWS ? more : [])];
+  return tapView(
+    [...(first ? [first, ''] : []), '🔥 *Hamari deals* (tax shamil)', ...(b1Cut ? ['🎁 Buy 1 Get 1 abhi chal raha hai — *buy 1 get 1* likhein'] : [])],
+    fitted,
+    'Deal chunein',
+  );
+}
+
+/** Buy 1 Get 1's deals behind one list button, their price and contents under each. */
+function buy1Get1View(shop: BotShop): View {
+  const b1 = buy1Get1Items(shop);
+  return tapView(
+    [`🎁 *Buy 1 Get 1*${shop.buy1Get1Hours ? ` · roz ${shop.buy1Get1Hours}` : ''} (tax shamil)`],
+    b1.map((i) => ({ id: `i:${i.posItemId}`, title: i.name, description: [formatCents(i.basePriceCents), i.description].filter(Boolean).join(' · ') })),
+    'Deal chunein',
+  );
+}
+
+/** The list button's words for a category or a choice: what is being chosen. */
+function chooseLabel(what: string): string {
+  if (/pizza/i.test(what)) return 'Pizza chunein';
+  if (/burger/i.test(what)) return 'Burger chunein';
+  if (/drink|flavour/i.test(what)) return 'Drink chunein';
+  if (/fries|side/i.test(what)) return 'Chunein';
+  return 'Chunein';
 }
 
 /**
- * Categories as short lists (pizza, burgers, fries, drinks): one line per family ("Fajita Pizza", its sizes asked
- * next), the sizes' prices once on top when every family has the same ones, the % off said once.
+ * Categories (the regular pizzas, the burgers, the drinks): one option per family ("Fajita Pizza", its size asked
+ * next), the sizes' prices and the % off said once on top; `more`: options after them (the signature pizzas).
  */
-function familyView(shop: BotShop, at: readonly number[], more: readonly string[] = []): View {
+function familyView(shop: BotShop, at: readonly number[], more: readonly Option[] = []): View {
   const cats = categoriesOf(shop);
   // the regular pizzas before the signature ones; otherwise the till's order
   const order = [...at].sort((a, b) => Number(/^pizzas?$/i.test(cats[b]!.name.trim())) - Number(/^pizzas?$/i.test(cats[a]!.name.trim())));
-  const fams = order.map((i) => ({ cat: cats[i]!, families: familiesOf(cats[i]!) }));
-  const count = fams.reduce((n, f) => n + f.families.length, 0);
-  const key = keyFor(count);
-  const choices: string[] = [];
-  const blocks = fams.map(({ cat, families }) => {
-    const offs = cat.items.map((i) => offPercent(shop, i));
+  const options: Option[] = [];
+  const heads: string[] = [];
+  for (const i of order) {
+    const cat = cats[i]!;
+    const families = familiesOf(cat);
+    const offs = cat.items.map((x) => offPercent(shop, x));
     const off = offs.every((p) => p === offs[0]) ? (offs[0] ?? 0) : 0;
-    const tax = cat.items.every((i) => i.taxIncluded) ? ' (tax shamil)' : cat.items.every((i) => !i.taxIncluded) ? ' (+ tax)' : '';
-    const sizes = (f: { items: PublishedMenuItem[] }) => f.items.map((i) => `${sizeOf(i)} ${priceShown(i.basePriceCents, offPercent(shop, i))}`).join(' · ');
-    const same = families.every((f) => f.items.length > 1 && f.items.map((i) => `${sizeOf(i)}${i.basePriceCents}`).join() === families[0]!.items.map((i) => `${sizeOf(i)}${i.basePriceCents}`).join());
-    const lines = families.map((f) => {
-      choices.push(f.items.length > 1 ? `p:${f.items[0]!.posItemId}` : `i:${f.items[0]!.posItemId}`);
-      const price = same ? '' : f.items.length > 1 ? ` — ${sizes(f)}` : ` — ${priceShown(f.items[0]!.basePriceCents, offPercent(shop, f.items[0]!))}`;
-      return `${key(choices.length)} ${f.name}${price}`;
-    });
-    const hours = isBuy1Get1Category(cat.name) && shop.buy1Get1Hours ? ` · roz ${shop.buy1Get1Hours}` : '';
-    return [
-      `${emojiOf(cat.items[0]?.name ?? cat.name)} *${categoryTitle(cat.name)}*${off > 0 ? ` — 🔥 *${off}% OFF*` : ''}${tax}${hours}`,
-      ...(same ? [sizes(families[0]!)] : []),
-      '',
-      ...lines,
-    ].join('\n');
-  });
-  return { out: texts([...blocks, [...more, `👉 *Number* bhejein${count > 0 ? ` (jaise *1*)` : ''}`].join('\n')]), choices };
+    const tax = cat.items.every((x) => x.taxIncluded) ? ' (tax shamil)' : cat.items.every((x) => !x.taxIncluded) ? ' (+ tax)' : '';
+    const sizesPlain = (f: { items: PublishedMenuItem[] }) => f.items.map((x) => `${sizeOf(x)} ${formatCents(afterOff(x.basePriceCents, offPercent(shop, x)))}`).join(' · ');
+    const same = families.every((f) => f.items.length > 1 && f.items.map((x) => `${sizeOf(x)}${x.basePriceCents}`).join() === families[0]!.items.map((x) => `${sizeOf(x)}${x.basePriceCents}`).join());
+    heads.push(`${emojiOf(cat.items[0]?.name ?? cat.name)} *${categoryTitle(cat.name)}*${off > 0 ? ` — 🔥 *${off}% OFF*` : ''}${tax}`);
+    if (same) heads.push(families[0]!.items.map((x) => `${sizeOf(x)} ${priceShown(x.basePriceCents, offPercent(shop, x))}`).join(' · '));
+    for (const f of families) {
+      options.push({
+        id: f.items.length > 1 ? `p:${f.items[0]!.posItemId}` : `i:${f.items[0]!.posItemId}`,
+        title: f.name,
+        description: f.items.length > 1 ? sizesPlain(f) : pricePlain(f.items[0]!.basePriceCents, offPercent(shop, f.items[0]!)),
+      });
+    }
+  }
+  const label = chooseLabel(order.map((i) => cats[i]!.name).join(' '));
+  return tapView(heads, [...options, ...more], label);
 }
 
-/** A family's sizes, numbered, with their prices. */
+/** A family's sizes as tap buttons, their price after the % off on each. */
 function sizeView(shop: BotShop, items: readonly PublishedMenuItem[]): View {
-  const key = keyFor(items.length);
   const name = (items[0]?.name.split(' — ')[0] ?? '').trim();
-  return {
-    out: [
-      {
-        type: 'text',
-        body: [
-          `${emojiOf(name)} *${name}* — size?`,
-          '',
-          ...items.map((i, k) => `${key(k + 1)} ${sizeOf(i)} — ${priceShown(i.basePriceCents, offPercent(shop, i))}`),
-          ...(items.some((i) => !i.taxIncluded) ? ['_(+ tax)_'] : []),
-          '',
-          '👉 *Number* bhejein',
-        ].join('\n'),
-      },
-    ],
-    choices: items.map((i) => `i:${i.posItemId}`),
-  };
+  const off = items.length > 0 ? offPercent(shop, items[0]!) : 0;
+  return tapView(
+    [`${emojiOf(name)} *${name}* — kaunsa size?`, ...(off > 0 ? [`🔥 ${off}% OFF laga hua${items.some((i) => !i.taxIncluded) ? ' (+ tax)' : ''}`] : items.some((i) => !i.taxIncluded) ? ['(+ tax)'] : [])],
+    items.map((i) => ({ id: `i:${i.posItemId}`, title: `${sizeOf(i)} · ${formatCents(afterOff(i.basePriceCents, offPercent(shop, i)))}` })),
+    'Size chunein',
+  );
 }
 
-/** The items a typed message named, numbered with their prices, to pick one. */
+/** The items a typed message named, with their prices, to pick one. */
 function foundView(shop: BotShop, items: readonly PublishedMenuItem[]): View {
-  const shown = items.slice(0, 30);
-  const key = keyFor(shown.length);
-  return {
-    out: [
-      {
-        type: 'text',
-        body: [
-          'Ye mile 👇',
-          '',
-          ...shown.map((i, k) => `${key(k + 1)} ${emojiOf(i.name)} ${shownName(i.name)} — ${priceShown(i.basePriceCents, offPercent(shop, i))}${i.taxIncluded ? '' : ' + tax'}`),
-          '',
-          '👉 *Number* bhejein',
-        ].join('\n'),
-      },
-    ],
-    choices: shown.map((i) => `i:${i.posItemId}`),
-  };
+  return tapView(
+    ['Ye mile 👇'],
+    items.slice(0, LIST_ROWS).map((i) => ({ id: `i:${i.posItemId}`, title: shownName(i.name), description: `${pricePlain(i.basePriceCents, offPercent(shop, i))}${i.taxIncluded ? '' : ' + tax'}` })),
+    'Chunein',
+  );
 }
 
-/** One choice an item needs, numbered, the item and its price on top (so "Price?" at this step is answered too). */
+/** One choice an item needs, the item and its price on top (so "Price?" at this step is answered too). */
 function choiceView(shop: BotShop, item: PublishedMenuItem, group: PublishedModifierGroup, step: number, of: number, picked: readonly string[]): View {
   const left = group.modifiers.filter((m) => !picked.includes(m.posModifierId));
   const need = Math.max(1, group.minSelect) - picked.length;
-  const key = keyFor(left.length);
   const label = groupLabelOf(group);
-  const ask = need > 1 ? `${label}: koi *${need}* chunein (jaise *1 2 3*)` : `${label} kaunsa?`;
-  const body = [
-    `${emojiOf(item.name)} *${item.name}* — ${priceShown(item.basePriceCents, offPercent(shop, item))}${item.taxIncluded ? '' : ' + tax'} ✅`,
-    '',
-    `${ask}${of > 1 ? ` (${step + 1}/${of})` : ''} 👇`,
-    ...left.map((m, k) => `${key(k + 1)} ${choiceName(m.name)}${m.priceDeltaCents > 0 ? ` (+${formatCents(m.priceDeltaCents)})` : ''}`),
-    '',
-    '👉 *Number* bhejein',
-  ].join('\n');
-  return { out: [{ type: 'text', body }], choices: left.map((m) => `m:${m.posModifierId}`) };
-}
-
-/** Numbered options under a message: "1️⃣ 🛵 Delivery" … */
-function numbered(head: readonly string[], options: ReadonlyArray<readonly [string, string]>, tail: readonly string[] = []): View {
-  const key = keyFor(options.length);
-  return {
-    out: [{ type: 'text', body: [...head, ...options.map(([, t], k) => `${key(k + 1)} ${t}`), ...tail].join('\n') }],
-    choices: options.map(([id]) => id),
-  };
+  const ask = need > 1 ? `${label}: koi *${need}* chunein (ek ek kar ke)` : `${label} kaunsa?`;
+  return tapView(
+    [`${emojiOf(item.name)} *${item.name}* — ${priceShown(item.basePriceCents, offPercent(shop, item))}${item.taxIncluded ? '' : ' + tax'} ✅`, '', `${ask}${of > 1 ? ` (${step + 1}/${of})` : ''}`],
+    left.map((m) => ({ id: `m:${m.posModifierId}`, title: choiceName(m.name), ...(m.priceDeltaCents > 0 ? { description: `+${formatCents(m.priceDeltaCents)}` } : {}) })),
+    chooseLabel(label),
+  );
 }
 
 /** A line of the order: emoji, count, name and its price after the % off, the picks under it. */
@@ -772,27 +814,15 @@ function orderLines(shop: BotShop, line: CartLine): string[] {
   ];
 }
 
-/**
- * The order so far, then what next, numbered: Delivery, Pick-up or more items. `note`: "added", "changed" on top.
- * A deal's usual drink and dip are on it, and how to change them.
- */
+/** The order so far, then Delivery, Pick-up or more as tap buttons. `note`: "added", "changed" on top. */
 function cartView(shop: BotShop, data: BotData, note?: string): View {
-  const usual = data.cart.some((l) => {
-    const item = itemOf(shop, l.posItemId);
-    return item ? requiredGroups(item).some((g) => usualGroup(item, g)) : false;
-  });
-  const options: Array<readonly [string, string]> = shop.pickupAvailable
-    ? [['f:delivery', '🛵 Delivery'], ['f:pickup', `🏃 ${pickupTitle(shop).replace('🏃 ', '')} (khud lene aayenge)`], ['k:add', '➕ Aur kuch add karein']]
-    : [['f:delivery', '🛵 Delivery'], ['k:add', '➕ Aur kuch add karein'], ['k:clear', '🗑️ Order khali karein']];
-  return numbered(
-    [
-      ...(note ? [note, ''] : []),
-      ...data.cart.flatMap((l) => orderLines(shop, l)),
-      ...(usual ? ['', '_Drink ya dip badalni ho to naam likh dein (jaise *7up*)_'] : []),
-      '',
-      'Ab batayein 👇',
-    ],
+  const options: Option[] = shop.pickupAvailable
+    ? [{ id: 'f:delivery', title: '🛵 Delivery' }, { id: 'f:pickup', title: pickupTitle(shop) }, { id: 'k:add', title: '➕ Aur add karein' }]
+    : [{ id: 'f:delivery', title: '🛵 Delivery' }, { id: 'k:add', title: '➕ Aur add karein' }, { id: 'k:clear', title: '🗑️ Khali karein' }];
+  return tapView(
+    [...(note ? [note, ''] : []), ...data.cart.flatMap((l) => orderLines(shop, l)), '', shop.pickupAvailable ? '*Delivery ya pick-up?*' : '*Delivery* ke liye button dabayein'],
     options,
+    'Chunein',
   );
 }
 
@@ -803,15 +833,15 @@ function pickupTitle(shop: BotShop): string {
 
 /** The old bot's question after Checkout (a session saved before 27 Oct 2026 may still tap Checkout). */
 function fulfilmentView(shop: BotShop): View {
-  return numbered(['Delivery ya pick-up? 👇'], [['f:delivery', '🛵 Delivery'], ['f:pickup', pickupTitle(shop)]]);
+  return tapView(['*Delivery ya pick-up?*'], [{ id: 'f:delivery', title: '🛵 Delivery' }, { id: 'f:pickup', title: pickupTitle(shop) }], 'Chunein');
 }
 
 function addressMessage(zone: FactZone | undefined): WaOut {
   return {
     type: 'text',
     body: zone
-      ? `📍 *${zone.name}* — ghar no. aur street bhejein`
-      : '📍 Apna *address* bhejein\n_(ghar no., street aur area — jaise House 12, Street 4, DHA Phase 6)_',
+      ? `📍 *${zone.name}* — ghar no. aur street likh kar bhejein`
+      : '📍 Apna *address* likh kar bhejein\n_(ghar no., street aur area — jaise House 12, Street 4, DHA Phase 6)_',
   };
 }
 
@@ -826,26 +856,32 @@ function zoneGroups(shop: BotShop): Array<{ group: string; zones: FactZone[] }> 
   return groups;
 }
 
-function zoneLine(z: FactZone): string {
-  return `${zoneNameWithLocalNames(z.name)} — ${z.feeCents === 0 ? 'free delivery' : `delivery ${formatCents(z.feeCents)}`}`;
+const NOT_LISTED: Option = { id: 'z:none', title: '❌ Mera area nahi hai', description: 'Pick-up karein ya staff se baat karein' };
+
+function zoneOption(z: FactZone): Option {
+  const name = zoneNameWithLocalNames(z.name);
+  return {
+    id: `z:${z.id}`,
+    title: z.name,
+    description: `${name.length > z.name.length ? `${name.slice(z.name.length).trim()} · ` : ''}${z.feeCents === 0 ? 'free delivery' : `delivery ${formatCents(z.feeCents)}`}`,
+  };
 }
 
-/** The open areas numbered under their groups (or one group: an older list's row "zg:1"), then "not my area". */
-function zonesView(shop: BotShop, body = '📍 Aapka area kaunsa hai? *Number* bhejein 👇', only?: number): View {
-  const groups = zoneGroups(shop).filter((_, gi) => only === undefined || gi === only);
-  const key = keyFor(groups.reduce((n, g) => n + g.zones.length, 0) + 1);
-  const choices: string[] = [];
-  const lines = [body];
-  for (const g of groups) {
-    lines.push('', `*${g.group}*`);
-    for (const z of g.zones) {
-      choices.push(`z:${z.id}`);
-      lines.push(`${key(choices.length)} ${zoneLine(z)}`);
-    }
+/**
+ * The open areas behind a list button: all of them when they fit one list, else their groups first ("DHA",
+ * "Clifton"), then a group's areas (nine at a time, then "Aur ➡️"). "Not my area" with them.
+ */
+function zonesView(shop: BotShop, body = '📍 Aapka area kaunsa hai?', group?: number, page = 0): View {
+  const groups = zoneGroups(shop);
+  const all = groups.flatMap((g) => g.zones);
+  if (group === undefined) {
+    if (all.length + 1 <= LIST_ROWS) return tapView([body], [...all.map(zoneOption), NOT_LISTED], 'Area chunein');
+    return tapView([body], [...groups.slice(0, LIST_ROWS - 1).map((g, gi) => ({ id: `zg:${gi}`, title: g.group, description: `${g.zones.length} areas` })), NOT_LISTED], 'Area chunein');
   }
-  choices.push('z:none');
-  lines.push('', `${key(choices.length)} ❌ Mera area list mein nahi`);
-  return { out: texts([lines.join('\n')]), choices };
+  const zones = groups[group]?.zones ?? [];
+  const rows = zones.length <= LIST_ROWS ? zones : zones.slice(page * (LIST_ROWS - 1), (page + 1) * (LIST_ROWS - 1));
+  const more = zones.length > LIST_ROWS && (page + 1) * (LIST_ROWS - 1) < zones.length;
+  return tapView([`📍 ${groups[group]?.group ?? ''} mein kahan?`], [...rows.map(zoneOption), ...(more ? [{ id: `zp:${group}:${page + 1}`, title: 'Aur areas ➡️' }] : [])], 'Area chunein');
 }
 
 function confirmView(shop: BotShop, data: BotData, q: Extract<OrderAnswer, { ok: true }>, phone: string): View {
@@ -859,7 +895,7 @@ function confirmView(shop: BotShop, data: BotData, q: Extract<OrderAnswer, { ok:
   const zone = shop.zones.find((z) => z.id === data.zoneId);
   // the area once: not again when the address already says it
   const area = zone && !normalizeAreaText(data.address ?? '').includes(normalizeAreaText(zone.name)) ? ` (${zone.name})` : '';
-  return numbered(
+  return tapView(
     [
       '🧾 *Aapka order*',
       '',
@@ -871,21 +907,20 @@ function confirmView(shop: BotShop, data: BotData, q: Extract<OrderAnswer, { ok:
       data.fulfilment === 'pickup' ? '🏃 Pick-up: shop se le jayein' : `📍 ${data.address ?? ''}${area}`,
       `👤 ${data.name ?? ''} · ${phone}`,
       ...(data.notes ? [`📝 ${data.notes}`] : []),
-      '',
     ],
     [
-      ['y:confirm', '✅ *OK — order kar dein*'],
-      ['y:edit', '✏️ Badlein'],
-      ['y:cancel', '❌ Cancel'],
+      { id: 'y:confirm', title: '✅ Order kar dein' },
+      { id: 'y:edit', title: '✏️ Badlein' },
+      { id: 'y:cancel', title: '❌ Cancel' },
     ],
-    ['', '_Kuch kehna ho (jaise bina pyaz)? Yahin likh dein._'],
+    'Chunein',
   );
 }
 
 /** A message the step could not use (said once; after that the chat is staff's), or a tap from no list we know. */
 const HELP: WaOut = {
   type: 'text',
-  body: '🙏 Samajh nahi aaya.\nUpar wali list se *number* bhejein, ya *menu* likhein.\n👤 Staff se baat: *staff*',
+  body: '🙏 Samajh nahi aaya.\nUpar wale *button* dabayein, ya *menu* likhein.\n👤 Staff se baat: *staff*',
 };
 
 /** "+923001234567" as the order's number. */
@@ -1162,6 +1197,20 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     askAddress();
   };
 
+  /** "pizza": the regular pizzas, the signature ones one tap away; "sig": the signature ones; "burger": the burgers. */
+  const showCategory = (which: 'pizza' | 'sig' | 'burger'): void => {
+    const cats = categoriesOf(shop);
+    const find = (test: (c: BotCategory) => boolean) => cats.map((c, i) => (test(c) ? i : -1)).filter((i) => i >= 0);
+    const regular = find((c) => /^pizzas?$/i.test(c.name.trim()));
+    const signature = find((c) => /signature/i.test(c.name) && /pizza/i.test(c.name));
+    const at = which === 'pizza' ? (regular.length > 0 ? regular : signature) : which === 'sig' ? signature : find((c) => /burger/i.test(c.name) && !isDealSection(c.name));
+    if (at.length === 0) return showMenu();
+    const sigNames = signature.flatMap((i) => familiesOf(cats[i]!).map((f) => f.name));
+    const more = which === 'pizza' && regular.length > 0 && signature.length > 0 ? [{ id: 'o:sig', title: '⭐ Signature pizza', description: sigNames.slice(0, 3).join(', ') }] : [];
+    offer(familyView(shop, at, more));
+    go('items');
+  };
+
   /**
    * Words that ask for something: an item by name (one named goes in, unless they only ask its price), Buy 1 Get 1,
    * the deals or the offers, a category or a size, the prices or the menu. False when they ask none of these.
@@ -1191,23 +1240,23 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     const where = (test: (c: BotCategory) => boolean) => cats.map((c, i) => (test(c) ? i : -1)).filter((i) => i >= 0);
     const b1g1 = where((c) => isBuy1Get1Category(c.name));
     if (b1g1.length > 0 && asksBuy1Get1(text, said)) {
-      offer(familyView(shop, b1g1));
+      offer(buy1Get1View(shop));
       go('items');
       return true;
     }
     if (said.some((w) => DEAL_WORDS.has(w))) {
-      showStart();
+      offer(dealsView(shop));
+      go('menu');
       return true;
     }
-    // "coke", "7up": the drinks; "medium", "large": the pizzas.
-    let named = categoriesNamed(shop, said.map((w) => (SAID_AS[w] ? 'drink' : w))).filter((i) => !isDealSection(cats[i]!.name));
-    if (named.length === 0 && said.some((w) => SIZE_WORDS.has(w))) named = where((c) => /pizza/i.test(c.name));
-    // "pizza": the regular pizzas, short enough for the big number keys; the other pizza categories one word away
-    const regular = named.filter((i) => /^pizzas?$/i.test(cats[i]!.name.trim()));
-    const more = regular.length > 0 && named.length > regular.length ? named.filter((i) => !regular.includes(i)) : [];
+    // "coke", "7up": the drinks; "medium", "large": the pizzas; "pizza": the regular ones, the signature ones a tap away.
+    const named = categoriesNamed(shop, said.map((w) => (SAID_AS[w] ? 'drink' : w))).filter((i) => !isDealSection(cats[i]!.name));
+    if ((named.length === 0 && said.some((w) => SIZE_WORDS.has(w))) || (named.length > 1 && named.some((i) => /^pizzas?$/i.test(cats[i]!.name.trim())))) {
+      showCategory('pizza');
+      return true;
+    }
     if (named.length > 0) {
-      const hints = more.map((i) => `⭐ ${categoryTitle(cats[i]!.name)} bhi hain: *${wordsOf(cats[i]!.name)[0] ?? ''}* likhein`);
-      offer(familyView(shop, more.length > 0 ? regular : named, hints));
+      offer(familyView(shop, named));
       go('items');
       return true;
     }
@@ -1256,11 +1305,18 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
   }
 
   if (id) {
-    const [kind, a = ''] = id.split(':');
+    const [kind, a = '', b = ''] = id.split(':');
     switch (kind) {
       case 'o':
-        // 'o:menu': where an order starts.
-        showMenu();
+        // The start's buttons (the deals, Buy 1 Get 1, the pizzas, the burgers); 'o:menu' (an older list): the start.
+        if (a === 'deals') {
+          offer(dealsView(shop));
+          go('menu');
+        } else if (a === 'b1g1') {
+          offer(buy1Get1View(shop));
+          go('items');
+        } else if (a === 'pizza' || a === 'sig' || a === 'burger') showCategory(a);
+        else showMenu();
         break;
       case 'c':
       case 'cp':
@@ -1317,18 +1373,19 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
         break;
       case 'zg':
       case 'zp':
-        // An older list's group of areas (and its pages).
+        // A group of areas (and its next nine).
         if (zoneGroups(shop)[Number(a)]) {
-          offer(zonesView(shop, undefined, Number(a)));
+          offer(zonesView(shop, undefined, Number(a), kind === 'zp' ? Number(b) || 0 : 0));
           go('zones');
         } else askZones();
         break;
       case 'z': {
         if (a === 'none') {
           offer(
-            numbered(
-              ['😔 Hamari delivery abhi upar wale areas tak hai.', ''],
-              [...(shop.pickupAvailable ? [['f:pickup', '🏃 Pick-up karein (khud lene aayenge)'] as const] : []), ['o:staff', '👤 Staff se baat'] as const],
+            tapView(
+              ['😔 Hamari delivery abhi in areas tak hai.'],
+              [...(shop.pickupAvailable ? [{ id: 'f:pickup', title: '🏃 Pick-up' }] : []), { id: 'o:staff', title: '👤 Staff se baat' }],
+              'Chunein',
             ),
           );
           break;

@@ -55,7 +55,8 @@ export type WaOut =
   | { type: 'text'; body: string }
   /** A picture (a public https address WhatsApp fetches) with words under it: the bot's deal menu (28 Oct 2026). */
   | { type: 'image'; link: string; caption: string }
-  | { type: 'buttons'; body: string; buttons: Array<{ id: string; title: string }>; footer?: string }
+  /** Up to three tap buttons under the words; `image`: a picture on top (a public https address WhatsApp fetches). */
+  | { type: 'buttons'; body: string; buttons: Array<{ id: string; title: string }>; footer?: string; image?: string }
   | {
       type: 'list';
       body: string;
@@ -82,6 +83,7 @@ export function payloadOf(to: string, m: WaOut): Record<string, unknown> {
       type: 'interactive',
       interactive: {
         type: 'button',
+        ...(m.image ? { header: { type: 'image', image: { link: m.image } } } : {}),
         body: { text: fit(m.body, 1024) },
         ...footer,
         action: { buttons: m.buttons.slice(0, 3).map((b) => ({ type: 'reply', reply: { id: fit(b.id, 256), title: fit(b.title, 20) } })) },
