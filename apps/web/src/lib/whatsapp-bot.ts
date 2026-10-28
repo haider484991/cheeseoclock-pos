@@ -128,6 +128,8 @@ export interface BotTurn {
   reply: { id: string; title: string } | null;
   /** A cart sent from the WhatsApp catalog (lib/meta-catalog). */
   order?: Array<{ posItemId: string; quantity: number }> | null;
+  /** The day's hello (helloLine), when this message is the customer's first of the day: put over the menu if it is shown. */
+  hello?: string | null;
 }
 
 export interface BotStep {
@@ -168,8 +170,13 @@ export function isBotCommand(text: string): boolean {
  * with a hello.
  */
 export function welcomeMessage(o: { shopName: string; profileName: string | null; shop: BotShop }): WaOut {
+  return startMessage(o.shop, helloLine(o));
+}
+
+/** "Assalam o Alaikum Ali! Cheese O'Clock mein khush aamdeed 🧀" */
+export function helloLine(o: { shopName: string; profileName: string | null }): string {
   const name = firstName(o.profileName);
-  return startMessage(o.shop, `Assalam o Alaikum${name ? ` ${name}` : ''}! ${o.shopName} mein khush aamdeed 🧀`);
+  return `Assalam o Alaikum${name ? ` ${name}` : ''}! ${o.shopName} mein khush aamdeed 🧀`;
 }
 
 /** "Ali" from "Ali Raza": a first name of letters only, else nothing. */
@@ -323,6 +330,14 @@ function itemsNamed(shop: BotShop, said: readonly string[]): PublishedMenuItem[]
       const need = tellingWords(i.name.split(' — ')[0] ?? i.name);
       return need.length > 0 && need.every((w) => wordSaid(w, said));
     });
+  // A name said in full wins ("Classic Crispy Deal order karni hai": the deal, not the Classic Crispy burger too) —
+  // an ad's pre-filled message names its deal so (28 Oct 2026).
+  const whole = ` ${said.join(' ')} `;
+  const full = hits.filter((i) => whole.includes(` ${wordsOf(i.name).join(' ')} `));
+  if (full.length > 0) {
+    const longest = Math.max(...full.map((i) => i.name.length));
+    return full.filter((i) => i.name.length === longest);
+  }
   const sized = hits.filter((i) => {
     const size = i.name.split(' — ')[1];
     return size !== undefined && wordsOf(size).every((w) => wordSaid(w, said));
@@ -900,7 +915,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       say(foundMessage(items));
       return go('items');
     }
-    if (asksForMenu(said)) return showStart();
+    if (asksForMenu(said)) return showStart(turn.hello ?? undefined);
     // "coke", "7up": the drinks.
     const cats = categoriesNamed(shop, said.map((w) => (SAID_AS[w] ? 'drink' : w)));
     if (cats.length === 1) {
@@ -936,7 +951,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
   }
   if (starting) {
     if (data.cart.length > 0) showMenu();
-    else showStart();
+    else showStart(turn.hello ?? undefined);
     return { state, data, out };
   }
   // A cart from the WhatsApp catalog: each item's choices, one item at a time, then the order as usual.

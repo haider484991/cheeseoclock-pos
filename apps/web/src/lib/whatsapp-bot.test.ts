@@ -261,6 +261,21 @@ describe('the WhatsApp ordering bot', () => {
     expect((await d.send({ text: 'Kitni der lagegi' })).out).toEqual([]);
   });
 
+  it('a deal ad’s words go straight to that deal (its full name beats the burger sharing its words); the day’s hello sits over the menu', async () => {
+    const ccDeal = item('cc-deal', 'Classic Crispy Deal', 850, [group('g-cc-drink', 'Choose a Drink· 345 ml', [mod('cc-cola', 'Cola'), mod('cc-lime', 'Lemon-lime')], { min: 1, req: true })], { taxIncluded: true });
+    const menu: PublishedMenu = { ...MENU, categories: [{ ...MENU.categories[0]!, items: [ccDeal, DEAL] }, ...MENU.categories.slice(1)] };
+    const c = chat(shop({ menu }));
+    const first = await c.send({ text: 'Classic Crispy Deal order karni hai' });
+    expect(first.state).toBe('choice');
+    expect(ids(first.out[0])).toEqual(['m:cc-cola', 'm:cc-lime']);
+    expect((await chat(shop({ menu })).send({ text: 'I want to order the Classic Crispy Deal' })).state).toBe('choice');
+
+    const hello = 'Assalam o Alaikum Ali! Cheese O’Clock mein khush aamdeed 🧀';
+    const step = await runBot({ waId: '923088440608', profileName: 'Ali', text: 'Hello! Can I get more info on this?', reply: null, hello }, { state: 'menu', data: { cart: [] } }, shop(), fakeDeps().deps);
+    expect(body(step.out[0]).startsWith(hello)).toBe(true);
+    expect(ids(step.out[0])).toContain('o:menu');
+  });
+
   it('a category of twelve comes in pages of nine with a “More” row', async () => {
     const c = chat();
     await c.send({ tap: 'o:menu' });

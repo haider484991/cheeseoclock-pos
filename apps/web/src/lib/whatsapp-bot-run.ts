@@ -9,7 +9,7 @@ import { SITE_URL } from './seo';
 import { shopHoursInSentence, shopNameProse } from './shop-facts';
 import { getShopFacts, parseStoredSettings } from './site-facts';
 import { getStoreStatus } from './store-status';
-import { isBotCommand, runBot, welcomeMessage, type BotData, type BotShop, type BotState, type OrderAnswer } from './whatsapp-bot';
+import { helloLine, isBotCommand, runBot, welcomeMessage, type BotData, type BotShop, type BotState, type OrderAnswer } from './whatsapp-bot';
 import { sendBotOrderToMeta } from './whatsapp-conversions';
 import { autoReplyText, orderLinkUrl, sendMessage, type WaOut } from './whatsapp-send';
 import {
@@ -88,21 +88,36 @@ export async function handleBotMessage(
   const live = fresh !== null && fresh.state !== 'idle';
   // A tapped button or list row, or a cart from the catalog: the customer is talking to the bot.
   const tap = m.reply !== null || (m.order?.length ?? 0) > 0;
-  // A Facebook or Instagram ad (or post) tapped: Meta fills in "Hello! Can I get more info on this?" and the customer
-  // sends it. Each such tap asks for the menu — a second tap later the same day too (27 Oct 2026: it went unanswered
-  // once the day's welcome was used) — unless staff are in the chat.
+  // A Facebook or Instagram ad (or post) tapped: the customer sends the ad's pre-filled words — Meta's "Hello! Can I get
+  // more info on this?", or a deal ad's own, like "Classic Crispy Deal order karni hai" (28 Oct 2026). They are the
+  // bot's whenever they come (a second tap later the same day too: 27 Oct 2026 it went unanswered once the day's welcome
+  // was used): a deal named goes straight to that deal, anything else gets the menu — unless staff are in the chat.
   const fromAd = !tap && m.ad !== null;
   const command = !tap && m.text !== null && isBotCommand(m.text);
+  let shopNow: BotShop | null = null;
+  const bot = async (): Promise<BotShop> => (shopNow ??= await botShop());
+  let hello: string | null = null;
 
   if (!tap && !command) {
-    if (!live && !(await claimAutoReply(m.waId, now))) {
-      // The day's welcome is used: the words are staff's — but an ad tapped again gets the menu (as "menu" would),
-      // unless staff wrote to them in the last hour.
-      if (!fromAd || (await staffWroteSince(m.waId, new Date(now.getTime() - STAFF_QUIET_MS)))) return;
+    if (fromAd) {
+      const since = live ? Math.max(now.getTime() - STAFF_QUIET_MS, fresh!.updatedAt.getTime()) : now.getTime() - STAFF_QUIET_MS;
+      if (await staffWroteSince(m.waId, new Date(since))) return;
+      const first = await claimAutoReply(m.waId, now);
+      const [shop, open] = await Promise.all([getShopFacts(), bot().then((b) => b.open)]);
+      if (!open) {
+        const closed: WaOut = { type: 'text', body: autoReplyText({ shop, open: false, link: orderLinkUrl(await createLink(m.waId)), profileName: m.profileName }) };
+        if (!(await send(closed)) && first) await releaseAutoReply(m.waId, now);
+        return;
+      }
+      if (first) hello = helloLine({ shopName: shopNameProse(shop), profileName: m.profileName });
+    } else if (!live && !(await claimAutoReply(m.waId, now))) {
+      // The day's welcome is used: the words are staff's.
+      return;
     } else if (!live) {
       // Not in an order, and the day's first message: the welcome (closed: the hours and the link).
-      const [shop, bot] = await Promise.all([getShopFacts(), botShop()]);
-      if (!bot.open) {
+      const shop = await getShopFacts();
+      const shopFor = await bot();
+      if (!shopFor.open) {
         const closed: WaOut = { type: 'text', body: autoReplyText({ shop, open: false, link: orderLinkUrl(await createLink(m.waId)), profileName: m.profileName }) };
         if (!(await send(closed))) await releaseAutoReply(m.waId, now);
         return;
@@ -110,7 +125,7 @@ export async function handleBotMessage(
       // The welcome is the menu (27 Oct 2026), and the chat is in it from now: what they type next — an item's name,
       // a hello — is the bot's to answer, not left for staff.
       if (!(await writeSession(m.waId, 'menu', { cart: [] }, session ? session.version : null))) return;
-      if (!(await send(welcomeMessage({ shopName: shopNameProse(shop), profileName: m.profileName, shop: bot })))) await releaseAutoReply(m.waId, now);
+      if (!(await send(welcomeMessage({ shopName: shopNameProse(shop), profileName: m.profileName, shop: shopFor })))) await releaseAutoReply(m.waId, now);
       return;
     } else {
       // Staff wrote to them in the last hour, after the bot's last step: staff took the chat over and the words are
@@ -122,10 +137,16 @@ export async function handleBotMessage(
   }
 
   const placed: { order?: { orderId: string; totalCents: number } } = {};
+  // An ad's words start from the menu, whatever step the chat was at (the order so far is kept).
+  const saved = fromAd
+    ? { state: 'menu' as BotState, data: fresh ? (fresh.data as unknown as BotData) : { cart: [] } }
+    : fresh
+      ? { state: fresh.state as BotState, data: fresh.data as unknown as BotData }
+      : null;
   const step = await runBot(
-    { waId: m.waId, profileName: m.profileName, text: fromAd ? 'menu' : m.text, reply: m.reply, order: m.order },
-    fresh ? { state: fresh.state as BotState, data: fresh.data as unknown as BotData } : null,
-    await botShop(),
+    { waId: m.waId, profileName: m.profileName, text: m.text, reply: m.reply, order: m.order, hello },
+    saved,
+    await bot(),
     {
       order,
       link: () => createLink(m.waId),

@@ -23,13 +23,14 @@ const PHONE_ID = '1356740797521773';
 const TESTER = '923088440608';
 const TESTER_2 = '923001110000';
 const TESTER_3 = '923001110003';
+const TESTER_4 = '923001110004';
 Object.assign(process.env, {
   META_APP_SECRET: SECRET,
   BRIDGE_SECRET: BRIDGE,
   WHATSAPP_ACCESS_TOKEN: 'test-token',
   WHATSAPP_PHONE_NUMBER_ID: PHONE_ID,
   WHATSAPP_ORDER_BOT: 'test',
-  WHATSAPP_BOT_TESTERS: `+${TESTER},+${TESTER_2},+${TESTER_3}`,
+  WHATSAPP_BOT_TESTERS: `+${TESTER},+${TESTER_2},+${TESTER_3},+${TESTER_4}`,
   WHATSAPP_AUTO_REPLY: 'on',
 });
 
@@ -225,6 +226,14 @@ describe('WhatsApp ordering bot, end to end', () => {
     await customer(TESTER_3, { tap: 'o:staff' });
     await staffWrites(TESTER_3, new Date(Date.now() - 60_000));
     expect(await customer(TESTER_3, { text: 'Hello! Can I get more info on this?', ad: true })).toEqual([]);
+  });
+
+  it('a new customer from a deal ad: its pre-filled words go straight to that deal’s first choice', async () => {
+    const first = await customer(TESTER_4, { text: 'Large & Chilled deal order karni hai', ad: true });
+    expect(first).toHaveLength(1);
+    expect(rowIds(first[0])).toEqual(['m:pz-tikka', 'm:pz-fajita']);
+    expect(words(first[0])).toContain('Large & Chilled');
+    expect(((await db.pg.query(`SELECT state FROM wa_sessions WHERE wa_id = $1`, [TESTER_4])).rows as Array<{ state: string }>)[0]?.state).toBe('choice');
   });
 
   it('an order from an ad’s chat reaches Meta as a Purchase with the ad’s click, after the customer has the confirmation', async () => {
