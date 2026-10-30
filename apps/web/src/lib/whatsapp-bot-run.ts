@@ -96,8 +96,16 @@ async function botShop(): Promise<BotShop> {
       lng: BUSINESS.longitude,
     },
     reachKm: DELIVERY_REACH_KM,
+    namedAreas: NAMED_AREAS,
   };
 }
+
+/**
+ * The areas the bot names (the user, 30 Oct 2026: "yes its dha clifton only emar tower and big high elit class
+ * resdence" — as the ads now say): Emaar Crescent Bay is in the till's DHA group. The till's other areas (Abysinya,
+ * Brooks Chowrangi) stay on the areas' list for anyone who lives there.
+ */
+export const NAMED_AREAS = { words: 'DHA, Clifton aur Emaar', groups: ['DHA', 'Clifton'] } as const;
 
 /**
  * One customer message for the bot. `order` places (or, with dryRun, prices) an order exactly as the website's

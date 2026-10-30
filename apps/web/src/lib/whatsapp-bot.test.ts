@@ -611,6 +611,22 @@ describe('the WhatsApp ordering bot', () => {
     for (const not of ['Delivery kitni der mein?', 'Hello', 'mera area', 'Ghanti mat bajayein', 'House 5, Street 2, Phase 6']) expect(asksBot(not)).toBe(false);
   });
 
+  it('the areas it names are the ones set (DHA, Clifton and Emaar), their charges only; the areas’ list still has every open area', async () => {
+    const base = factsFromBlock(null).zones;
+    const far = { ...base[0]!, id: 'abys', name: 'Abysinya lines', aliases: [], group: 'Abysinya', feeCents: 40_000 };
+    const s = shop({ ...LIVE_OFFERS, zones: [...base, far], namedAreas: { words: 'DHA, Clifton aur Emaar', groups: ['DHA', 'Clifton'] } });
+    const charge = feeRangeOfFees(base.filter((z) => z.active).map((z) => z.feeCents));
+    const w = welcomeStep({ shopName: 'Cheese O’Clock', profileName: null, shop: s });
+    expect(textOf(w.out[0])).toContain(`🛵 Delivery: DHA, Clifton aur Emaar (${charge}) · 🏃 Pick-up bhi`);
+    const c = chat(s);
+    expect(textOf((await c.send({ text: 'address?' })).out[1])).toContain(`🛵 Delivery sirf DHA, Clifton aur Emaar mein — charges ${charge}`);
+    await c.send({ tap: 'i:burger' });
+    await c.send({ tap: 'f:delivery' });
+    expect(titles((await c.send({ text: 'Flat 2, Gardens' })).out[0])).toEqual(['DHA', 'Clifton', 'Abysinya', '❌ Mera area nahi hai']);
+    // Named areas the till has none of: every open area's group instead.
+    expect(textOf(welcomeStep({ shopName: 'Shop', profileName: null, shop: shop({ ...s, namedAreas: { words: 'Gulshan', groups: ['Gulshan'] } }) }).out[0])).toContain('🛵 Delivery: DHA, Clifton aur Abysinya (');
+  });
+
   it('a shared location: too far is said plainly with a pick-up; near, it is the address and the area is asked; before ordering it is kept for the delivery', async () => {
     const { deps, bodies } = fakeDeps();
     const s = shop(LIVE_OFFERS);

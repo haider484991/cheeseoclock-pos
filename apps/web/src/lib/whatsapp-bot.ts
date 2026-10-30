@@ -140,6 +140,12 @@ export interface BotShop {
    * not (the areas have names, not a map; the farthest open area is under this). None: every pin asks for the area.
    */
   reachKm?: number;
+  /**
+   * The areas the bot names in the welcome and when asked (the user, 30 Oct 2026: "dha clifton only emar tower"):
+   * the words, and the area groups whose charges it quotes. The areas' list still offers every open area (the till's).
+   * None: every open area's group.
+   */
+  namedAreas?: { words: string; groups: readonly string[] } | null;
 }
 
 /** The website's order answer (api/orders), as the bot reads it. */
@@ -987,16 +993,24 @@ function zonesView(shop: BotShop, body = '📍 Aapka area kaunsa hai?', group?: 
   return tapView([`📍 ${groups[group]?.group ?? ''} mein kahan?`], [...rows.map(zoneOption), ...(more ? [{ id: `zp:${group}:${page + 1}`, title: 'Aur areas ➡️' }] : [])], 'Area chunein');
 }
 
-/** "DHA, Clifton aur Abysinya": the open areas' groups, as the owner names them; null when none are open. */
+/** The areas the bot names (BotShop.namedAreas), else every open area's group. */
+function namedGroups(shop: BotShop): Array<{ group: string; zones: FactZone[] }> {
+  const groups = zoneGroups(shop);
+  const named = shop.namedAreas ? groups.filter((g) => shop.namedAreas!.groups.includes(g.group)) : groups;
+  return named.length > 0 ? named : groups;
+}
+
+/** "DHA, Clifton aur Emaar": the areas as said (BotShop.namedAreas), else the open areas' groups; null when none are open. */
 function areaGroupsWords(shop: BotShop): string | null {
+  if (shop.namedAreas && zoneGroups(shop).some((g) => shop.namedAreas!.groups.includes(g.group))) return shop.namedAreas.words;
   const g = zoneGroups(shop).map((x) => x.group);
   if (g.length === 0) return null;
   return g.length === 1 ? g[0]! : `${g.slice(0, -1).join(', ')} aur ${g.at(-1)!}`;
 }
 
-/** What a delivery costs, as the website says it: the open areas' charge or its range, or free. */
+/** What a delivery to the named areas costs, as the website says it: their charge or its range, or free. */
 function chargeWords(shop: BotShop): string | null {
-  const fees = shop.zones.filter((z) => z.active).map((z) => z.feeCents);
+  const fees = namedGroups(shop).flatMap((g) => g.zones.map((z) => z.feeCents));
   if (fees.length === 0) return null;
   return Math.max(...fees) === 0 ? 'free' : feeRangeOfFees(fees);
 }
