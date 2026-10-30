@@ -232,14 +232,14 @@ describe('the reply’s words', () => {
 
   it('open: hello by first name, the shop’s own name from its details, and the link', () => {
     const text = autoReplyText({ shop, open: true, link, profileName: 'Ali Raza' });
-    expect(text.startsWith('Assalam o Alaikum Ali! ')).toBe(true);
+    expect(text.startsWith('Hi Ali! ')).toBe(true);
     expect(text).toContain('https://www.cheeseoclock.net/menu?wa=Abc23Def45Gh');
     expect(text).toContain(shop.profile.name.replace("'", '’'));
   });
 
   it('closed: the hours, and the link for later', () => {
     const text = autoReplyText({ shop, open: false, link, profileName: null });
-    expect(text.startsWith('Assalam o Alaikum! Abhi hum band hain (open daily')).toBe(true);
+    expect(text.startsWith('Hi! We’re closed right now (open daily')).toBe(true);
     expect(text).toContain(link);
   });
 
@@ -368,6 +368,6 @@ describe('POST /api/whatsapp/webhook', () => {
   it('closed: the reply gives the hours with the link', async () => {
     db.open = false;
     await post(inbound({ waId: '923001110011', id: 'wamid.closed' }));
-    expect(sentTo()[0]!.text.body).toContain('Abhi hum band hain');
+    expect(sentTo()[0]!.text.body).toContain('We’re closed right now');
   });
 });

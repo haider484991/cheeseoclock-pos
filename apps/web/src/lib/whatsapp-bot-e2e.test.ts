@@ -154,17 +154,17 @@ describe('WhatsApp ordering bot, end to end', () => {
     const hello = await customer(TESTER, { text: 'Salam' });
     expect(hello).toHaveLength(1);
     expect(hello[0]!.interactive?.type).toBe('button');
-    expect(words(hello[0])).toContain('Assalam o Alaikum Haider!');
-    expect(words(hello[0])).toContain('👇 *Neeche button dabayein*');
+    expect(words(hello[0])).toContain('Hi Haider!');
+    expect(words(hello[0])).toContain('👇 *Tap a button below*');
     expect(rowIds(hello[0])).toEqual(['i:lc', 'o:pizza', 'o:burger']);
 
     // Only the pizza is asked (the drink is the usual one), as buttons; then Delivery or Pick-up. Numbers typed pick too.
     const pizza = await customer(TESTER, { text: '1' });
-    expect(words(pizza[0])).toContain('Large pizza kaunsa?');
+    expect(words(pizza[0])).toContain('Which large pizza?');
     expect(rowIds(pizza[0])).toEqual(['m:pz-tikka', 'm:pz-fajita']);
     expect(rowIds((await customer(TESTER, { tap: 'm:pz-tikka' }))[0])).toEqual(['f:delivery', 'f:pickup', 'k:add']);
     expect(await optionsOf(TESTER)).toEqual(['f:delivery', 'f:pickup', 'k:add']);
-    expect(words((await customer(TESTER, { tap: 'f:delivery' }))[0])).toContain('📍 Apna *address* likh kar bhejein');
+    expect(words((await customer(TESTER, { tap: 'f:delivery' }))[0])).toContain('📍 Send your *address*');
 
     // The area is read from the address; the website's own route prices it: the deal (tax included) and the area's Rs 200 charge.
     const confirm = await customer(TESTER, { text: 'House 12, Street 4, Rahat Lane, DHA Phase 6' });
@@ -174,7 +174,7 @@ describe('WhatsApp ordering bot, end to end', () => {
     expect(await db.pg.query(`SELECT 1 FROM web_orders`, []).then((r) => r.rows)).toHaveLength(0);
 
     const placed = await customer(TESTER, { text: '1' });
-    expect(words(placed[0])).toContain('✅ *Order ho gaya!*');
+    expect(words(placed[0])).toContain('✅ *Order placed!*');
     await customer(TESTER, { tap: 'y:confirm' }); // a second tap places nothing more
     const rows = (await db.pg.query(`SELECT id, customer_name, customer_phone, area, address_line, notes, total_cents FROM web_orders`, [])).rows as Array<Record<string, unknown>>;
     expect(rows).toHaveLength(1);
@@ -199,8 +199,8 @@ describe('WhatsApp ordering bot, end to end', () => {
     await status.POST(bridge(`/api/bridge/orders/${orderId}/status`, { status: 'out_for_delivery' }), { params: { id: orderId } });
     await status.POST(bridge(`/api/bridge/orders/${orderId}/status`, { status: 'out_for_delivery' }), { params: { id: orderId } });
     expect(sent.slice(before).map((m) => [m.to, words(m)])).toEqual([
-      [TESTER, '✅ Aapka order #42 kitchen ko mil gaya — tayyar ho raha hai 🍕'],
-      [TESTER, '🛵 Aapka order rider ke saath nikal gaya — thodi der mein pohanch jayega.'],
+      [TESTER, '✅ The kitchen has your order #42 — it’s being made now 🍕'],
+      [TESTER, '🛵 Your order is on its way with our rider — it’ll be with you shortly.'],
     ]);
   });
 
@@ -215,7 +215,7 @@ describe('WhatsApp ordering bot, end to end', () => {
     await staffWrites(TESTER_2, new Date(Date.now() - 30_000));
     const areas = await customer(TESTER_2, { text: 'Flat B102, Gardens 1, near the park' });
     expect(areas).toHaveLength(1);
-    expect(words(areas[0])).toContain('📍 Aapka area kaunsa hai?');
+    expect(words(areas[0])).toContain('📍 Which area are you in?');
     expect(rowIds(areas[0])).toContain('z:none');
     expect(await optionsOf(TESTER_2)).toContain('z:none');
 
@@ -228,7 +228,7 @@ describe('WhatsApp ordering bot, end to end', () => {
     // TESTER ordered above: the day's welcome is used and the order is done. Meta's ad words get the menu all the same.
     const again = await customer(TESTER, { text: 'Hello! Can I get more info on this?', ad: true });
     expect(again).toHaveLength(1);
-    expect(words(again[0])).toContain('🔥 *Hamari deals*');
+    expect(words(again[0])).toContain('🔥 *Our deals*');
     expect(rowIds(again[0])).toEqual(['i:lc', 'o:pizza', 'o:burger']);
     // Words that are not an ask, once the day's welcome is used and no order is open: left to staff.
     await customer(TESTER, { tap: 'o:staff' });
@@ -237,9 +237,9 @@ describe('WhatsApp ordering bot, end to end', () => {
     const prices = await customer(TESTER, { text: 'Price list bhej dein' });
     expect(prices).toHaveLength(1);
     expect(rowIds(prices[0])).toEqual(['i:lc', 'o:pizza', 'o:burger']);
-    // The burgers' button: the burgers with their prices behind a "Burger chunein" button.
+    // The burgers' button: the burgers with their prices behind a "Choose a burger" button.
     const burgers = await customer(TESTER, { tap: 'o:burger' });
-    expect(words(burgers[0])).toContain('👇 Neeche *Burger chunein* button dabayein');
+    expect(words(burgers[0])).toContain('👇 Tap the *Choose a burger* button below');
     expect(rowIds(burgers[0])).toEqual(['i:burger']);
 
     // Staff wrote to TESTER_3 in the last hour: their ad tap is staff's to answer.
@@ -266,7 +266,7 @@ describe('WhatsApp ordering bot, end to end', () => {
       const click = (await db.pg.query(`SELECT ctwa_clid FROM wa_events WHERE wa_id = $1 AND ctwa_clid IS NOT NULL ORDER BY at DESC LIMIT 1`, [TESTER_3])).rows as Array<{ ctwa_clid: string }>;
       for (const tap of ['i:lc', 'm:pz-tikka', 'f:pickup']) await customer(TESTER_3, { tap });
       const done = (await customer(TESTER_3, { tap: 'y:confirm' })) as unknown as Array<Record<string, unknown>>;
-      expect(words(done[0] as (typeof sent)[number])).toContain('✅ *Order ho gaya!*');
+      expect(words(done[0] as (typeof sent)[number])).toContain('✅ *Order placed!*');
       // a pick-up: the shop's pin to tap, then Meta hears of the order
       expect(done[1]).toMatchObject({ type: 'location', location: { name: 'Cheese O’Clock' } });
       const toMeta = done.slice(2) as Array<{ data?: Array<Record<string, unknown>> }>;

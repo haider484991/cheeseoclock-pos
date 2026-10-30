@@ -305,7 +305,7 @@ export function welcomeStep(o: { shopName: string; profileName: string | null; s
 /** "Assalam o Alaikum Ali! Cheese O'Clock mein khush aamdeed 🧀" */
 export function helloLine(o: { shopName: string; profileName: string | null }): string {
   const name = firstName(o.profileName);
-  return `Assalam o Alaikum${name ? ` ${name}` : ''}! ${o.shopName} mein khush aamdeed 🧀`;
+  return `Hi${name ? ` ${name}` : ''}! Welcome to ${o.shopName} 🧀`;
 }
 
 /** "Ali" from "Ali Raza": a first name of letters only, else nothing. */
@@ -616,17 +616,17 @@ function tapView(body: readonly string[], options: readonly Option[], label: str
   const withLines = (lines: readonly string[] | undefined, tap: string): { first: WaOut[]; body: string } => {
     const all = [...body, ...(lines && lines.length > 0 ? ['', ...lines] : []), '', tap].join('\n');
     if (all.length <= TAP_BODY_MAX || !lines) return { first: [], body: all };
-    return { first: texts([[...body, '', ...lines].join('\n')]), body: `👆 Upar wali list mein se chunein\n${tap}\n(ya uska *number* bhejein)` };
+    return { first: texts([[...body, '', ...lines].join('\n')]), body: `👆 Pick one from the list above\n${tap}\n(or send its *number*)` };
   };
   if (options.length > 0 && options.length <= 3 && options.every((o) => o.title.length <= BUTTON_WORDS)) {
-    const m = withLines(shown, '👇 *Neeche button dabayein*');
+    const m = withLines(shown, '👇 *Tap a button below*');
     return {
       out: [...m.first, { type: 'buttons', body: m.body, buttons: options.map((o) => ({ id: o.id, title: o.title })), ...(image ? { image } : {}) }],
       choices,
     };
   }
   if (options.length > 0 && options.length <= LIST_ROWS) {
-    const m = withLines(shown ?? optionLines(options), `👇 Neeche *${label}* button dabayein`);
+    const m = withLines(shown ?? optionLines(options), `👇 Tap the *${label}* button below`);
     return {
       out: [
         ...m.first,
@@ -650,7 +650,7 @@ function tapView(body: readonly string[], options: readonly Option[], label: str
       choices,
     };
   }
-  return { out: texts([[...body, '', ...(shown ?? optionLines(options)), '', '👉 *Number* bhejein'].join('\n')]), choices };
+  return { out: texts([[...body, '', ...(shown ?? optionLines(options)), '', '👉 Send the *number*'].join('\n')]), choices };
 }
 
 /** An item's emoji: pizza (the deals are pizza-led), fries and sides, a drink, a dip, a burger. */
@@ -691,7 +691,7 @@ function priceShown(cents: number, off: number): string {
 
 /** On a button or a list row (no bold or strike there): the price, with "pehle" (before) when a % is off. */
 function pricePlain(cents: number, off: number): string {
-  return off > 0 ? `${formatCents(afterOff(cents, off))} (pehle ${formatCents(cents)})` : formatCents(cents);
+  return off > 0 ? `${formatCents(afterOff(cents, off))} (was ${formatCents(cents)})` : formatCents(cents);
 }
 
 /** A category's name as shown: the till's "Pizza" is the regular pizzas (the signature ones have their own category). */
@@ -757,7 +757,7 @@ function buy1Get1Now(shop: BotShop): boolean {
 function startView(shop: BotShop, first?: string): View {
   const pictured = pictureDeals(shop);
   const b1 = buy1Get1Now(shop) ? buy1Get1Items(shop) : [];
-  const b1Line = b1.length > 0 ? `🎁 Buy 1 Get 1 abhi chal raha hai${shop.buy1Get1Hours ? ` (${shop.buy1Get1Hours})` : ''}` : buy1Get1Items(shop).length > 0 && shop.buy1Get1Hours ? `🎁 Buy 1 Get 1: roz ${shop.buy1Get1Hours}` : null;
+  const b1Line = b1.length > 0 ? `🎁 Buy 1 Get 1 is on now${shop.buy1Get1Hours ? ` (${shop.buy1Get1Hours})` : ''}` : buy1Get1Items(shop).length > 0 && shop.buy1Get1Hours ? `🎁 Buy 1 Get 1 hours: ${shop.buy1Get1Hours}` : null;
   if (shop.menuPicture && pictured) {
     const buttons: Option[] = [
       { id: 'o:deals', title: '🔥 Deals' },
@@ -767,9 +767,9 @@ function startView(shop: BotShop, first?: string): View {
     ];
     const place = placeLines(shop);
     const v = tapView(
-      [...(first ? [first] : []), '👆 Picture mein hamari deals hain — deal ka *number* bhejein (jaise *5*)', ...(b1Line ? [b1Line] : []), ...(place.length > 0 ? ['', ...place] : [])],
+      [...(first ? [first] : []), '👆 Our deals are in the picture — send a deal’s *number* (e.g. *5*)', ...(b1Line ? [b1Line] : []), ...(place.length > 0 ? ['', ...place] : [])],
       buttons,
-      'Chunein',
+      'Choose',
       shop.menuPicture.url,
     );
     // A number typed is the deal printed with it (Buy 1 Get 1 after them while it sells).
@@ -796,9 +796,9 @@ function dealsView(shop: BotShop, first?: string, place: readonly string[] = [])
   const fitted = [...kept, ...(kept.length + more.length <= LIST_ROWS ? more : [])];
   const listed = [...deals, ...b1].slice(0, kept.length);
   return tapView(
-    [...(first ? [first, ''] : []), ...(place.length > 0 ? [...place, ''] : []), '🔥 *Hamari deals* (tax shamil)', ...(b1Cut ? ['🎁 Buy 1 Get 1 abhi chal raha hai — *buy 1 get 1* likhein'] : [])],
+    [...(first ? [first, ''] : []), ...(place.length > 0 ? [...place, ''] : []), '🔥 *Our deals* (tax included)', ...(b1Cut ? ['🎁 Buy 1 Get 1 is on now — type *buy 1 get 1*'] : [])],
     fitted,
-    'Deal chunein',
+    'Choose a deal',
     undefined,
     dealLines(listed, fitted.length, (i) => (b1.includes(i) ? '🎁 ' : '')),
   );
@@ -814,9 +814,9 @@ function dealLines(deals: readonly PublishedMenuItem[], numbered: number, mark: 
 function buy1Get1View(shop: BotShop): View {
   const b1 = buy1Get1Items(shop);
   return tapView(
-    [`🎁 *Buy 1 Get 1*${shop.buy1Get1Hours ? ` · roz ${shop.buy1Get1Hours}` : ''} (tax shamil)`],
+    [`🎁 *Buy 1 Get 1*${shop.buy1Get1Hours ? ` · ${shop.buy1Get1Hours}` : ''} (tax included)`],
     b1.map((i) => ({ id: `i:${i.posItemId}`, title: i.name, description: [formatCents(i.basePriceCents), i.description].filter(Boolean).join(' · ') })),
-    'Deal chunein',
+    'Choose a deal',
     undefined,
     dealLines(b1, b1.length),
   );
@@ -824,11 +824,11 @@ function buy1Get1View(shop: BotShop): View {
 
 /** The list button's words for a category or a choice: what is being chosen. */
 function chooseLabel(what: string): string {
-  if (/pizza/i.test(what)) return 'Pizza chunein';
-  if (/burger/i.test(what)) return 'Burger chunein';
-  if (/drink|flavour/i.test(what)) return 'Drink chunein';
-  if (/fries|side/i.test(what)) return 'Chunein';
-  return 'Chunein';
+  if (/pizza/i.test(what)) return 'Choose a pizza';
+  if (/burger/i.test(what)) return 'Choose a burger';
+  if (/drink|flavour/i.test(what)) return 'Choose a drink';
+  if (/fries|side/i.test(what)) return 'Choose';
+  return 'Choose';
 }
 
 /**
@@ -848,7 +848,7 @@ function familyView(shop: BotShop, at: readonly number[], more: readonly Option[
     const families = familiesOf(cat);
     const offs = cat.items.map((x) => offPercent(shop, x));
     const off = offs.every((p) => p === offs[0]) ? (offs[0] ?? 0) : 0;
-    const tax = cat.items.every((x) => x.taxIncluded) ? ' (tax shamil)' : cat.items.every((x) => !x.taxIncluded) ? ' (+ tax)' : '';
+    const tax = cat.items.every((x) => x.taxIncluded) ? ' (tax included)' : cat.items.every((x) => !x.taxIncluded) ? ' (+ tax)' : '';
     const sizesPlain = (f: { items: PublishedMenuItem[] }) => f.items.map((x) => `${sizeOf(x)} ${formatCents(afterOff(x.basePriceCents, offPercent(shop, x)))}`).join(' · ');
     const same = families.every((f) => f.items.length > 1 && f.items.map((x) => `${sizeOf(x)}${x.basePriceCents}`).join() === families[0]!.items.map((x) => `${sizeOf(x)}${x.basePriceCents}`).join());
     heads.push(`${emojiOf(cat.items[0]?.name ?? cat.name)} *${categoryTitle(cat.name)}*${off > 0 ? ` — 🔥 *${off}% OFF*` : ''}${tax}`);
@@ -880,9 +880,9 @@ function sizeView(shop: BotShop, items: readonly PublishedMenuItem[]): View {
   const name = (items[0]?.name.split(' — ')[0] ?? '').trim();
   const off = items.length > 0 ? offPercent(shop, items[0]!) : 0;
   return tapView(
-    [`${emojiOf(name)} *${name}* — kaunsa size?`, ...(off > 0 ? [`🔥 ${off}% OFF laga hua${items.some((i) => !i.taxIncluded) ? ' (+ tax)' : ''}`] : items.some((i) => !i.taxIncluded) ? ['(+ tax)'] : [])],
+    [`${emojiOf(name)} *${name}* — which size?`, ...(off > 0 ? [`🔥 ${off}% OFF applied${items.some((i) => !i.taxIncluded) ? ' (+ tax)' : ''}`] : items.some((i) => !i.taxIncluded) ? ['(+ tax)'] : [])],
     items.map((i) => ({ id: `i:${i.posItemId}`, title: `${sizeOf(i)} · ${formatCents(afterOff(i.basePriceCents, offPercent(shop, i)))}` })),
-    'Size chunein',
+    'Choose a size',
   );
 }
 
@@ -891,9 +891,9 @@ function foundView(shop: BotShop, items: readonly PublishedMenuItem[]): View {
   const found = items.slice(0, LIST_ROWS);
   const key = keyFor(found.length);
   return tapView(
-    ['Ye mile 👇'],
+    ['Found these 👇'],
     found.map((i) => ({ id: `i:${i.posItemId}`, title: shownName(i.name), description: `${pricePlain(i.basePriceCents, offPercent(shop, i))}${i.taxIncluded ? '' : ' + tax'}` })),
-    'Chunein',
+    'Choose',
     undefined,
     found.map((i, k) => `${key(k + 1)} *${shownName(i.name)}* — ${priceShown(i.basePriceCents, offPercent(shop, i))}${i.taxIncluded ? '' : ' + tax'}`),
   );
@@ -904,7 +904,7 @@ function choiceView(shop: BotShop, item: PublishedMenuItem, group: PublishedModi
   const left = group.modifiers.filter((m) => !picked.includes(m.posModifierId));
   const need = Math.max(1, group.minSelect) - picked.length;
   const label = groupLabelOf(group);
-  const ask = need > 1 ? `${label}: koi *${need}* chunein (ek ek kar ke)` : `${label} kaunsa?`;
+  const ask = need > 1 ? `${label}: choose any *${need}* (one at a time)` : /^choose\b/i.test(label) ? `${label}:` : `Which ${label.toLowerCase()}?`;
   return tapView(
     [`${emojiOf(item.name)} *${item.name}* — ${priceShown(item.basePriceCents, offPercent(shop, item))}${item.taxIncluded ? '' : ' + tax'} ✅`, '', `${ask}${of > 1 ? ` (${step + 1}/${of})` : ''}`],
     left.map((m) => ({ id: `m:${m.posModifierId}`, title: choiceName(m.name), ...(m.priceDeltaCents > 0 ? { description: `+${formatCents(m.priceDeltaCents)}` } : {}) })),
@@ -926,12 +926,12 @@ function orderLines(shop: BotShop, line: CartLine): string[] {
 /** The order so far, then Delivery, Pick-up or more as tap buttons. `note`: "added", "changed" on top. */
 function cartView(shop: BotShop, data: BotData, note?: string): View {
   const options: Option[] = shop.pickupAvailable
-    ? [{ id: 'f:delivery', title: '🛵 Delivery' }, { id: 'f:pickup', title: pickupTitle(shop) }, { id: 'k:add', title: '➕ Aur add karein' }]
-    : [{ id: 'f:delivery', title: '🛵 Delivery' }, { id: 'k:add', title: '➕ Aur add karein' }, { id: 'k:clear', title: '🗑️ Khali karein' }];
+    ? [{ id: 'f:delivery', title: '🛵 Delivery' }, { id: 'f:pickup', title: pickupTitle(shop) }, { id: 'k:add', title: '➕ Add more' }]
+    : [{ id: 'f:delivery', title: '🛵 Delivery' }, { id: 'k:add', title: '➕ Add more' }, { id: 'k:clear', title: '🗑️ Clear order' }];
   return tapView(
-    [...(note ? [note, ''] : []), ...data.cart.flatMap((l) => orderLines(shop, l)), '', shop.pickupAvailable ? '*Delivery ya pick-up?*' : '*Delivery* ke liye button dabayein'],
+    [...(note ? [note, ''] : []), ...data.cart.flatMap((l) => orderLines(shop, l)), '', shop.pickupAvailable ? '*Delivery or pick-up?*' : 'Tap *Delivery* to go on'],
     options,
-    'Chunein',
+    'Choose',
   );
 }
 
@@ -942,15 +942,15 @@ function pickupTitle(shop: BotShop): string {
 
 /** The old bot's question after Checkout (a session saved before 27 Oct 2026 may still tap Checkout). */
 function fulfilmentView(shop: BotShop): View {
-  return tapView(['*Delivery ya pick-up?*'], [{ id: 'f:delivery', title: '🛵 Delivery' }, { id: 'f:pickup', title: pickupTitle(shop) }], 'Chunein');
+  return tapView(['*Delivery or pick-up?*'], [{ id: 'f:delivery', title: '🛵 Delivery' }, { id: 'f:pickup', title: pickupTitle(shop) }], 'Choose');
 }
 
 function addressMessage(zone: FactZone | undefined): WaOut {
   return {
     type: 'text',
     body: `${
-      zone ? `📍 *${zone.name}* — ghar no. aur street likh kar bhejein` : '📍 Apna *address* likh kar bhejein\n_(ghar no., street aur area — jaise House 12, Street 4, DHA Phase 6)_'
-    }\n📎 Ya WhatsApp se apni *Location* bhej dein`,
+      zone ? `📍 *${zone.name}* — send your house no. and street` : '📍 Send your *address*\n_(house no., street and area — e.g. House 12, Street 4, DHA Phase 6)_'
+    }\n📎 Or share your *Location* on WhatsApp`,
   };
 }
 
@@ -965,7 +965,7 @@ function zoneGroups(shop: BotShop): Array<{ group: string; zones: FactZone[] }> 
   return groups;
 }
 
-const NOT_LISTED: Option = { id: 'z:none', title: '❌ Mera area nahi hai', description: 'Pick-up karein ya staff se baat karein' };
+const NOT_LISTED: Option = { id: 'z:none', title: '❌ Not my area', description: 'Pick up, or talk to our staff' };
 
 function zoneOption(z: FactZone): Option {
   const name = zoneNameWithLocalNames(z.name);
@@ -980,17 +980,17 @@ function zoneOption(z: FactZone): Option {
  * The open areas behind a list button: all of them when they fit one list, else their groups first ("DHA",
  * "Clifton"), then a group's areas (nine at a time, then "Aur ➡️"). "Not my area" with them.
  */
-function zonesView(shop: BotShop, body = '📍 Aapka area kaunsa hai?', group?: number, page = 0): View {
+function zonesView(shop: BotShop, body = '📍 Which area are you in?', group?: number, page = 0): View {
   const groups = zoneGroups(shop);
   const all = groups.flatMap((g) => g.zones);
   if (group === undefined) {
-    if (all.length + 1 <= LIST_ROWS) return tapView([body], [...all.map(zoneOption), NOT_LISTED], 'Area chunein');
-    return tapView([body], [...groups.slice(0, LIST_ROWS - 1).map((g, gi) => ({ id: `zg:${gi}`, title: g.group, description: `${g.zones.length} ${g.zones.length === 1 ? 'area' : 'areas'}` })), NOT_LISTED], 'Area chunein');
+    if (all.length + 1 <= LIST_ROWS) return tapView([body], [...all.map(zoneOption), NOT_LISTED], 'Choose your area');
+    return tapView([body], [...groups.slice(0, LIST_ROWS - 1).map((g, gi) => ({ id: `zg:${gi}`, title: g.group, description: `${g.zones.length} ${g.zones.length === 1 ? 'area' : 'areas'}` })), NOT_LISTED], 'Choose your area');
   }
   const zones = groups[group]?.zones ?? [];
   const rows = zones.length <= LIST_ROWS ? zones : zones.slice(page * (LIST_ROWS - 1), (page + 1) * (LIST_ROWS - 1));
   const more = zones.length > LIST_ROWS && (page + 1) * (LIST_ROWS - 1) < zones.length;
-  return tapView([`📍 ${groups[group]?.group ?? ''} mein kahan?`], [...rows.map(zoneOption), ...(more ? [{ id: `zp:${group}:${page + 1}`, title: 'Aur areas ➡️' }] : [])], 'Area chunein');
+  return tapView([`📍 Where in ${groups[group]?.group ?? ''}?`], [...rows.map(zoneOption), ...(more ? [{ id: `zp:${group}:${page + 1}`, title: 'More areas ➡️' }] : [])], 'Choose your area');
 }
 
 /** The areas the bot names (BotShop.namedAreas), else every open area's group. */
@@ -1005,7 +1005,7 @@ function areaGroupsWords(shop: BotShop): string | null {
   if (shop.namedAreas && zoneGroups(shop).some((g) => shop.namedAreas!.groups.includes(g.group))) return shop.namedAreas.words;
   const g = zoneGroups(shop).map((x) => x.group);
   if (g.length === 0) return null;
-  return g.length === 1 ? g[0]! : `${g.slice(0, -1).join(', ')} aur ${g.at(-1)!}`;
+  return g.length === 1 ? g[0]! : `${g.slice(0, -1).join(', ')} and ${g.at(-1)!}`;
 }
 
 /** What a delivery to the named areas costs, as the website says it: their charge or its range, or free. */
@@ -1024,7 +1024,7 @@ function placeLines(shop: BotShop): string[] {
   const charge = chargeWords(shop);
   return [
     ...(shop.place ? [`📍 Shop: ${shop.place.areaLine}`] : []),
-    ...(areas ? [`🛵 Delivery: ${areas}${charge ? ` (${charge})` : ''}${shop.pickupAvailable ? ' · 🏃 Pick-up bhi' : ''}`] : []),
+    ...(areas ? [`🛵 Delivery: ${areas}${charge ? ` (${charge})` : ''}${shop.pickupAvailable ? ' · 🏃 Pick-up too' : ''}`] : []),
   ];
 }
 
@@ -1040,8 +1040,8 @@ function whereOut(shop: BotShop): WaOut[] {
   const charge = chargeWords(shop);
   const lines = [
     ...(shop.place ? [`📍 *${shop.place.name}*: ${shop.place.street}`] : []),
-    ...(areas ? [`🛵 Delivery sirf ${areas} mein${charge ? ` — charges ${charge}` : ''}`] : []),
-    ...(shop.pickupAvailable ? ['🏃 Pick-up: shop se khud le ja sakte hain'] : []),
+    ...(areas ? [`🛵 We deliver only to ${areas}${charge ? ` — delivery ${charge}` : ''}`] : []),
+    ...(shop.pickupAvailable ? ['🏃 Pick-up: collect it from the shop yourself'] : []),
   ];
   return [...placePin(shop), ...(lines.length > 0 ? [{ type: 'text' as const, body: lines.join('\n') }] : [])];
 }
@@ -1066,23 +1066,23 @@ function confirmView(shop: BotShop, data: BotData, q: Extract<OrderAnswer, { ok:
   const area = zone && !normalizeAreaText(data.address ?? '').includes(normalizeAreaText(zone.name)) ? ` (${zone.name})` : '';
   return tapView(
     [
-      '🧾 *Aapka order*',
+      '🧾 *Your order*',
       '',
       ...lines,
       ...(q.discountCents > 0 ? [`🔥 Discount — −${formatCents(q.discountCents)}`] : []),
       ...(q.taxCents > 0 ? [`Tax — ${formatCents(q.taxCents)}`] : []),
       '',
-      `💰 *Total: ${formatCents(q.totalCents)}* · ${data.fulfilment === 'pickup' ? 'payment shop par' : 'cash on delivery'}`,
-      data.fulfilment === 'pickup' ? `🏃 Pick-up: shop se le jayein${shop.place ? ` — ${shop.place.street}` : ''}` : `📍 ${data.address ?? ''}${area}`,
+      `💰 *Total: ${formatCents(q.totalCents)}* · ${data.fulfilment === 'pickup' ? 'pay at the shop' : 'cash on delivery'}`,
+      data.fulfilment === 'pickup' ? `🏃 Pick-up from the shop${shop.place ? ` — ${shop.place.street}` : ''}` : `📍 ${data.address ?? ''}${area}`,
       `👤 ${data.name ?? ''} · ${phone}`,
       ...(data.notes ? [`📝 ${data.notes}`] : []),
     ],
     [
-      { id: 'y:confirm', title: '✅ Order kar dein' },
-      { id: 'y:edit', title: '✏️ Badlein' },
+      { id: 'y:confirm', title: '✅ Place order' },
+      { id: 'y:edit', title: '✏️ Change' },
       { id: 'y:cancel', title: '❌ Cancel' },
     ],
-    'Chunein',
+    'Choose',
   );
 }
 
@@ -1092,7 +1092,7 @@ const PIN_ADDRESS = 'Location pin (map)';
 /** A message the step could not use (said once; after that the chat is staff's), or a tap from no list we know. */
 const HELP: WaOut = {
   type: 'text',
-  body: '🙏 Samajh nahi aaya.\nUpar wale *button* dabayein, ya *menu* likhein.\n👤 Staff se baat: *staff*',
+  body: '🙏 Sorry, I didn’t get that.\nTap a *button* above, or type *menu*.\n👤 To talk to our staff, type *staff*',
 };
 
 /** "+923001234567" as the order's number. */
@@ -1130,7 +1130,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
   if (typed?.length === 1 && data.choices && data.choices.length > 0) {
     const pick = data.choices[typed[0]! - 1];
     if (!pick) {
-      say({ type: 'text', body: `🙏 Ye number list mein nahi — *1* se *${data.choices.length}* tak bhejein.` });
+      say({ type: 'text', body: `🙏 That number isn’t on the list — send *1* to *${data.choices.length}*.` });
       return { state, data, out };
     }
     id = pick;
@@ -1187,14 +1187,14 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     }
     const problem = validateModifierSelection(item, p.modifierIds);
     if (problem) {
-      say({ type: 'text', body: `Ye item abhi is tarah nahi ban sakta (${problem}). Menu se dobara chunein.` });
+      say({ type: 'text', body: `This item can’t be made that way right now (${problem}). Please choose again from the menu.` });
       data.pending = null;
       return showMenu();
     }
     addPending(p.quantity ?? 1);
     // From a catalog cart (or several numbers typed): on to its next item (the order once none are left).
     if (data.queue) return nextFromQueue();
-    showCart('✅ *Order mein add ho gaya!*');
+    showCart('✅ *Added to your order!*');
   };
 
   /** The pending item into the order (the same item with the same choices adds up). */
@@ -1267,14 +1267,14 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       const next = data.queue.shift()!;
       const item = itemOf(shop, next.posItemId);
       if (!item) {
-        say({ type: 'text', body: 'Cart ka ek item ab menu par nahi, use chhor diya.' });
+        say({ type: 'text', body: 'One item in your cart is no longer on the menu, so it was left out.' });
         continue;
       }
       data.pending = { posItemId: item.posItemId, modifierIds: startIds(item), step: 0, quantity: Math.min(20, next.quantity) };
       return askNext();
     }
     delete data.queue;
-    showCart('✅ *Order mein add ho gaya!*');
+    showCart('✅ *Added to your order!*');
   }
 
   const orderBody = (): Record<string, unknown> => {
@@ -1294,20 +1294,20 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
   /** The website could not take it: say why in its words and go back to the step that fixes it. */
   const refused = (a: Extract<OrderAnswer, { ok: false }>) => {
     if (a.error === 'buy1get1_social') {
-      return askWords({ type: 'text', body: `${a.message ?? 'Buy 1 Get 1 ke liye apna Instagram ya Facebook naam chahiye.'}\nApna Instagram ya Facebook naam likhein:` }, 'social');
+      return askWords({ type: 'text', body: `${a.message ?? 'Buy 1 Get 1 needs your Instagram or Facebook name.'}\nPlease type your Instagram or Facebook name:` }, 'social');
     }
     if (a.error === 'store_closed') {
       say({ type: 'text', body: a.message ?? shop.closedText });
       return go('cart');
     }
     if (a.error === 'outside_zone' || a.error === 'zone_paused') {
-      say({ type: 'text', body: a.message ?? 'Is area mein abhi delivery nahi.' });
+      say({ type: 'text', body: a.message ?? 'We don’t deliver to this area right now.' });
       delete data.zoneId;
       return askZones();
     }
     say({
       type: 'text',
-      body: a.message ?? 'Ye order abhi place nahi ho saka. Order badal kar dobara koshish karein, ya *staff* likhein.',
+      body: a.message ?? 'This order couldn’t be placed right now. Change it and try again, or type *staff*.',
     });
     showCart();
   };
@@ -1326,7 +1326,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
   /** Delivery or pick-up known (and the area): the WhatsApp name as the order's name (asked when it is none), then the price. */
   const finish = async () => {
     data.name ??= orderName(turn.profileName) ?? undefined;
-    if (!data.name) return askWords({ type: 'text', body: '👤 Order kis naam par? Apna *naam* bhejein' }, 'name');
+    if (!data.name) return askWords({ type: 'text', body: '👤 What name is the order under? Send your *name*' }, 'name');
     await quote();
   };
 
@@ -1339,11 +1339,11 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     say({
       type: 'text',
       body: [
-        `✅ *Order ho gaya!*${data.name ? ` Shukriya ${firstName(data.name) ?? data.name}` : ' Shukriya'} 🙏`,
+        `✅ *Order placed!*${data.name ? ` Thank you ${firstName(data.name) ?? data.name}` : ' Thank you'} 🙏`,
         '',
-        `💰 ${formatCents(placed.totalCents)} · ${data.fulfilment === 'pickup' ? 'payment shop par' : 'cash on delivery'}`,
-        '🍕 Kitchen confirm karte hi yahin batayenge.',
-        `📦 Order dekhein: ${deps.trackUrl(orderId, localOf(turn.waId))}`,
+        `💰 ${formatCents(placed.totalCents)} · ${data.fulfilment === 'pickup' ? 'pay at the shop' : 'cash on delivery'}`,
+        '🍕 We’ll message you here as soon as the kitchen confirms it.',
+        `📦 Track your order: ${deps.trackUrl(orderId, localOf(turn.waId))}`,
       ].join('\n'),
     });
     // A pick-up: where to come, as a pin to tap.
@@ -1384,13 +1384,13 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     if (pickup) out.push(...placePin(shop));
     offer(
       tapView(
-        [`${first}${areas ? `: *${areas}*` : '.'}`, ...(pickup ? ['', '🏃 Pick-up kar sakte hain — shop yahan hai 👆', shop.place!.street] : [])],
+        [`${first}${areas ? `: *${areas}*` : '.'}`, ...(pickup ? ['', '🏃 You can pick it up — the shop is here 👆', shop.place!.street] : [])],
         [
           ...(shop.pickupAvailable && data.cart.length > 0 ? [{ id: 'f:pickup', title: '🏃 Pick-up' }] : []),
           ...(data.cart.length === 0 ? [{ id: 'o:deals', title: '🔥 Deals' }] : []),
           { id: 'o:staff', title: '👤 Staff se baat' },
         ],
-        'Chunein',
+        'Choose',
       ),
     );
   };
@@ -1404,7 +1404,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
   const pinned = async (loc: NonNullable<BotTurn['location']>) => {
     const km = shop.place ? distanceKm(shop.place, loc) : 0;
     if (shop.reachKm !== undefined && km > shop.reachKm) {
-      return notServed(`😔 Aapki location shop se ~${Math.round(km)} km door hai — wahan delivery nahi hoti.\n🛵 Hamari delivery in areas tak hai`);
+      return notServed(`😔 Your location is ~${Math.round(km)} km from the shop — we don’t deliver there.\n🛵 We deliver to`);
     }
     data.pin = { lat: loc.lat, lng: loc.lng };
     const named = [loc.name, loc.address].filter(Boolean).join(', ');
@@ -1412,12 +1412,12 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     data.zoneId ??= zoneInText(shop.zones, named)?.id;
     delete data.orderId;
     if (data.cart.length === 0) {
-      say({ type: 'text', body: '✅ Location mil gayi! Pehle apni deal chunein — phir *Delivery* dabayein 👆' });
+      say({ type: 'text', body: '✅ Got your location! Choose your deal first, then tap *Delivery* 👆' });
       return;
     }
     data.fulfilment = 'delivery';
     if (data.zoneId) return finish();
-    askZones('📍 Location mil gayi ✅ — aapka area kaunsa hai?');
+    askZones('📍 Got your location ✅ — which area are you in?');
   };
 
   /** "pizza": the regular pizzas, the signature ones one tap away; "sig": the signature ones; "burger": the burgers. */
@@ -1492,7 +1492,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
 
   // Whatever the step: start over, stop, or ask for a person.
   if (id === 'o:staff' || (!id && STAFF.test(text))) {
-    say({ type: 'text', body: 'Theek hai! Hamara staff jaldi yahin jawab dega 🙏' });
+    say({ type: 'text', body: 'Sure! Our staff will reply here shortly 🙏' });
     return { state: 'idle', data: { cart: data.cart }, out };
   }
   if (id === 'o:web' || (!id && WEB.test(text))) {
@@ -1501,7 +1501,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     return { state, data, out };
   }
   if (id === 'y:cancel' || (!id && CANCEL.test(text))) {
-    say({ type: 'text', body: 'Order cancel kar diya. Jab chahein *menu* likh kar dobara order karein 🧀' });
+    say({ type: 'text', body: 'Order cancelled. Type *menu* whenever you want to order again 🧀' });
     return { state: 'idle', data: { cart: [] }, out };
   }
   const starting = id === 'o:start' || (!id && START.test(text));
@@ -1570,7 +1570,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       case 'i': {
         const item = itemOf(shop, a);
         if (!item) {
-          say({ type: 'text', body: 'Ye item abhi menu par nahi. Kuch aur chunein 👇' });
+          say({ type: 'text', body: 'That item isn’t on the menu right now. Please choose something else 👇' });
           showMenu();
           break;
         }
@@ -1587,13 +1587,13 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       case 'q':
         // The old bot's "how many" buttons.
         if (data.pending) addPending(Math.min(9, Math.max(1, Number(a) || 1)));
-        showCart('✅ *Order mein add ho gaya!*');
+        showCart('✅ *Added to your order!*');
         break;
       case 'k':
         if (a === 'add') showMenu();
         else if (a === 'clear') {
           data = { cart: [], ...(data.token ? { token: data.token } : {}) };
-          say({ type: 'text', body: 'Order khali kar diya 🗑️' });
+          say({ type: 'text', body: 'Order cleared 🗑️' });
           showStart();
         } else if (a === 'checkout') {
           // The old bot's cart button.
@@ -1619,12 +1619,12 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
         break;
       case 'z': {
         if (a === 'none') {
-          notServed('😔 Hamari delivery abhi in areas tak hai');
+          notServed('😔 We only deliver to');
           break;
         }
         const zone = shop.zones.find((z) => z.id === a && z.active);
         if (!zone) {
-          say({ type: 'text', body: 'Is area mein abhi delivery band hai.' });
+          say({ type: 'text', body: 'Delivery to this area is paused right now.' });
           askZones();
           break;
         }
@@ -1636,7 +1636,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
         if (a === 'ok' && orderName(turn.profileName)) {
           data.name = orderName(turn.profileName)!;
           await quote();
-        } else askWords({ type: 'text', body: '👤 Apna *naam* bhejein' }, 'name');
+        } else askWords({ type: 'text', body: '👤 Send your *name*' }, 'name');
         break;
       case 'x':
         // The old bot's "no note" button.
@@ -1663,7 +1663,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
 
   // Words, at the steps that ask for them.
   if (state === 'address') {
-    if (text.length < 5) say({ type: 'text', body: '📍 Address thora tafseel se bhejein — ghar no., street aur area' });
+    if (text.length < 5) say({ type: 'text', body: '📍 Please send your full address — house no., street and area' });
     else {
       data.address = text.slice(0, 300);
       data.zoneId ??= zoneInText(shop.zones, text)?.id;
@@ -1678,7 +1678,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     if (text.length >= 2) {
       data.name = text.slice(0, 80);
       await quote();
-    } else say({ type: 'text', body: '👤 Apna *naam* bhejein' });
+    } else say({ type: 'text', body: '👤 Send your *name*' });
   } else if (state === 'notes') {
     data.notes = text.slice(0, 300) || null;
     await quote();
@@ -1686,7 +1686,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     if (text.length >= 2) {
       data.social = text.slice(0, 80);
       await quote();
-    } else say({ type: 'text', body: 'Apna Instagram ya Facebook naam likhein:' });
+    } else say({ type: 'text', body: 'Please type your Instagram or Facebook name:' });
   } else if (state === 'confirm') {
     if (saysYes(wordsOf(text))) await place();
     else if (swapUsual()) await quote(); // "7up" at the end changes the drink, not a note
@@ -1725,7 +1725,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       else if (last) last.quantity = n;
       delete data.orderId;
       showCart();
-    } else if (swapUsual()) showCart('✅ Badal diya');
+    } else if (swapUsual()) showCart('✅ Changed');
     else if (said.some((w) => ['delivery', 'deliver', 'ghar', 'home'].includes(w))) await deliver();
     else if (shop.pickupAvailable && said.some((w) => ['pickup', 'pick', 'khud', 'takeaway'].includes(w))) await pickUp();
     else if (!answerWords(false)) helpOnce(() => say(HELP));

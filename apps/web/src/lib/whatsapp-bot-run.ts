@@ -87,7 +87,7 @@ async function botShop(): Promise<BotShop> {
     buy1Get1Hours: facts.buy1Get1.on ? buy1Get1WindowWords(facts.buy1Get1) : null,
     buy1Get1Open: facts.buy1Get1.on && buy1Get1OpenAt(Date.now(), facts.buy1Get1),
     menuPicture: { url: `${SITE_URL}${MENU_PICTURE.path}`, deals: MENU_PICTURE.deals },
-    closedText: `Abhi online orders band hain (${shopHoursInSentence(shop)}). Khulte hi yahin *menu* likh kar order karein 🧀`,
+    closedText: `We’re not taking online orders right now (${shopHoursInSentence(shop)}). Type *menu* here when we open 🧀`,
     place: {
       name: shopNameProse(shop),
       street: shop.profile.address.street,
@@ -105,7 +105,7 @@ async function botShop(): Promise<BotShop> {
  * resdence" — as the ads now say): Emaar Crescent Bay is in the till's DHA group. The till's other areas (Abysinya,
  * Brooks Chowrangi) stay on the areas' list for anyone who lives there.
  */
-export const NAMED_AREAS = { words: 'DHA, Clifton aur Emaar', groups: ['DHA', 'Clifton'] } as const;
+export const NAMED_AREAS = { words: 'DHA, Clifton and Emaar', groups: ['DHA', 'Clifton'] } as const;
 
 /**
  * One customer message for the bot. `order` places (or, with dryRun, prices) an order exactly as the website's
@@ -203,7 +203,7 @@ export async function handleBotMessage(
       link: () => createLink(m.waId),
       newId: () => uuidv7(),
       trackUrl: (orderId, phone) => `${SITE_URL}${trackPath(orderId, phone)}`,
-      websiteText: (t) => `🌐 Website par order karein — aapka naam aur number pehle se bhara hoga:\n${orderLinkUrl(t)}`,
+      websiteText: (t) => `🌐 Order on our website — your name and number are filled in for you:\n${orderLinkUrl(t)}`,
       placed: (o) => {
         placed.order = o;
       },

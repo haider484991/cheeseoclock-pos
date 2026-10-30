@@ -22,21 +22,21 @@ export function updateWords(status: UpdateStatus, o: { fulfilment: string; numbe
   const no = o.number ? ` #${o.number}` : '';
   switch (status) {
     case 'accepted':
-      return `✅ Aapka order${no} kitchen ko mil gaya — tayyar ho raha hai 🍕`;
+      return `✅ The kitchen has your order${no} — it’s being made now 🍕`;
     case 'ready':
-      return o.fulfilment === 'pickup' ? `🛍️ Aapka order${no} tayyar hai — shop se le lein.` : null;
+      return o.fulfilment === 'pickup' ? `🛍️ Your order${no} is ready — please collect it from the shop.` : null;
     case 'out_for_delivery':
-      return `🛵 Aapka order${no} rider ke saath nikal gaya — thodi der mein pohanch jayega.`;
+      return `🛵 Your order${no} is on its way with our rider — it’ll be with you shortly.`;
     case 'delivered':
       // The Google review ask (26 Oct 2026, the user: "Google reviews after delivery"): the site's /review short link
       // opens the listing's "write a review" page (next.config.mjs).
       return [
-        'Shukriya! Umeed hai maza aaya 🧀',
-        `Sirf 1 minute: Google par review de dein, hamein bohot madad milti hai ⭐ ${SITE_URL}/review`,
-        'Agli baar bhi yahin *menu* likh kar order karein.',
+        'Thank you! We hope you enjoyed it 🧀',
+        `Got a minute? A Google review helps us a lot ⭐ ${SITE_URL}/review`,
+        'Next time, just type *menu* here to order.',
       ].join('\n');
     case 'cancelled':
-      return `Maaf kijiye, aapka order${no} cancel ho gaya. Koi sawal ho to yahin message karein.`;
+      return `Sorry, your order${no} was cancelled. Any questions? Message us here.`;
     default:
       return null;
   }

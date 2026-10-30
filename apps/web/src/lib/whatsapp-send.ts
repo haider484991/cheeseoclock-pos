@@ -29,18 +29,18 @@ export function greetingName(profileName: string | null): string | null {
 /** The reply's words: open, the link to order now; closed, the hours and the link for later. */
 export function autoReplyText(o: { shop: ShopFacts; open: boolean; link: string; profileName: string | null }): string {
   const name = greetingName(o.profileName);
-  const hello = `Assalam o Alaikum${name ? ` ${name}` : ''}!`;
+  const hello = `Hi${name ? ` ${name}` : ''}!`;
   if (o.open) {
     return [
-      `${hello} ${shopNameProse(o.shop)} mein khush aamdeed 🧀`,
-      'Apna order is link se karein, seedha kitchen mein jata hai. Aapka naam aur number pehle se bhara hoga:',
+      `${hello} Welcome to ${shopNameProse(o.shop)} 🧀`,
+      'Order from this link — it goes straight to the kitchen. Your name and number are filled in for you:',
       o.link,
-      'Koi sawal ho to yahin message karein.',
+      'Any questions? Message us here.',
     ].join('\n');
   }
   return [
-    `${hello} Abhi hum band hain (${shopHoursInSentence(o.shop)}) 🧀`,
-    'Menu dekh lein, aur khulte hi isi link se order karein:',
+    `${hello} We’re closed right now (${shopHoursInSentence(o.shop)}) 🧀`,
+    'Have a look at the menu, and order from this link once we open:',
     o.link,
   ].join('\n');
 }
