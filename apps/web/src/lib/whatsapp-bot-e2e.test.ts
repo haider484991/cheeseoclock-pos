@@ -267,7 +267,9 @@ describe('WhatsApp ordering bot, end to end', () => {
       for (const tap of ['i:lc', 'm:pz-tikka', 'f:pickup']) await customer(TESTER_3, { tap });
       const done = (await customer(TESTER_3, { tap: 'y:confirm' })) as unknown as Array<Record<string, unknown>>;
       expect(words(done[0] as (typeof sent)[number])).toContain('✅ *Order ho gaya!*');
-      const toMeta = done.slice(1) as Array<{ data?: Array<Record<string, unknown>> }>;
+      // a pick-up: the shop's pin to tap, then Meta hears of the order
+      expect(done[1]).toMatchObject({ type: 'location', location: { name: 'Cheese O’Clock' } });
+      const toMeta = done.slice(2) as Array<{ data?: Array<Record<string, unknown>> }>;
       expect(toMeta).toHaveLength(1);
       expect(toMeta[0]!.data).toEqual([
         expect.objectContaining({

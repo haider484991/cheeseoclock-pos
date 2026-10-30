@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { PublishedMenu, PublishedMenuItem, PublishedModifierGroup } from '@cheeseoclock/shared-types';
-import { factsFromBlock } from './delivery-facts';
+import { factsFromBlock, feeRangeOfFees } from './delivery-facts';
 import { asksBot, isBotCommand, runBot, welcomeStep, zoneInText, type BotData, type BotDeps, type BotShop, type BotState, type BotStep, type OrderAnswer } from './whatsapp-bot';
 import { payloadOf, type WaOut } from './whatsapp-send';
 
@@ -75,6 +75,8 @@ const LIVE: PublishedMenu = {
   ],
 };
 const PICTURE = { url: 'https://site.test/images/whatsapp/deal-menu.jpg', deals: ['Large & Chilled'] };
+/** The shop's place as the route gives it (lib/business pin, the owner's address). */
+const PLACE = { name: 'Cheese O’Clock', street: 'Shop 3, 41-C, Rahat Commercial Area, DHA Phase 6', areaLine: 'Rahat Commercial Area, DHA Phase 6', lat: 24.8082972, lng: 67.0684383 };
 /** As the website charges today: 10% off the food on a pick-up and on a delivery, the regular pizzas 20%. */
 const LIVE_OFFERS: Partial<BotShop> = {
   menu: LIVE,
@@ -84,6 +86,8 @@ const LIVE_OFFERS: Partial<BotShop> = {
   buy1Get1Hours: '12–7 PM',
   buy1Get1Open: true,
   menuPicture: PICTURE,
+  place: PLACE,
+  reachKm: 8,
 };
 
 function shop(over: Partial<BotShop> = {}): BotShop {
@@ -140,17 +144,27 @@ function chat(s: BotShop = shop(), deps: BotDeps = fakeDeps().deps, profileName:
       saved = { state: step.state, data: step.data };
       return step;
     },
+    /** The step saved now (to run the bot on a turn `send` can't make: a shared location). */
+    saved: () => saved,
+    /** A turn run outside `send`, kept as the step it saved. */
+    async step(run: Promise<BotStep>) {
+      const step = await run;
+      saved = { state: step.state, data: step.data };
+      return step;
+    },
   };
 }
 
 /** A message's words (a picture's caption); the options it offers to tap, their words; what a step said and offered. */
-const textOf = (m: WaOut | undefined): string => (!m ? '' : m.type === 'image' ? m.caption : m.body);
+const textOf = (m: WaOut | undefined): string => (!m ? '' : m.type === 'image' ? m.caption : m.type === 'location' ? `[pin ${m.lat},${m.lng} ${m.name}: ${m.address}]` : m.body);
 const ids = (m: WaOut | undefined): string[] => (m?.type === 'buttons' ? m.buttons.map((b) => b.id) : m?.type === 'list' ? m.sections.flatMap((s) => s.rows.map((r) => r.id)) : []);
 const titles = (m: WaOut | undefined): string[] => (m?.type === 'buttons' ? m.buttons.map((b) => b.title) : m?.type === 'list' ? m.sections.flatMap((s) => s.rows.map((r) => r.title)) : []);
 const opts = (s: BotStep): string[] => s.data.choices ?? [];
 const said = (s: BotStep): string => s.out.map(textOf).join('\n\n');
 const last = (s: BotStep): WaOut | undefined => s.out.at(-1);
 const TAP = '👇 *Neeche button dabayein*';
+/** Where the default areas deliver (delivery-facts' defaults: DHA and Clifton). */
+const DELIVERY_LINE = `🛵 Delivery: DHA aur Clifton (${feeRangeOfFees(factsFromBlock(null).zones.filter((z) => z.active).map((z) => z.feeCents))}) · 🏃 Pick-up bhi`;
 
 describe('the WhatsApp ordering bot', () => {
   it('a whole delivery order in taps: the deal, its pizza (the drink is the usual), Delivery, the address, OK', async () => {
@@ -159,10 +173,13 @@ describe('the WhatsApp ordering bot', () => {
 
     const menu = await c.send({ text: 'menu' });
     expect(menu.state).toBe('menu');
-    // No picture for this menu: the deals to tap (one deal here, so three buttons with the pizzas and burgers).
+    // No picture for this menu: the deals to tap (one deal here, so three buttons with the pizzas and burgers), the
+    // deal written out with what comes in it, and where the shop delivers on top.
     expect(menu.out).toHaveLength(1);
     expect(menu.out[0]).toMatchObject({ type: 'buttons' });
-    expect(textOf(menu.out[0])).toBe(`🔥 *Hamari deals* (tax shamil)\n\n${TAP}`);
+    expect(textOf(menu.out[0])).toBe(
+      `${DELIVERY_LINE}\n\n🔥 *Hamari deals* (tax shamil)\n\n1️⃣ *Large & Chilled* — Rs 1,800\n      _Large 12" regular pizza + 1 litre drink_\n\n${TAP}`,
+    );
     expect(ids(menu.out[0])).toEqual(['i:deal-lc', 'o:pizza', 'o:burger']);
     expect(titles(menu.out[0])).toEqual(['1. Large & Chilled', '🍕 Pizza', '🍔 Burger']);
 
@@ -219,8 +236,9 @@ describe('the WhatsApp ordering bot', () => {
     expect(w.state).toBe('menu');
     expect(w.out).toHaveLength(1);
     expect(w.out[0]).toMatchObject({ type: 'buttons', image: 'https://site.test/images/whatsapp/deal-menu.jpg' });
+    // Where the shop is and where it delivers, under the deals (30 Oct 2026: ad chats asked, and came from too far).
     expect(textOf(w.out[0])).toBe(
-      `Assalam o Alaikum Haider! Cheese O’Clock mein khush aamdeed 🧀\n👆 Picture mein hamari deals hain — deal ka *number* bhejein (jaise *5*)\n🎁 Buy 1 Get 1 abhi chal raha hai (12–7 PM)\n\n${TAP}`,
+      `Assalam o Alaikum Haider! Cheese O’Clock mein khush aamdeed 🧀\n👆 Picture mein hamari deals hain — deal ka *number* bhejein (jaise *5*)\n🎁 Buy 1 Get 1 abhi chal raha hai (12–7 PM)\n\n📍 Shop: Rahat Commercial Area, DHA Phase 6\n${DELIVERY_LINE}\n\n${TAP}`,
     );
     // While Buy 1 Get 1 sells it has a button; a number typed is a printed deal (then Buy 1 Get 1).
     expect(ids(w.out[0])).toEqual(['o:deals', 'o:b1g1', 'o:pizza']);
@@ -238,21 +256,43 @@ describe('the WhatsApp ordering bot', () => {
     expect(payloadOf('923088440608', w.out[0]!)).toMatchObject({ type: 'interactive', interactive: { type: 'button', header: { type: 'image', image: { link: 'https://site.test/images/whatsapp/deal-menu.jpg' } } } });
   });
 
-  it('the start’s buttons: Deals behind a list button (with Buy 1 Get 1 while it sells), Buy 1 Get 1, Pizza, Burger', async () => {
+  it('the start’s buttons: Deals behind a list button (with Buy 1 Get 1 while it sells), Buy 1 Get 1, Pizza, Burger — each one written out too', async () => {
     const c = chat(shop(LIVE_OFFERS));
     const deals = await c.send({ tap: 'o:deals' });
     expect(deals.out[0]).toMatchObject({ type: 'list', button: 'Deal chunein' });
     expect(ids(deals.out[0])).toEqual(['i:deal-lc', 'i:b1-lm', 'o:pizza', 'o:burger']);
     expect(titles(deals.out[0])).toEqual(['1. Large & Chilled', '🎁 Large + Free Medium', '🍕 Pizza', '🍔 Burger']);
+    // The rows are hidden until the list's button is tapped: the deals are in the message as well (30 Oct 2026).
+    expect(textOf(deals.out[0])).toBe(
+      '🔥 *Hamari deals* (tax shamil)\n\n1️⃣ *Large & Chilled* — Rs 1,800\n      _Large 12" regular pizza + 1 litre drink_\n2️⃣ 🎁 *Large + Free Medium* — Rs 2,000\n      _Any Large 12" regular pizza + any Medium 9" regular pizza FREE._\n\n👇 Neeche *Deal chunein* button dabayein',
+    );
     const b1 = await c.send({ tap: 'o:b1g1' });
-    expect(textOf(b1.out[0])).toBe(`🎁 *Buy 1 Get 1* · roz 12–7 PM (tax shamil)\n\n${TAP}`);
+    expect(textOf(b1.out[0])).toBe(`🎁 *Buy 1 Get 1* · roz 12–7 PM (tax shamil)\n\n1️⃣ *Large + Free Medium* — Rs 2,000\n      _Any Large 12" regular pizza + any Medium 9" regular pizza FREE._\n\n${TAP}`);
     expect(ids(b1.out[0])).toEqual(['i:b1-lm']);
     expect(ids((await c.send({ tap: 'o:pizza' })).out[0])).toEqual(['p:fz-m', 'p:tk-m', 'o:sig']);
     expect(ids((await c.send({ tap: 'o:sig' })).out[0])).toEqual(['i:sig-star']);
     const burgers = await c.send({ tap: 'o:burger' });
     expect(burgers.out[0]).toMatchObject({ type: 'list', button: 'Burger chunein' });
-    expect(textOf(burgers.out[0])).toBe('🍔 *Burgers* — 🔥 *10% OFF* (+ tax)\n\n👇 Neeche *Burger chunein* button dabayein');
+    expect(textOf(burgers.out[0])).toBe('🍔 *Burgers* — 🔥 *10% OFF* (+ tax)\n\n1️⃣ *Classic Crispy Chicken* — ~Rs 700~ *Rs 630*\n\n👇 Neeche *Burger chunein* button dabayein');
     expect(burgers.out[0]!.type === 'list' && burgers.out[0]!.sections[0]!.rows[0]).toEqual({ id: 'i:burger', title: 'Classic Crispy Chicken', description: 'Rs 630 (pehle Rs 700)' });
+  });
+
+  it('a list too long for one message: every option written out first as a text, then the list button, numbers still picking', async () => {
+    const deals = Array.from({ length: 10 }, (_, i) =>
+      item(`d${i}`, `Family Deal number ${i + 1}`, 2000 + i * 100, [], { taxIncluded: true, noDiscount: true, description: `${i + 2} large pizzas, a 1.5 litre drink, two portions of fries and four dips on the side` }),
+    );
+    const c = chat(shop({ menu: { ...MENU, categories: [{ posCategoryId: 'c-x', name: 'Value Deals', displayOrder: 1, items: deals }] } }));
+    const list = await c.send({ tap: 'o:deals' });
+    expect(list.out.map((m) => m.type)).toEqual(['text', 'list']);
+    const all = textOf(list.out[0]);
+    expect(all.startsWith('🔥 *Hamari deals* (tax shamil)\n\n1️⃣ *Family Deal number 1* — Rs 2,000\n')).toBe(true);
+    expect(all).toContain('🔟 *Family Deal number 10* — Rs 2,900');
+    expect(textOf(list.out[1])).toBe('👆 Upar wali list mein se chunein\n👇 Neeche *Deal chunein* button dabayein\n(ya uska *number* bhejein)');
+    expect(ids(list.out[1])).toHaveLength(10);
+    expect((await c.send({ text: '10' })).data.cart).toEqual([{ posItemId: 'd9', quantity: 1, modifierIds: [] }]);
+    // Every list is written out, an area's or a choice's too (the plain titles and their second lines).
+    const areas = await chat(shop(), fakeDeps().deps, 'Haider Ali', { state: 'zones', data: { cart: [{ posItemId: 'burger', quantity: 1, modifierIds: [] }], fulfilment: 'delivery' } }).send({ tap: 'zg:0' });
+    expect(textOf(areas.out[0])).toMatch(/^📍 DHA mein kahan\?\n\n1️⃣ DHA Phase 1 — /);
   });
 
   it('the usual drink and dip are set, and changed by typing their name at the order (or at its end)', async () => {
@@ -284,7 +324,9 @@ describe('the WhatsApp ordering bot', () => {
     const c = chat(shop({ ...LIVE_OFFERS, menu }));
     const list = await c.send({ text: 'pizza' });
     expect(list.out[0]).toMatchObject({ type: 'list', button: 'Pizza chunein' });
-    expect(textOf(list.out[0])).toBe('🍕 *Regular pizza* — 🔥 *20% OFF* (+ tax)\nMedium ~Rs 1,500~ *Rs 1,200* · Large ~Rs 2,000~ *Rs 1,600*\n\n👇 Neeche *Pizza chunein* button dabayein');
+    expect(textOf(list.out[0])).toBe(
+      '🍕 *Regular pizza* — 🔥 *20% OFF* (+ tax)\nMedium ~Rs 1,500~ *Rs 1,200* · Large ~Rs 2,000~ *Rs 1,600*\n\n1️⃣ *Fajita Pizza*\n2️⃣ *Chicken Tikka Pizza*\n3️⃣ *Malai Supreme*\n4️⃣ *Cheesalious*\n5️⃣ ⭐ Signature pizza — Cheesy Star\n\n👇 Neeche *Pizza chunein* button dabayein',
+    );
     expect(list.out[0]!.type === 'list' && list.out[0]!.sections[0]!.rows).toEqual([
       { id: 'p:fz-m', title: 'Fajita Pizza', description: 'Medium Rs 1,200 · Large Rs 1,600' },
       { id: 'p:tk-m', title: 'Chicken Tikka Pizza', description: 'Medium Rs 1,200 · Large Rs 1,600' },
@@ -505,18 +547,114 @@ describe('the WhatsApp ordering bot', () => {
     expect(['Hello', 'Salam', 'Kitni der lagegi?', 'Bhai jaldi bhej dena', 'Order kab aayega', ''].some(asksBot)).toBe(false);
   });
 
-  it('an area not on the list offers pick-up or staff as buttons; a WhatsApp name that is not a name is asked for', async () => {
-    const c = chat(shop(), fakeDeps().deps, '🍕🍕');
+  it('an area not on the list: the areas that are, the shop’s pin and address for a pick-up, Pick-up or staff; a WhatsApp name that is not a name is asked for', async () => {
+    const c = chat(shop({ place: PLACE }), fakeDeps().deps, '🍕🍕');
     await c.send({ tap: 'i:burger' });
     await c.send({ tap: 'f:delivery' });
     expect((await c.send({ text: 'Gulshan Block 5, House 9' })).state).toBe('zones');
     const none = await c.send({ tap: 'z:none' });
-    expect(ids(none.out[0])).toEqual(['f:pickup', 'o:staff']);
-    expect(textOf(none.out[0])).toBe(`😔 Hamari delivery abhi in areas tak hai.\n\n${TAP}`);
+    expect(none.out[0]).toEqual({ type: 'location', lat: PLACE.lat, lng: PLACE.lng, name: PLACE.name, address: PLACE.street });
+    expect(ids(none.out[1])).toEqual(['f:pickup', 'o:staff']);
+    expect(textOf(none.out[1])).toBe(`😔 Hamari delivery abhi in areas tak hai: *DHA aur Clifton*\n\n🏃 Pick-up kar sakte hain — shop yahan hai 👆\n${PLACE.street}\n\n${TAP}`);
+    expect(payloadOf('923088440608', none.out[0]!)).toEqual({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: '923088440608',
+      type: 'location',
+      location: { latitude: PLACE.lat, longitude: PLACE.lng, name: PLACE.name, address: PLACE.street },
+    });
+    // Without the shop's place: the areas, and the buttons.
+    const bare = chat(shop(), fakeDeps().deps);
+    await bare.send({ tap: 'i:burger' });
+    expect(textOf((await bare.send({ tap: 'z:none' })).out[0])).toBe(`😔 Hamari delivery abhi in areas tak hai: *DHA aur Clifton*\n\n${TAP}`);
     const name = await c.send({ tap: 'z:dha-6' });
     expect(name.out[0]).toEqual({ type: 'text', body: '👤 Order kis naam par? Apna *naam* bhejein' });
     expect(name.data.choices).toBeUndefined();
     expect((await c.send({ text: 'Bilal' })).state).toBe('confirm');
+  });
+
+  it('“where are you?” at any step (the 29 Oct 2026 chat …063): the shop’s pin, its address, the areas and their charge — never a note, never an address being typed', async () => {
+    const { deps, bodies } = fakeDeps();
+    const s = shop(LIVE_OFFERS);
+    const c = chat(s, deps);
+    const where = `📍 *Cheese O’Clock*: ${PLACE.street}\n🛵 Delivery sirf DHA aur Clifton mein — charges ${feeRangeOfFees(s.zones.filter((z) => z.active).map((z) => z.feeCents))}\n🏃 Pick-up: shop se khud le ja sakte hain`;
+    const asked = await c.send({ text: 'Adress to bta den pickup kr bhe skte he k nhi' });
+    expect(asked.out[0]).toMatchObject({ type: 'location', lat: PLACE.lat, lng: PLACE.lng });
+    expect(textOf(asked.out[1])).toBe(where);
+    expect(asked.state).toBe('menu');
+    // What else they asked with it is answered too: the pizzas.
+    const both = await c.send({ text: 'Large pizza and adress' });
+    expect(both.out.map((m) => m.type)).toEqual(['location', 'text', 'buttons']);
+    expect(ids(both.out[2])).toEqual(['p:fz-m', 'p:tk-m', 'o:sig']);
+    // At the end, it is a question, not the order's note; an address typed at the address step is the address.
+    await c.send({ tap: 'p:tk-m' });
+    await c.send({ tap: 'i:tk-l' });
+    const confirm = await c.send({ tap: 'f:pickup' });
+    expect(said(confirm)).toContain(`🏃 Pick-up: shop se le jayein — ${PLACE.street}`);
+    const begged = await c.send({ text: 'Allah k wasten aria bta den k hm Le bhe skte he k nhi' });
+    expect(begged.state).toBe('confirm');
+    expect(begged.data.notes).toBeUndefined();
+    expect(textOf(begged.out[1])).toBe(where);
+    expect(bodies.every((b) => !b['notes'])).toBe(true);
+    // The order placed: where to come, as a pin.
+    const placed = await c.send({ tap: 'y:confirm' });
+    expect(placed.out.map((m) => m.type)).toEqual(['text', 'location']);
+
+    const d = chat(s, deps);
+    await d.send({ tap: 'i:burger' });
+    expect((await d.send({ tap: 'f:delivery' })).state).toBe('address');
+    expect((await d.send({ text: 'House 12, near the main location, Street 4, DHA Phase 6' })).state).toBe('confirm');
+    // The words people used; and what is not a where-ask (a delivery's time, a hello, "mera area").
+    for (const ask of ['Delivery charges include h', 'Button nhi smgh aa rha price aria location. Btaen plz chiken Tikka barbeque flaovour', 'Address?', 'shop kahan hai', 'Aap adress bta den plz', 'location send karein']) {
+      expect(asksBot(ask)).toBe(true);
+    }
+    for (const not of ['Delivery kitni der mein?', 'Hello', 'mera area', 'Ghanti mat bajayein', 'House 5, Street 2, Phase 6']) expect(asksBot(not)).toBe(false);
+  });
+
+  it('a shared location: too far is said plainly with a pick-up; near, it is the address and the area is asked; before ordering it is kept for the delivery', async () => {
+    const { deps, bodies } = fakeDeps();
+    const s = shop(LIVE_OFFERS);
+    const turn = (c: ReturnType<typeof chat>, lat: number, lng: number, name: string | null = null, address: string | null = null) =>
+      runBot({ waId: '923088440608', profileName: 'Haider Ali', text: null, reply: null, location: { lat, lng, name, address } }, c.saved(), s, deps);
+
+    // Lyari (29 Oct 2026, chat …206): 9.5 km — not delivered, said so, with the shop for a pick-up.
+    const far = chat(s, deps);
+    await far.send({ tap: 'i:burger' });
+    await far.send({ tap: 'f:delivery' });
+    const lyari = await far.step(turn(far, 24.8654712, 66.9986116));
+    expect(lyari.out[0]).toMatchObject({ type: 'location', lat: PLACE.lat });
+    expect(textOf(lyari.out[1])).toBe(
+      `😔 Aapki location shop se ~9 km door hai — wahan delivery nahi hoti.\n🛵 Hamari delivery in areas tak hai: *DHA aur Clifton*\n\n🏃 Pick-up kar sakte hain — shop yahan hai 👆\n${PLACE.street}\n\n${TAP}`,
+    );
+    expect(ids(lyari.out[1])).toEqual(['f:pickup', 'o:staff']);
+    expect(lyari.data.pin).toBeUndefined();
+
+    // Near (Phase 5): the pin is the address, the area is asked, and the order carries the pin as a map link.
+    const near = chat(s, deps);
+    await near.send({ tap: 'i:burger' });
+    await near.send({ tap: 'f:delivery' });
+    const areas = await near.step(turn(near, 24.8155, 67.0570));
+    expect(areas.state).toBe('zones');
+    expect(textOf(areas.out[0]).startsWith('📍 Location mil gayi ✅ — aapka area kaunsa hai?')).toBe(true);
+    const confirm = await near.send({ tap: 'z:dha-5' });
+    expect(confirm.state).toBe('confirm');
+    expect(bodies.at(-1)).toMatchObject({ fulfilment: 'delivery', zoneId: 'dha-5', addressLine: 'Location pin (map)', locationPin: { lat: 24.8155, lng: 67.057 } });
+    expect(said(confirm)).toContain('📍 Location pin (map) (DHA Phase 5)');
+
+    // A place picked on the map names its area: straight to the price, its name the address.
+    const named = chat(s, deps);
+    await named.send({ tap: 'i:burger' });
+    const priced = await named.step(turn(named, 24.8001, 67.0640, 'Sunset Lane', 'Khayaban-e-Shamsheer, DHA Phase 6, Karachi'));
+    expect(priced.state).toBe('confirm');
+    expect(bodies.at(-1)).toMatchObject({ zoneId: 'dha-6', addressLine: 'Sunset Lane, Khayaban-e-Shamsheer, DHA Phase 6, Karachi' });
+
+    // Before any order: kept; Delivery later asks only the area.
+    const early = chat(s, deps);
+    const kept = await early.step(turn(early, 24.8155, 67.0570));
+    expect(said(kept)).toBe('✅ Location mil gayi! Pehle apni deal chunein — phir *Delivery* dabayein 👆');
+    expect(kept.state).toBe('menu');
+    await early.send({ tap: 'i:burger' });
+    expect((await early.send({ tap: 'f:delivery' })).state).toBe('zones');
   });
 
   it('“Badlein” goes back to the order, and Delivery then asks the address afresh', async () => {
@@ -607,7 +745,7 @@ describe('the WhatsApp ordering bot', () => {
 
   it('the deals list greets by name, and keeps to WhatsApp’s ten rows however many deals there are', () => {
     const w = welcomeStep({ shopName: 'Cheese O’Clock', profileName: 'Haider Ali', shop: shop() });
-    expect(textOf(w.out[0]).startsWith('Assalam o Alaikum Haider! Cheese O’Clock mein khush aamdeed 🧀\n\n🔥 *Hamari deals*')).toBe(true);
+    expect(textOf(w.out[0]).startsWith(`Assalam o Alaikum Haider! Cheese O’Clock mein khush aamdeed 🧀\n\n${DELIVERY_LINE}\n\n🔥 *Hamari deals*`)).toBe(true);
     expect(textOf(welcomeStep({ shopName: 'Cheese O’Clock', profileName: null, shop: shop() }).out[0]).startsWith('Assalam o Alaikum! Cheese O’Clock')).toBe(true);
     const many = Array.from({ length: 12 }, (_, i) => item(`x${i}`, `Deal number ${i + 1}`, 1000 + i, [], { taxIncluded: true, noDiscount: true }));
     const big = welcomeStep({ shopName: 'Shop', profileName: null, shop: shop({ menu: { ...MENU, categories: [{ posCategoryId: 'c-x', name: 'Value Deals', displayOrder: 1, items: many }, { posCategoryId: 'c-b', name: 'Buy 1 Get 1 Deals', displayOrder: 2, items: [B1G1] }] }, buy1Get1Open: true }) });

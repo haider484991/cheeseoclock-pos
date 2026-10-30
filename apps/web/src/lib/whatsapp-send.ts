@@ -57,6 +57,8 @@ export type WaOut =
   | { type: 'image'; link: string; caption: string }
   /** Up to three tap buttons under the words; `image`: a picture on top (a public https address WhatsApp fetches). */
   | { type: 'buttons'; body: string; buttons: Array<{ id: string; title: string }>; footer?: string; image?: string }
+  /** A map pin the customer taps to open in their map app: the shop, for a pick-up or "address kya hai?" (30 Oct 2026). */
+  | { type: 'location'; lat: number; lng: number; name: string; address: string }
   | {
       type: 'list';
       body: string;
@@ -76,6 +78,7 @@ export function payloadOf(to: string, m: WaOut): Record<string, unknown> {
   const base = { messaging_product: 'whatsapp', recipient_type: 'individual', to };
   if (m.type === 'text') return { ...base, type: 'text', text: { body: fit(m.body, 4096), preview_url: true } };
   if (m.type === 'image') return { ...base, type: 'image', image: { link: m.link, caption: fit(m.caption, 1024) } };
+  if (m.type === 'location') return { ...base, type: 'location', location: { latitude: m.lat, longitude: m.lng, name: fit(m.name, 100), address: fit(m.address, 300) } };
   const footer = m.footer ? { footer: { text: fit(m.footer, 60) } } : {};
   if (m.type === 'buttons') {
     return {

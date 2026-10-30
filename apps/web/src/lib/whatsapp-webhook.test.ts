@@ -208,8 +208,21 @@ describe('readCall', () => {
   });
 
   it('answers people writing, never a reaction or a system notice', () => {
-    expect(['text', 'image', 'audio', 'location', 'interactive', 'button', 'order', 'request_welcome'].every(answersKind)).toBe(true);
-    expect(['reaction', 'system', 'unsupported'].some(answersKind)).toBe(false);
+    // `unsupported` too (30 Oct 2026): an ad's first message came as one, and went unanswered.
+    expect(['text', 'image', 'audio', 'location', 'interactive', 'button', 'order', 'request_welcome', 'unsupported'].every(answersKind)).toBe(true);
+    expect(['reaction', 'system'].some(answersKind)).toBe(false);
+  });
+
+  it('reads a shared location: the pin, and the place’s name and address when it has them; nothing for a broken one', () => {
+    const call = (location: unknown) =>
+      readCall({
+        object: 'whatsapp_business_account',
+        entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: '1356740797521773' }, messages: [{ from: '923365117206', id: 'wamid.pin', timestamp: '1793380000', type: 'location', location }] } }] }],
+      }).inbound[0];
+    expect(call({ latitude: 24.8654712, longitude: 66.9986116 })).toMatchObject({ kind: 'location', text: null, location: { lat: 24.8654712, lng: 66.9986116, name: null, address: null } });
+    expect(call({ latitude: 24.8, longitude: 67.06, name: 'Sunset Lane', address: 'DHA Phase 6' })?.location).toEqual({ lat: 24.8, lng: 67.06, name: 'Sunset Lane', address: 'DHA Phase 6' });
+    expect(call({ latitude: 0, longitude: 0 })?.location).toBeNull();
+    expect(call({ latitude: 'x', longitude: 67 })?.location).toBeNull();
   });
 });
 

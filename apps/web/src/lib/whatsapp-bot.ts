@@ -8,7 +8,7 @@ import {
   type PublishedMenuItem,
   type PublishedModifierGroup,
 } from '@cheeseoclock/shared-types';
-import { zoneNameWithLocalNames, type FactZone } from './delivery-facts';
+import { feeRangeOfFees, zoneNameWithLocalNames, type FactZone } from './delivery-facts';
 import { formatCents } from './format';
 import { isDealSection, isPickupOnly } from './menu-view';
 import { validateModifierSelection } from './order-validation';
@@ -89,6 +89,19 @@ export interface BotData {
   nudged?: boolean;
   /** The options the bot's last message numbered, in order (the ids a tap would send): a number typed is one of them. */
   choices?: string[];
+  /** A location they shared for the delivery: on the order's notes as a map link (api/orders locationPin). */
+  pin?: { lat: number; lng: number } | null;
+}
+
+/** Where the shop is (lib/business, lib/shop-facts): said in the welcome, sent as a map pin for a pick-up. */
+export interface ShopPlace {
+  name: string;
+  /** The full street address ("Shop 3, Ground Floor, 41-C, …"): the pin's words, a pick-up's line. */
+  street: string;
+  /** The short one ("Rahat Commercial Area, DHA Phase 6, Karachi"): the welcome's line. */
+  areaLine: string;
+  lat: number;
+  lng: number;
 }
 
 /** What the bot knows of the shop for this message (the route reads it). */
@@ -117,6 +130,16 @@ export interface BotShop {
   menuPicture?: { url: string; deals: readonly string[] } | null;
   /** What to say while the shop takes no orders (the hours). */
   closedText: string;
+  /**
+   * Where the shop is (30 Oct 2026: a customer asked for the address four times and ordered a pick-up to find out; he
+   * lived in Orangi Town). Said in the welcome, sent as a pin when asked, for a pick-up, or when an area is not served.
+   */
+  place?: ShopPlace | null;
+  /**
+   * How far from the shop a shared location can still be a delivery, in km: farther, the bot says plainly that it is
+   * not (the areas have names, not a map; the farthest open area is under this). None: every pin asks for the area.
+   */
+  reachKm?: number;
 }
 
 /** The website's order answer (api/orders), as the bot reads it. */
@@ -157,6 +180,8 @@ export interface BotTurn {
   order?: Array<{ posItemId: string; quantity: number }> | null;
   /** The day's hello (helloLine), when this message is the customer's first of the day: put over the menu if it is shown. */
   hello?: string | null;
+  /** A location they shared (lib/whatsapp-webhook): their pin, and the place's name and address when it has them. */
+  location?: { lat: number; lng: number; name: string | null; address: string | null } | null;
 }
 
 export interface BotStep {
@@ -216,7 +241,28 @@ const ASK_WORDS = new Set(['menu', 'list', 'deal', 'deals', 'offer', 'offers', '
  */
 export function asksBot(text: string): boolean {
   const said = wordsOf(text);
-  return said.length > 0 && said.length <= 12 && (asksPrice(said) || asksBuy1Get1(text, said) || said.some((w) => ASK_WORDS.has(w)));
+  return (said.length > 0 && said.length <= 12 && (asksPrice(said) || asksBuy1Get1(text, said) || said.some((w) => ASK_WORDS.has(w)))) || asksWhere(said);
+}
+
+/**
+ * Where the shop is, where it delivers, what a delivery costs — asked in the chats of 29 Oct 2026 as "Adress to bta den
+ * pickup kr bhe skte he k nhi", "Allah k wasten aria bta den", "Delivery charges include h", "price aria location".
+ * A place word with an asking word ("bta den", "kya hai", "send"), or a short message of a place word alone; or the
+ * delivery's charge. Never an address itself ("House 12, near the location of …" asks nothing).
+ */
+const WHERE_WORDS = new Set(['address', 'adress', 'addres', 'adres', 'adrees', 'location', 'locaton', 'lokation', 'kahan', 'kahaan', 'kidhar', 'where', 'area', 'aria', 'areas']);
+/** Place words that ask on their own ("Address?", "shop kahan hai"): "area" does not ("mera area"). */
+const WHERE_ASKS = new Set(['kahan', 'kahaan', 'kidhar', 'where']);
+const WHERE_SHORT = new Set(['address', 'adress', 'addres', 'adres', 'adrees', 'location', 'locaton', 'lokation']);
+const TELL_WORDS = new Set(['bta', 'btao', 'bata', 'batao', 'btaen', 'btain', 'btayen', 'bataen', 'batain', 'batayein', 'batayen', 'bataein', 'den', 'dein', 'send', 'bhejo', 'bhej', 'bhejein', 'share', 'kya', 'kia', 'what', 'which', 'konsa', 'kaunsa', 'plz', 'please', 'pls', 'apka', 'aapka', 'your']);
+const CHARGE_WORDS = new Set(['charge', 'charges', 'charjes', 'fee', 'fees', 'kiraya', 'include', 'included', 'free']);
+/** "kitni der", "kab tak": a delivery's time, not its charge. */
+const TIME_WORDS = new Set(['der', 'time', 'minute', 'minutes', 'mins', 'min', 'ghanta', 'kab', 'jaldi']);
+export function asksWhere(said: readonly string[]): boolean {
+  if (said.length === 0 || said.length > 14) return false;
+  if (said.includes('delivery') && !said.some((w) => TIME_WORDS.has(w)) && said.some((w) => CHARGE_WORDS.has(w) || HOW_MUCH.has(w))) return true;
+  if (!said.some((w) => WHERE_WORDS.has(w))) return false;
+  return said.some((w) => WHERE_ASKS.has(w) || TELL_WORDS.has(w)) || (said.length <= 5 && said.some((w) => WHERE_SHORT.has(w)));
 }
 
 /** "3", "no 3", "#3", "3." → [3]; "1 4 6", "1,4,6" → [1, 4, 6]; anything else → null. Urdu digits read as digits. */
@@ -540,25 +586,47 @@ function keyFor(count: number): (n: number) => string {
   return count <= 10 ? (n) => KEYS[n]! : (n) => `*${n}.*`;
 }
 
+/** WhatsApp takes 1,024 letters over buttons or a list (lib/whatsapp-send fit): more goes in a text message before it. */
+const TAP_BODY_MAX = 1024;
+
+/** The options as lines to read, numbered as a typed number picks them: "1️⃣ Fajita Pizza — Medium <price> · …". */
+function optionLines(options: readonly Option[]): string[] {
+  const key = keyFor(options.length);
+  return options.map((o, k) => `${key(k + 1)} ${o.title}${o.description ? ` — ${o.description}` : ''}`);
+}
+
 /**
  * Options as WhatsApp's own: three or fewer whose words fit a button are tap buttons under the message (`image` on
  * top when given); more, up to a list's ten, go behind one clearly named list button (`label`); more than that go as
  * numbered text. The message ends with what to tap.
+ *
+ * A list's options are written out in the message too (30 Oct 2026, the user: a tap on Deals or Burger "should show
+ * all deals or burgers list … so he see it first time"): WhatsApp hides a list's rows until its button is tapped, and
+ * people stopped there. `shown`: the lines to write instead of the plain ones (the deals with their contents), and
+ * written over buttons too. Too long for one message, they go first as a text of their own and the list follows.
  */
-function tapView(body: readonly string[], options: readonly Option[], label: string, image?: string): View {
+function tapView(body: readonly string[], options: readonly Option[], label: string, image?: string, shown?: readonly string[]): View {
   const choices = options.map((o) => o.id);
+  const withLines = (lines: readonly string[] | undefined, tap: string): { first: WaOut[]; body: string } => {
+    const all = [...body, ...(lines && lines.length > 0 ? ['', ...lines] : []), '', tap].join('\n');
+    if (all.length <= TAP_BODY_MAX || !lines) return { first: [], body: all };
+    return { first: texts([[...body, '', ...lines].join('\n')]), body: `👆 Upar wali list mein se chunein\n${tap}\n(ya uska *number* bhejein)` };
+  };
   if (options.length > 0 && options.length <= 3 && options.every((o) => o.title.length <= BUTTON_WORDS)) {
+    const m = withLines(shown, '👇 *Neeche button dabayein*');
     return {
-      out: [{ type: 'buttons', body: [...body, '', '👇 *Neeche button dabayein*'].join('\n'), buttons: options.map((o) => ({ id: o.id, title: o.title })), ...(image ? { image } : {}) }],
+      out: [...m.first, { type: 'buttons', body: m.body, buttons: options.map((o) => ({ id: o.id, title: o.title })), ...(image ? { image } : {}) }],
       choices,
     };
   }
   if (options.length > 0 && options.length <= LIST_ROWS) {
+    const m = withLines(shown ?? optionLines(options), `👇 Neeche *${label}* button dabayein`);
     return {
       out: [
+        ...m.first,
         {
           type: 'list',
-          body: [...body, '', `👇 Neeche *${label}* button dabayein`].join('\n'),
+          body: m.body,
           button: label,
           sections: [
             {
@@ -576,8 +644,7 @@ function tapView(body: readonly string[], options: readonly Option[], label: str
       choices,
     };
   }
-  const key = keyFor(options.length);
-  return { out: texts([[...body, '', ...options.map((o, k) => `${key(k + 1)} ${o.title}${o.description ? ` — ${o.description}` : ''}`), '', '👉 *Number* bhejein'].join('\n')]), choices };
+  return { out: texts([[...body, '', ...(shown ?? optionLines(options)), '', '👉 *Number* bhejein'].join('\n')]), choices };
 }
 
 /** An item's emoji: pizza (the deals are pizza-led), fries and sides, a drink, a dip, a burger. */
@@ -692,15 +759,24 @@ function startView(shop: BotShop, first?: string): View {
       { id: 'o:pizza', title: '🍕 Pizza' },
       ...(b1.length > 0 ? [] : [{ id: 'o:burger', title: '🍔 Burger' }]),
     ];
-    const v = tapView([...(first ? [first] : []), '👆 Picture mein hamari deals hain — deal ka *number* bhejein (jaise *5*)', ...(b1Line ? [b1Line] : [])], buttons, 'Chunein', shop.menuPicture.url);
+    const place = placeLines(shop);
+    const v = tapView(
+      [...(first ? [first] : []), '👆 Picture mein hamari deals hain — deal ka *number* bhejein (jaise *5*)', ...(b1Line ? [b1Line] : []), ...(place.length > 0 ? ['', ...place] : [])],
+      buttons,
+      'Chunein',
+      shop.menuPicture.url,
+    );
     // A number typed is the deal printed with it (Buy 1 Get 1 after them while it sells).
     return { out: v.out, choices: [...pictured.map((i) => `i:${i.posItemId}`), ...b1.map((i) => `i:${i.posItemId}`)] };
   }
-  return dealsView(shop, first);
+  return dealsView(shop, first, placeLines(shop));
 }
 
-/** The deals behind one list button, numbered as the picture numbers them, their price and contents under each. */
-function dealsView(shop: BotShop, first?: string): View {
+/**
+ * The deals behind one list button, numbered as the picture numbers them, their price and contents under each — and
+ * written out in the message. `place`: where the shop is and delivers, under the hello (the start without a picture).
+ */
+function dealsView(shop: BotShop, first?: string, place: readonly string[] = []): View {
   const deals = pictureDeals(shop) ?? valueDeals(shop);
   const b1 = buy1Get1Now(shop) ? buy1Get1Items(shop) : [];
   const rows: Option[] = [
@@ -712,11 +788,20 @@ function dealsView(shop: BotShop, first?: string): View {
   const b1Cut = rows.length > LIST_ROWS && b1.length > 0;
   const kept = b1Cut ? rows.slice(0, deals.length).slice(0, LIST_ROWS) : rows.slice(0, LIST_ROWS);
   const fitted = [...kept, ...(kept.length + more.length <= LIST_ROWS ? more : [])];
+  const listed = [...deals, ...b1].slice(0, kept.length);
   return tapView(
-    [...(first ? [first, ''] : []), '🔥 *Hamari deals* (tax shamil)', ...(b1Cut ? ['🎁 Buy 1 Get 1 abhi chal raha hai — *buy 1 get 1* likhein'] : [])],
+    [...(first ? [first, ''] : []), ...(place.length > 0 ? [...place, ''] : []), '🔥 *Hamari deals* (tax shamil)', ...(b1Cut ? ['🎁 Buy 1 Get 1 abhi chal raha hai — *buy 1 get 1* likhein'] : [])],
     fitted,
     'Deal chunein',
+    undefined,
+    dealLines(listed, fitted.length, (i) => (b1.includes(i) ? '🎁 ' : '')),
   );
+}
+
+/** Deals written out, numbered as typed numbers pick them: "1️⃣ *Mega Cheese Box* — Rs …" and what comes in it under. */
+function dealLines(deals: readonly PublishedMenuItem[], numbered: number, mark: (i: PublishedMenuItem) => string = () => ''): string[] {
+  const key = keyFor(numbered);
+  return deals.flatMap((i, k) => [`${key(k + 1)} ${mark(i)}*${i.name}* — ${formatCents(i.basePriceCents)}`, ...(i.description ? [`      _${i.description}_`] : [])]);
 }
 
 /** Buy 1 Get 1's deals behind one list button, their price and contents under each. */
@@ -726,6 +811,8 @@ function buy1Get1View(shop: BotShop): View {
     [`🎁 *Buy 1 Get 1*${shop.buy1Get1Hours ? ` · roz ${shop.buy1Get1Hours}` : ''} (tax shamil)`],
     b1.map((i) => ({ id: `i:${i.posItemId}`, title: i.name, description: [formatCents(i.basePriceCents), i.description].filter(Boolean).join(' · ') })),
     'Deal chunein',
+    undefined,
+    dealLines(b1, b1.length),
   );
 }
 
@@ -748,6 +835,8 @@ function familyView(shop: BotShop, at: readonly number[], more: readonly Option[
   const order = [...at].sort((a, b) => Number(/^pizzas?$/i.test(cats[b]!.name.trim())) - Number(/^pizzas?$/i.test(cats[a]!.name.trim())));
   const options: Option[] = [];
   const heads: string[] = [];
+  /** Each family written out: its name in bold, then its sizes' prices (or its price), unless every family's are the same. */
+  const lines: Array<{ name: string; prices: string | null }> = [];
   for (const i of order) {
     const cat = cats[i]!;
     const families = familiesOf(cat);
@@ -764,10 +853,20 @@ function familyView(shop: BotShop, at: readonly number[], more: readonly Option[
         title: f.name,
         description: f.items.length > 1 ? sizesPlain(f) : pricePlain(f.items[0]!.basePriceCents, offPercent(shop, f.items[0]!)),
       });
+      lines.push({
+        name: f.name,
+        prices: same ? null : f.items.length > 1 ? f.items.map((x) => `${sizeOf(x)} ${priceShown(x.basePriceCents, offPercent(shop, x))}`).join(' · ') : priceShown(f.items[0]!.basePriceCents, offPercent(shop, f.items[0]!)),
+      });
     }
   }
   const label = chooseLabel(order.map((i) => cats[i]!.name).join(' '));
-  return tapView(heads, [...options, ...more], label);
+  const all = [...options, ...more];
+  const key = keyFor(all.length);
+  const shown = [
+    ...lines.map((l, k) => `${key(k + 1)} *${l.name}*${l.prices ? ` — ${l.prices}` : ''}`),
+    ...more.map((o, k) => `${key(lines.length + k + 1)} ${o.title}${o.description ? ` — ${o.description}` : ''}`),
+  ];
+  return tapView(heads, all, label, undefined, shown);
 }
 
 /** A family's sizes as tap buttons, their price after the % off on each. */
@@ -783,10 +882,14 @@ function sizeView(shop: BotShop, items: readonly PublishedMenuItem[]): View {
 
 /** The items a typed message named, with their prices, to pick one. */
 function foundView(shop: BotShop, items: readonly PublishedMenuItem[]): View {
+  const found = items.slice(0, LIST_ROWS);
+  const key = keyFor(found.length);
   return tapView(
     ['Ye mile 👇'],
-    items.slice(0, LIST_ROWS).map((i) => ({ id: `i:${i.posItemId}`, title: shownName(i.name), description: `${pricePlain(i.basePriceCents, offPercent(shop, i))}${i.taxIncluded ? '' : ' + tax'}` })),
+    found.map((i) => ({ id: `i:${i.posItemId}`, title: shownName(i.name), description: `${pricePlain(i.basePriceCents, offPercent(shop, i))}${i.taxIncluded ? '' : ' + tax'}` })),
     'Chunein',
+    undefined,
+    found.map((i, k) => `${key(k + 1)} *${shownName(i.name)}* — ${priceShown(i.basePriceCents, offPercent(shop, i))}${i.taxIncluded ? '' : ' + tax'}`),
   );
 }
 
@@ -839,9 +942,9 @@ function fulfilmentView(shop: BotShop): View {
 function addressMessage(zone: FactZone | undefined): WaOut {
   return {
     type: 'text',
-    body: zone
-      ? `📍 *${zone.name}* — ghar no. aur street likh kar bhejein`
-      : '📍 Apna *address* likh kar bhejein\n_(ghar no., street aur area — jaise House 12, Street 4, DHA Phase 6)_',
+    body: `${
+      zone ? `📍 *${zone.name}* — ghar no. aur street likh kar bhejein` : '📍 Apna *address* likh kar bhejein\n_(ghar no., street aur area — jaise House 12, Street 4, DHA Phase 6)_'
+    }\n📎 Ya WhatsApp se apni *Location* bhej dein`,
   };
 }
 
@@ -876,12 +979,64 @@ function zonesView(shop: BotShop, body = '📍 Aapka area kaunsa hai?', group?: 
   const all = groups.flatMap((g) => g.zones);
   if (group === undefined) {
     if (all.length + 1 <= LIST_ROWS) return tapView([body], [...all.map(zoneOption), NOT_LISTED], 'Area chunein');
-    return tapView([body], [...groups.slice(0, LIST_ROWS - 1).map((g, gi) => ({ id: `zg:${gi}`, title: g.group, description: `${g.zones.length} areas` })), NOT_LISTED], 'Area chunein');
+    return tapView([body], [...groups.slice(0, LIST_ROWS - 1).map((g, gi) => ({ id: `zg:${gi}`, title: g.group, description: `${g.zones.length} ${g.zones.length === 1 ? 'area' : 'areas'}` })), NOT_LISTED], 'Area chunein');
   }
   const zones = groups[group]?.zones ?? [];
   const rows = zones.length <= LIST_ROWS ? zones : zones.slice(page * (LIST_ROWS - 1), (page + 1) * (LIST_ROWS - 1));
   const more = zones.length > LIST_ROWS && (page + 1) * (LIST_ROWS - 1) < zones.length;
   return tapView([`📍 ${groups[group]?.group ?? ''} mein kahan?`], [...rows.map(zoneOption), ...(more ? [{ id: `zp:${group}:${page + 1}`, title: 'Aur areas ➡️' }] : [])], 'Area chunein');
+}
+
+/** "DHA, Clifton aur Abysinya": the open areas' groups, as the owner names them; null when none are open. */
+function areaGroupsWords(shop: BotShop): string | null {
+  const g = zoneGroups(shop).map((x) => x.group);
+  if (g.length === 0) return null;
+  return g.length === 1 ? g[0]! : `${g.slice(0, -1).join(', ')} aur ${g.at(-1)!}`;
+}
+
+/** What a delivery costs, as the website says it: the open areas' charge or its range, or free. */
+function chargeWords(shop: BotShop): string | null {
+  const fees = shop.zones.filter((z) => z.active).map((z) => z.feeCents);
+  if (fees.length === 0) return null;
+  return Math.max(...fees) === 0 ? 'free' : feeRangeOfFees(fees);
+}
+
+/**
+ * Where the shop is and where it delivers, two short lines under the welcome (30 Oct 2026: of the 46 people the ads
+ * brought 27–30 Oct, the two who got as far as an area lived outside the delivery areas, and one asked four times).
+ */
+function placeLines(shop: BotShop): string[] {
+  const areas = areaGroupsWords(shop);
+  const charge = chargeWords(shop);
+  return [
+    ...(shop.place ? [`📍 Shop: ${shop.place.areaLine}`] : []),
+    ...(areas ? [`🛵 Delivery: ${areas}${charge ? ` (${charge})` : ''}${shop.pickupAvailable ? ' · 🏃 Pick-up bhi' : ''}`] : []),
+  ];
+}
+
+/** The shop as a map pin to tap (none when the place is not known). */
+function placePin(shop: BotShop): WaOut[] {
+  const p = shop.place;
+  return p ? [{ type: 'location', lat: p.lat, lng: p.lng, name: p.name, address: p.street }] : [];
+}
+
+/** "Address kya hai?", "delivery charges?": the shop's pin, its address in full, where it delivers and for how much. */
+function whereOut(shop: BotShop): WaOut[] {
+  const areas = areaGroupsWords(shop);
+  const charge = chargeWords(shop);
+  const lines = [
+    ...(shop.place ? [`📍 *${shop.place.name}*: ${shop.place.street}`] : []),
+    ...(areas ? [`🛵 Delivery sirf ${areas} mein${charge ? ` — charges ${charge}` : ''}`] : []),
+    ...(shop.pickupAvailable ? ['🏃 Pick-up: shop se khud le ja sakte hain'] : []),
+  ];
+  return [...placePin(shop), ...(lines.length > 0 ? [{ type: 'text' as const, body: lines.join('\n') }] : [])];
+}
+
+/** Kilometres between two points on the globe, as the crow flies. */
+function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const rad = (d: number) => (d * Math.PI) / 180;
+  const h = Math.sin(rad(b.lat - a.lat) / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lng - a.lng) / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
 function confirmView(shop: BotShop, data: BotData, q: Extract<OrderAnswer, { ok: true }>, phone: string): View {
@@ -904,7 +1059,7 @@ function confirmView(shop: BotShop, data: BotData, q: Extract<OrderAnswer, { ok:
       ...(q.taxCents > 0 ? [`Tax — ${formatCents(q.taxCents)}`] : []),
       '',
       `💰 *Total: ${formatCents(q.totalCents)}* · ${data.fulfilment === 'pickup' ? 'payment shop par' : 'cash on delivery'}`,
-      data.fulfilment === 'pickup' ? '🏃 Pick-up: shop se le jayein' : `📍 ${data.address ?? ''}${area}`,
+      data.fulfilment === 'pickup' ? `🏃 Pick-up: shop se le jayein${shop.place ? ` — ${shop.place.street}` : ''}` : `📍 ${data.address ?? ''}${area}`,
       `👤 ${data.name ?? ''} · ${phone}`,
       ...(data.notes ? [`📝 ${data.notes}`] : []),
     ],
@@ -916,6 +1071,9 @@ function confirmView(shop: BotShop, data: BotData, q: Extract<OrderAnswer, { ok:
     'Chunein',
   );
 }
+
+/** A delivery's address when it is a shared location with no name: the pin itself goes on the order as a map link. */
+const PIN_ADDRESS = 'Location pin (map)';
 
 /** A message the step could not use (said once; after that the chat is staff's), or a tap from no list we know. */
 const HELP: WaOut = {
@@ -1111,7 +1269,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       customerName: data.name ?? '',
       customerPhone: phoneOf(turn.waId),
       fulfilment: delivery ? 'delivery' : 'pickup',
-      ...(delivery ? { addressLine: data.address ?? '', zoneId: data.zoneId } : {}),
+      ...(delivery ? { addressLine: data.address ?? '', zoneId: data.zoneId, ...(data.pin ? { locationPin: data.pin } : {}) } : {}),
       ...(data.notes ? { notes: data.notes } : {}),
       ...(data.social ? { social: data.social } : {}),
       items: data.cart.map((l) => ({ posItemId: l.posItemId, quantity: l.quantity, modifierIds: l.modifierIds })),
@@ -1174,6 +1332,8 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
         `📦 Order dekhein: ${deps.trackUrl(orderId, localOf(turn.waId))}`,
       ].join('\n'),
     });
+    // A pick-up: where to come, as a pin to tap.
+    if (data.fulfilment === 'pickup') out.push(...placePin(shop));
     data = { cart: [], ...(data.token ? { token: data.token } : {}) };
     go('idle');
   };
@@ -1181,6 +1341,8 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
   const deliver = async () => {
     data.fulfilment = 'delivery';
     if (data.zoneId && data.address) return finish();
+    // a location shared before is the address: only the area is left to ask
+    if (data.pin && data.address) return askZones();
     askAddress();
   };
   const pickUp = async () => {
@@ -1195,6 +1357,53 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     data.zoneId = zone.id;
     if (data.address) return finish();
     askAddress();
+  };
+
+  /**
+   * Their area is not served (tapped "Mera area nahi hai", or a location too far): the areas that are, the shop's pin
+   * and address for a pick-up, then Pick-up (with an order) or the deals, and staff (30 Oct 2026: a customer in Lyari
+   * tapped Staff and waited; he was never told where the shop is).
+   */
+  const notServed = (first: string) => {
+    const areas = areaGroupsWords(shop);
+    const pickup = shop.pickupAvailable && shop.place;
+    if (pickup) out.push(...placePin(shop));
+    offer(
+      tapView(
+        [`${first}${areas ? `: *${areas}*` : '.'}`, ...(pickup ? ['', '🏃 Pick-up kar sakte hain — shop yahan hai 👆', shop.place!.street] : [])],
+        [
+          ...(shop.pickupAvailable && data.cart.length > 0 ? [{ id: 'f:pickup', title: '🏃 Pick-up' }] : []),
+          ...(data.cart.length === 0 ? [{ id: 'o:deals', title: '🔥 Deals' }] : []),
+          { id: 'o:staff', title: '👤 Staff se baat' },
+        ],
+        'Chunein',
+      ),
+    );
+  };
+
+  /**
+   * A location they shared (30 Oct 2026: it reached the address step as nothing, and the bot asked for the address
+   * again): too far from the shop → said plainly, with a pick-up; else it is the delivery's address (a typed one stays,
+   * the pin goes on the order as a map link) and the area is asked unless the place's name says it. Before any order,
+   * it is kept for the delivery.
+   */
+  const pinned = async (loc: NonNullable<BotTurn['location']>) => {
+    const km = shop.place ? distanceKm(shop.place, loc) : 0;
+    if (shop.reachKm !== undefined && km > shop.reachKm) {
+      return notServed(`😔 Aapki location shop se ~${Math.round(km)} km door hai — wahan delivery nahi hoti.\n🛵 Hamari delivery in areas tak hai`);
+    }
+    data.pin = { lat: loc.lat, lng: loc.lng };
+    const named = [loc.name, loc.address].filter(Boolean).join(', ');
+    if (!data.address || data.address === PIN_ADDRESS) data.address = named.length >= 5 ? named.slice(0, 300) : PIN_ADDRESS;
+    data.zoneId ??= zoneInText(shop.zones, named)?.id;
+    delete data.orderId;
+    if (data.cart.length === 0) {
+      say({ type: 'text', body: '✅ Location mil gayi! Pehle apni deal chunein — phir *Delivery* dabayein 👆' });
+      return;
+    }
+    data.fulfilment = 'delivery';
+    if (data.zoneId) return finish();
+    askZones('📍 Location mil gayi ✅ — aapka area kaunsa hai?');
   };
 
   /** "pizza": the regular pizzas, the signature ones one tap away; "sig": the signature ones; "burger": the burgers. */
@@ -1304,6 +1513,21 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     return { state, data, out };
   }
 
+  if (turn.location) {
+    await pinned(turn.location);
+    return { state, data, out };
+  }
+
+  // "Address kya hai?", "aria bta den", "delivery charges?" (30 Oct 2026): where the shop is and where it delivers, at
+  // any step — never an address being typed (it has a number) or an area being named. What else they asked with it
+  // ("Large pizza and adress") is answered too where words pick from the menu.
+  const takesAddress = state === 'address' || state === 'zones' || state === 'confirm';
+  if (!id && asksWhere(wordsOf(text)) && !(takesAddress && (/\d/.test(text) || zoneInText(shop.zones, text)))) {
+    out.push(...whereOut(shop));
+    if (state === 'menu' || state === 'items' || state === 'idle') answerWords(false);
+    return { state, data, out };
+  }
+
   if (id) {
     const [kind, a = '', b = ''] = id.split(':');
     switch (kind) {
@@ -1381,13 +1605,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
         break;
       case 'z': {
         if (a === 'none') {
-          offer(
-            tapView(
-              ['😔 Hamari delivery abhi in areas tak hai.'],
-              [...(shop.pickupAvailable ? [{ id: 'f:pickup', title: '🏃 Pick-up' }] : []), { id: 'o:staff', title: '👤 Staff se baat' }],
-              'Chunein',
-            ),
-          );
+          notServed('😔 Hamari delivery abhi in areas tak hai');
           break;
         }
         const zone = shop.zones.find((z) => z.id === a && z.active);
@@ -1418,6 +1636,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
           delete data.fulfilment;
           delete data.zoneId;
           delete data.address;
+          delete data.pin;
           delete data.orderId;
           showCart();
         } else await quote();

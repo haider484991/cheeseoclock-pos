@@ -34,6 +34,19 @@ export interface WaSaid {
   reply: { id: string; title: string } | null;
   /** A cart sent from the shop's WhatsApp catalog (lib/meta-catalog): each item's id (the till's) and how many. */
   order: Array<{ posItemId: string; quantity: number }> | null;
+  /**
+   * A location they shared (📎 → Location): its pin, and the place's name and address when they picked a place rather
+   * than where they are (30 Oct 2026: two customers sent a pin as their address, and the bot could not read it).
+   */
+  location?: WaPin | null;
+}
+
+/** A shared location: where, and what WhatsApp calls the place (none for "my current location"). */
+export interface WaPin {
+  lat: number;
+  lng: number;
+  name: string | null;
+  address: string | null;
 }
 
 /** What one webhook call says: customers' messages (with the shop number they wrote to) and staff's. */
@@ -42,8 +55,12 @@ export interface WaCall {
   staff: WaStaffMessage[];
 }
 
-/** Message kinds that are not someone writing to the shop: kept, never answered. */
-const NOT_A_MESSAGE = new Set(['reaction', 'system', 'unsupported', 'ephemeral', 'errors']);
+/**
+ * Message kinds that are not someone writing to the shop: kept, never answered. An `unsupported` one is answered (30
+ * Oct 2026): a Click-to-WhatsApp ad's first message reached us as one — no reply, no ad on it — while Business Suite
+ * showed "Hello! Can I get more info on this?". The bot gives it the day's welcome, and nothing more.
+ */
+const NOT_A_MESSAGE = new Set(['reaction', 'system', 'ephemeral', 'errors']);
 
 /** Does this kind of message get the day's automatic reply? A reaction or a system notice does not. */
 export function answersKind(kind: string): boolean {
@@ -87,6 +104,15 @@ function replyOf(m: Obj): { id: string; title: string } | null {
   const r = obj(i?.['button_reply']) ?? obj(i?.['list_reply']);
   const id = text(r?.['id'], 200);
   return id ? { id, title: text(r?.['title'], 100) ?? '' } : null;
+}
+
+/** A shared location: two numbers on the globe (not 0,0), and the place's name and address when it has them. */
+function pinOf(m: Obj): WaPin | null {
+  const l = obj(m['location']);
+  const lat = Number(l?.['latitude']);
+  const lng = Number(l?.['longitude']);
+  if (!l || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) return null;
+  return { lat, lng, name: text(l['name'], 100), address: text(l['address'], 200) };
 }
 
 /** A catalog cart: its lines' product ids (the till's item ids) and quantities. */
@@ -137,6 +163,7 @@ export function readCall(body: unknown): WaCall {
             text: textOf(m),
             reply: replyOf(m),
             order: orderOf(m),
+            location: pinOf(m),
           });
         }
       } else if (c['field'] === 'smb_message_echoes') {

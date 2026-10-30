@@ -1,5 +1,6 @@
 import { v7 as uuidv7 } from 'uuid';
 import { buy1Get1OpenAt, buy1Get1WindowWords, type PublishedMenu } from '@cheeseoclock/shared-types';
+import { BUSINESS } from './business';
 import { sql } from './db';
 import { factsFromBlock } from './delivery-facts';
 import { menuWithoutDrinkBrand } from './menu-view';
@@ -56,7 +57,14 @@ export const MENU_PICTURE = {
   deals: ['Mega Cheese Box', 'Double Large', 'Pizzas & Nuggets', 'Loaded Combo', 'Large & Chilled', 'Cheese Partners', 'Burger Duo', 'Classic Crispy', 'Signature Crispy', 'Cheese Dipped'],
 } as const;
 
-/** The shop for the bot: the menu customers can order from, the areas, open or not. */
+/**
+ * How far from the shop a shared location can still be a delivery, in km. The open areas have names, not a map; the
+ * farthest of them (Abyssinia Lines, Korangi, DHA Phase 8's far end) are 5–7 km from the kitchen, and the Lyari pin
+ * that went unanswered on 29 Oct 2026 was 9.5 km away. Nearer pins are not promised a delivery: their area is asked.
+ */
+export const DELIVERY_REACH_KM = 8;
+
+/** The shop for the bot: the menu customers can order from, the areas, open or not, where it is. */
 async function botShop(): Promise<BotShop> {
   const [rows, store, shop] = await Promise.all([
     sql()`SELECT menu_json FROM site_menu WHERE id = 1`,
@@ -80,6 +88,14 @@ async function botShop(): Promise<BotShop> {
     buy1Get1Open: facts.buy1Get1.on && buy1Get1OpenAt(Date.now(), facts.buy1Get1),
     menuPicture: { url: `${SITE_URL}${MENU_PICTURE.path}`, deals: MENU_PICTURE.deals },
     closedText: `Abhi online orders band hain (${shopHoursInSentence(shop)}). Khulte hi yahin *menu* likh kar order karein 🧀`,
+    place: {
+      name: shopNameProse(shop),
+      street: shop.profile.address.street,
+      areaLine: shop.profile.address.areaLine.replace(/,\s*Karachi$/i, ''),
+      lat: BUSINESS.latitude,
+      lng: BUSINESS.longitude,
+    },
+    reachKm: DELIVERY_REACH_KM,
   };
 }
 
@@ -103,6 +119,9 @@ export async function handleBotMessage(
   const session = await readSession(m.waId);
   const fresh = session !== null && now.getTime() - session.updatedAt.getTime() < SESSION_TTL_MS ? session : null;
   const live = fresh !== null && fresh.state !== 'idle';
+  // A message WhatsApp could not show us (lib/whatsapp-webhook): the day's welcome when it is the first, else nothing —
+  // there is nothing in it to answer.
+  if (m.kind === 'unsupported' && live) return;
   // A tapped button or list row, or a cart from the catalog: the customer is talking to the bot.
   const tap = m.reply !== null || (m.order?.length ?? 0) > 0;
   // A Facebook or Instagram ad (or post) tapped: the customer sends the ad's pre-filled words — Meta's "Hello! Can I get
@@ -168,7 +187,7 @@ export async function handleBotMessage(
       ? { state: fresh.state as BotState, data: fresh.data as unknown as BotData }
       : null;
   const step = await runBot(
-    { waId: m.waId, profileName: m.profileName, text: m.text, reply: m.reply, order: m.order, hello },
+    { waId: m.waId, profileName: m.profileName, text: m.text, reply: m.reply, order: m.order, hello, location: m.location ?? null },
     saved,
     await bot(),
     {
