@@ -36,14 +36,14 @@
               "type": "OpenNow",
               "key": null,
               "props": {
-               "className": "justify-center font-cond text-sm font-bold uppercase tracking-wide text-cream/80 [grid-area:status] sm:text-base md:justify-start"
+               "className": "font-cond text-[0.8rem] font-bold uppercase tracking-wide text-cream/80 [grid-area:status] sm:text-base"
               }
              },
              {
               "type": "PizzaClock",
               "key": null,
               "props": {
-               "className": "mt-4 w-[min(66vw,17rem)] [grid-area:art] md:mt-0 md:w-full md:max-w-[29rem] md:self-center md:justify-self-end"
+               "className": "mt-6 w-full justify-self-end [grid-area:art] md:mt-0 md:max-w-[29rem]"
               }
              },
              {
@@ -56,7 +56,7 @@
                  "key": null,
                  "props": {
                   "children": "It’s always",
-                  "className": "font-display text-[clamp(1.35rem,5vw,2.1rem)] uppercase leading-none tracking-[0.05em] text-cream"
+                  "className": "font-display text-[clamp(1.1rem,4.8vw,2.1rem)] uppercase leading-none tracking-[0.05em] text-cream"
                  }
                 },
                 {
@@ -73,7 +73,7 @@
                  "props": {
                   "alt": "",
                   "aria-hidden": true,
-                  "className": "mt-1 block h-auto w-[min(62vw,15.5rem)] drop-shadow-[0_8px_28px_rgba(245,179,1,0.22)] md:w-[24rem]",
+                  "className": "mt-1.5 block h-auto w-full max-w-[12rem] drop-shadow-[0_8px_28px_rgba(245,179,1,0.22)] md:w-[24rem] md:max-w-none",
                   "decoding": "async",
                   "height": 308,
                   "src": "/logo-wordmark.svg",
@@ -81,7 +81,7 @@
                  }
                 }
                ],
-               "className": "relative z-10 mt-1 flex flex-col items-center [grid-area:brand] md:mt-5 md:items-start"
+               "className": "relative z-10 mt-6 flex flex-col items-start [grid-area:brand] md:mt-5 md:self-end"
               }
              },
              {
@@ -89,7 +89,7 @@
               "key": null,
               "props": {
                "children": "Pizza & burgers delivered in DHA & Clifton",
-               "className": "mt-4 max-w-[22ch] font-display text-[clamp(1.75rem,7.4vw,3.1rem)] uppercase leading-[0.95] tracking-wide text-cream [grid-area:head]"
+               "className": "mt-6 max-w-[16ch] font-display text-[clamp(2.2rem,10vw,3.1rem)] uppercase leading-[0.92] tracking-wide text-cream [grid-area:head] md:mt-4"
               }
              },
              {
@@ -143,7 +143,7 @@
                  }
                 }
                ],
-               "className": "mt-3 flex flex-wrap justify-center gap-x-4 gap-y-1 font-cond text-base font-semibold leading-snug text-cream/85 [grid-area:facts] sm:text-lg md:justify-start"
+               "className": "mt-4 flex flex-wrap gap-x-5 gap-y-1.5 font-cond text-base font-semibold leading-snug text-cream/85 [grid-area:facts] sm:text-lg"
               }
              },
              {
@@ -200,7 +200,7 @@
               }
              }
             ],
-            "className": "relative mx-auto grid max-w-6xl justify-items-center px-4 pb-10 pt-5 text-center [grid-template-areas:'status'_'art'_'brand'_'head'_'facts'_'cta'_'offers'] md:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)] md:items-center md:justify-items-start md:gap-x-14 md:pb-16 md:pt-12 md:text-left md:[grid-template-areas:'status_art'_'brand_art'_'head_art'_'facts_art'_'cta_art'_'offers_art']"
+            "className": "relative mx-auto grid max-w-6xl grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)] items-center gap-x-3 px-4 pb-10 pt-5 [grid-template-areas:'status_status'_'brand_art'_'head_head'_'facts_facts'_'cta_cta'_'offers_offers'] md:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)] md:gap-x-14 md:pb-16 md:pt-12 md:[grid-template-areas:'status_art'_'brand_art'_'head_art'_'facts_art'_'cta_art'_'offers_art']"
            }
           }
          ],
@@ -2051,14 +2051,14 @@
               "type": "OpenNow",
               "key": null,
               "props": {
-               "className": "justify-center font-cond text-sm font-bold uppercase tracking-wide text-cream/80 [grid-area:status] sm:text-base md:justify-start"
+               "className": "font-cond text-[0.8rem] font-bold uppercase tracking-wide text-cream/80 [grid-area:status] sm:text-base"
               }
              },
              {
               "type": "PizzaClock",
               "key": null,
               "props": {
-               "className": "mt-4 w-[min(66vw,17rem)] [grid-area:art] md:mt-0 md:w-full md:max-w-[29rem] md:self-center md:justify-self-end"
+               "className": "mt-6 w-full justify-self-end [grid-area:art] md:mt-0 md:max-w-[29rem]"
               }
              },
              {
@@ -2071,7 +2071,7 @@
                  "key": null,
                  "props": {
                   "children": "It’s always",
-                  "className": "font-display text-[clamp(1.35rem,5vw,2.1rem)] uppercase leading-none tracking-[0.05em] text-cream"
+                  "className": "font-display text-[clamp(1.1rem,4.8vw,2.1rem)] uppercase leading-none tracking-[0.05em] text-cream"
                  }
                 },
                 {
@@ -2088,7 +2088,7 @@
                  "props": {
                   "alt": "",
                   "aria-hidden": true,
-                  "className": "mt-1 block h-auto w-[min(62vw,15.5rem)] drop-shadow-[0_8px_28px_rgba(245,179,1,0.22)] md:w-[24rem]",
+                  "className": "mt-1.5 block h-auto w-full max-w-[12rem] drop-shadow-[0_8px_28px_rgba(245,179,1,0.22)] md:w-[24rem] md:max-w-none",
                   "decoding": "async",
                   "height": 308,
                   "src": "/logo-wordmark.svg",
@@ -2096,7 +2096,7 @@
                  }
                 }
                ],
-               "className": "relative z-10 mt-1 flex flex-col items-center [grid-area:brand] md:mt-5 md:items-start"
+               "className": "relative z-10 mt-6 flex flex-col items-start [grid-area:brand] md:mt-5 md:self-end"
               }
              },
              {
@@ -2104,7 +2104,7 @@
               "key": null,
               "props": {
                "children": "Pizza & burgers delivered in DHA & Clifton",
-               "className": "mt-4 max-w-[22ch] font-display text-[clamp(1.75rem,7.4vw,3.1rem)] uppercase leading-[0.95] tracking-wide text-cream [grid-area:head]"
+               "className": "mt-6 max-w-[16ch] font-display text-[clamp(2.2rem,10vw,3.1rem)] uppercase leading-[0.92] tracking-wide text-cream [grid-area:head] md:mt-4"
               }
              },
              {
@@ -2158,7 +2158,7 @@
                  }
                 }
                ],
-               "className": "mt-3 flex flex-wrap justify-center gap-x-4 gap-y-1 font-cond text-base font-semibold leading-snug text-cream/85 [grid-area:facts] sm:text-lg md:justify-start"
+               "className": "mt-4 flex flex-wrap gap-x-5 gap-y-1.5 font-cond text-base font-semibold leading-snug text-cream/85 [grid-area:facts] sm:text-lg"
               }
              },
              {
@@ -2215,7 +2215,7 @@
               }
              }
             ],
-            "className": "relative mx-auto grid max-w-6xl justify-items-center px-4 pb-10 pt-5 text-center [grid-template-areas:'status'_'art'_'brand'_'head'_'facts'_'cta'_'offers'] md:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)] md:items-center md:justify-items-start md:gap-x-14 md:pb-16 md:pt-12 md:text-left md:[grid-template-areas:'status_art'_'brand_art'_'head_art'_'facts_art'_'cta_art'_'offers_art']"
+            "className": "relative mx-auto grid max-w-6xl grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)] items-center gap-x-3 px-4 pb-10 pt-5 [grid-template-areas:'status_status'_'brand_art'_'head_head'_'facts_facts'_'cta_cta'_'offers_offers'] md:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)] md:gap-x-14 md:pb-16 md:pt-12 md:[grid-template-areas:'status_art'_'brand_art'_'head_art'_'facts_art'_'cta_art'_'offers_art']"
            }
           }
          ],

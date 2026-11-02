@@ -137,21 +137,23 @@ export default async function HomePage() {
             hero in a compact artistic design and conversion way"; Google brought half the week's visits and both its
             orders, for "pizza / burger delivery in DHA"): the time in Karachi and whether the kitchen is taking
             orders, the logo's cheese clock made real (PizzaClock), "It's always" over the logo, what they searched
-            for, the facts, Order now with WhatsApp beside it, and every offer one tap away. A phone stacks it in
-            that order, centred; a wide screen sets the clock beside the words. */}
+            for, the facts, Order now with WhatsApp beside it, and every offer one tap away. Every line starts on the
+            same left edge (the user, 3 Nov 2026: centred, "those are not looking good"): a phone sets the logo beside
+            the clock, then the words full width; a wide screen sets the clock beside all of them. */}
         <section className="relative overflow-hidden bg-ink">
           <div
             aria-hidden
             className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_30%,rgba(245,179,1,0.13),transparent_58%)] md:bg-[radial-gradient(ellipse_at_74%_46%,rgba(245,179,1,0.15),transparent_55%)]"
           />
-          <div className="relative mx-auto grid max-w-6xl justify-items-center px-4 pb-10 pt-5 text-center [grid-template-areas:'status'_'art'_'brand'_'head'_'facts'_'cta'_'offers'] md:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)] md:items-center md:justify-items-start md:gap-x-14 md:pb-16 md:pt-12 md:text-left md:[grid-template-areas:'status_art'_'brand_art'_'head_art'_'facts_art'_'cta_art'_'offers_art']">
-            <OpenNow className="justify-center font-cond text-sm font-bold uppercase tracking-wide text-cream/80 [grid-area:status] sm:text-base md:justify-start" />
-            <PizzaClock className="mt-4 w-[min(66vw,17rem)] [grid-area:art] md:mt-0 md:w-full md:max-w-[29rem] md:self-center md:justify-self-end" />
-            {/* The brand line over the art: "It's always" over the script logo (partner, 27 Sep 2026: it never
-                outweighs the name). Under another name: the name alone (the logo drawing until it is redrawn). */}
-            <p className="relative z-10 mt-1 flex flex-col items-center [grid-area:brand] md:mt-5 md:items-start">
+          <div className="relative mx-auto grid max-w-6xl grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)] items-center gap-x-3 px-4 pb-10 pt-5 [grid-template-areas:'status_status'_'brand_art'_'head_head'_'facts_facts'_'cta_cta'_'offers_offers'] md:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)] md:gap-x-14 md:pb-16 md:pt-12 md:[grid-template-areas:'status_art'_'brand_art'_'head_art'_'facts_art'_'cta_art'_'offers_art']">
+            <OpenNow className="font-cond text-[0.8rem] font-bold uppercase tracking-wide text-cream/80 [grid-area:status] sm:text-base" />
+            <PizzaClock className="mt-6 w-full justify-self-end [grid-area:art] md:mt-0 md:max-w-[29rem]" />
+            {/* The brand line beside the art (a phone) or over the words (wide): "It's always" over the script logo
+                (partner, 27 Sep 2026: it never outweighs the name). Under another name: the name alone (the logo
+                drawing until it is redrawn). */}
+            <p className="relative z-10 mt-6 flex flex-col items-start [grid-area:brand] md:mt-5 md:self-end">
               {nameIsDefault(shop) && (
-                <span className="font-display text-[clamp(1.35rem,5vw,2.1rem)] uppercase leading-none tracking-[0.05em] text-cream">
+                <span className="font-display text-[clamp(1.1rem,4.8vw,2.1rem)] uppercase leading-none tracking-[0.05em] text-cream">
                   It&rsquo;s always
                 </span>
               )}
@@ -164,13 +166,13 @@ export default async function HomePage() {
                 width={642}
                 height={308}
                 decoding="async"
-                className="mt-1 block h-auto w-[min(62vw,15.5rem)] drop-shadow-[0_8px_28px_rgba(245,179,1,0.22)] md:w-[24rem]"
+                className="mt-1.5 block h-auto w-full max-w-[12rem] drop-shadow-[0_8px_28px_rgba(245,179,1,0.22)] md:w-[24rem] md:max-w-none"
               />
             </p>
-            <h1 className="mt-4 max-w-[22ch] font-display text-[clamp(1.75rem,7.4vw,3.1rem)] uppercase leading-[0.95] tracking-wide text-cream [grid-area:head]">
+            <h1 className="mt-6 max-w-[16ch] font-display text-[clamp(2.2rem,10vw,3.1rem)] uppercase leading-[0.92] tracking-wide text-cream [grid-area:head] md:mt-4">
               {copyText(HOME_HERO_HEADING, facts)}
             </h1>
-            <ul className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-1 font-cond text-base font-semibold leading-snug text-cream/85 [grid-area:facts] sm:text-lg md:justify-start">
+            <ul className="mt-4 flex flex-wrap gap-x-5 gap-y-1.5 font-cond text-base font-semibold leading-snug text-cream/85 [grid-area:facts] sm:text-lg">
               {[deliveryTime, copyText(HOME_HERO_FEE, facts), 'Cash on delivery']
                 .filter((w): w is string => w !== null)
                 .map((w) => (
@@ -182,7 +184,7 @@ export default async function HomePage() {
             </ul>
             <div className="mt-5 flex w-full max-w-md flex-col items-stretch gap-3 [grid-area:cta]">
               {announcement && (
-                <p className="flex items-start justify-center gap-2 rounded-2xl border border-cheese/50 bg-cheese/10 px-4 py-2.5 text-left font-cond text-lg font-bold leading-snug text-cheese md:justify-start">
+                <p className="flex items-start gap-2 rounded-2xl border border-cheese/50 bg-cheese/10 px-4 py-2.5 font-cond text-lg font-bold leading-snug text-cheese">
                   <span aria-hidden>★</span>
                   <span>{announcement}</span>
                 </p>

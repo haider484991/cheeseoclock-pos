@@ -80,7 +80,7 @@ export function PizzaClock({ className = '' }: { className?: string }) {
           <circle cx={CX} cy={CY} r="14" fill="#F5B301" stroke="#151412" strokeWidth="4" />
         </g>
       </svg>
-      {/* The burger leaning on the clock: pizza AND burgers. */}
+      {/* The burger leaning on the clock: pizza AND burgers (a phone: inside the screen's edge). */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src="/images/menu/signature-cheese-dipped.webp"
@@ -90,7 +90,7 @@ export function PizzaClock({ className = '' }: { className?: string }) {
         width={720}
         height={674}
         decoding="async"
-        className="absolute -bottom-[4%] -right-[10%] w-[46%] drop-shadow-[0_18px_22px_rgba(0,0,0,0.6)]"
+        className="absolute -bottom-[4%] -right-[2%] w-[44%] drop-shadow-[0_18px_22px_rgba(0,0,0,0.6)] md:-right-[10%] md:w-[46%]"
       />
     </div>
   );
