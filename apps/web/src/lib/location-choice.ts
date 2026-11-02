@@ -140,9 +140,17 @@ export function isQuietPath(pathname: string | null | undefined): boolean {
   return typeof pathname === 'string' && /^\/+(track|dashboard)(\/|$)/i.test(pathname);
 }
 
-/** Whether to open the popup by itself on this page: no choice yet, not shut this visit, not a quiet page. */
+/**
+ * The home page: never asked on arrival (the user, 3 Nov 2026, "ask at order time": people from Google landed
+ * there and got the popup before any food). Its Order buttons lead to /menu, which asks.
+ */
+function isHomePath(pathname: string | null | undefined): boolean {
+  return typeof pathname === 'string' && /^\/*$/.test(pathname);
+}
+
+/** Whether to open the popup by itself on this page: no choice yet, not shut this visit, not a quiet page or the home page. */
 export function shouldAsk(pathname: string | null | undefined, choice: LocationChoice | null, dismissed: boolean): boolean {
-  return !isQuietPath(pathname) && choice === null && !dismissed;
+  return !isQuietPath(pathname) && !isHomePath(pathname) && choice === null && !dismissed;
 }
 
 /** Great-circle distance in km (the pin to the shop). */

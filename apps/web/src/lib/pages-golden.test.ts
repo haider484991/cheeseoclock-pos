@@ -39,6 +39,13 @@
  *  - 2026-10-27: the share images carry their font in the code, so they are
  *    drawn here in Bebas, as on the site, not the fallback the failed font
  *    fetch gave (__fixtures__/share-image-font.ts).
+ *  - 2026-11-03 (the user: "think like a brand strategist … layout, grids,
+ *    art and conversion"; "logo at center … order now on right … links on
+ *    left"): the header is redrawn on every page — the golden with exactly its
+ *    header swapped (__fixtures__/site-header.ts) — and the home page is a new
+ *    page: its own golden, __fixtures__/home-page-2026-11-03.json, taken from
+ *    this code in each state (WRITE_HOME_GOLDEN=1), stands for the old one
+ *    (the last test here spells out what is on it).
  * Apart from those, states (b) and (c) are the golden byte for byte.
  */
 import { createHash } from 'node:crypto';
@@ -50,11 +57,12 @@ import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery
 import { goldenMenu } from './__fixtures__/golden-menu';
 import { MENU_PRICED_ROUTES, htmlWithMenuUnknown } from './__fixtures__/menu-unknown';
 import { FOOTER_CREDIT, FOOTER_LEGAL_NAME, withFooterCredit } from './__fixtures__/footer-credit';
-import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
+import { heroDealsHtml } from './__fixtures__/hero-deals';
 import { withDomainVerification } from './__fixtures__/domain-verification';
 import { withShareImageFont } from './__fixtures__/share-image-font';
 import { withAreaListAdditions } from './__fixtures__/area-list';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
+import { siteHeaderOf, withSiteHeader } from './__fixtures__/site-header';
 
 const db = vi.hoisted(() => ({
   pg: null as unknown as { query: (t: string, v: unknown[]) => Promise<{ rows: unknown[] }> },
@@ -121,6 +129,8 @@ const { DELIVERY_AREAS } = await import('@/lib/areas');
 const { publicMenu } = await import('@/lib/public-menu');
 
 const FIXTURE = new URL('./__fixtures__/pages-v0.7.30.json', import.meta.url);
+/** The home page as redesigned (3 Nov 2026), as served in each state: taken from this code (WRITE_HOME_GOLDEN=1). */
+const HOME_FIXTURE = new URL('./__fixtures__/home-page-2026-11-03.json', import.meta.url);
 const SECRET = 'test-bridge-secret-0123456789';
 
 type Metadata = Record<string, unknown>;
@@ -350,6 +360,10 @@ async function capture(): Promise<Golden> {
 
 let now: Golden;
 let golden: Golden;
+/** The home page as served in each state (3 Nov 2026): HOME_FIXTURE. */
+let homes: Record<string, string>;
+/** A golden page (not the home page) as served today: its header swapped for today's (2026-11-03). */
+const served = (state: string, html: string) => withSiteHeader(html, siteHeaderOf(homes[state]!));
 /**
  * The deals slider each state's home page starts its hero with ('' = none: (a) knows no menu); (c)'s block adds
  * its website offer (10% off pick-up orders).
@@ -367,7 +381,12 @@ beforeAll(async () => {
   await (db.pg as unknown as PGlite).exec(readFileSync(new URL('../../db/schema.sql', import.meta.url), 'utf8'));
   now = await capture();
   if (process.env['WRITE_PAGES_GOLDEN'] === '1') writeFileSync(FIXTURE, `${JSON.stringify(now, null, 1)}\n`);
+  if (process.env['WRITE_HOME_GOLDEN'] === '1') {
+    const homes = Object.fromEntries(['a', 'b', 'c'].map((st) => [st, now.html[now.pages[st]!['/']!]!]));
+    writeFileSync(HOME_FIXTURE, `${JSON.stringify(homes, null, 1)}\n`);
+  }
   golden = JSON.parse(readFileSync(FIXTURE, 'utf8')) as Golden;
+  homes = JSON.parse(readFileSync(HOME_FIXTURE, 'utf8')) as Record<string, string>;
 }, 120_000);
 
 afterAll(() => {
@@ -387,8 +406,9 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
         // (a) the menu unknown: the golden without its prices (sweep B2) on the home and landing pages.
         // Every state: the footer credit added (2026-10-13); the home page: the deals slider first in
         // its hero while the menu has deals (2026-10-14).
+        // Every page but the home page: its header today's (2026-11-03). The home page: its own golden.
         const want = withFooterCredit(state === 'a' ? htmlWithMenuUnknown(route, golden.html[key]!) : golden.html[key]!);
-        expect(now.html[now.pages[state]![route]!], `${state} ${route}`).toBe(route === '/' ? withHeroDeals(want, HERO[state]!) : want);
+        expect(now.html[now.pages[state]![route]!], `${state} ${route}`).toBe(route === '/' ? homes[state] : served(state, want));
       }
     });
 
@@ -423,7 +443,7 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     }
   });
 
-  it('the deals slider (2026-10-14): first in the home hero with the menu’s deals — once, on the home page only; none with the menu unknown', () => {
+  it('the deals slider (2026-10-14; under the hero, as “Today’s deals”, since 2026-11-03): the menu’s deals — once, on the home page only; none with the menu unknown', () => {
     expect(HERO['b']).toContain('aria-roledescription="carousel"');
     // Today's golden menu: its three pizza deals at the menu's prices; with (c)'s block, its 10% too.
     expect(HERO['b']).toContain('Pizza deals');
@@ -437,6 +457,65 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
     for (const key of Object.values(now.pages['a']!)) expect(now.html[key]).not.toContain('aria-roledescription="carousel" aria-label="Deals"');
   });
 
+  it('the header (2026-11-03): the links on the left, the logo in the middle, Order now on the right — the same on every page', () => {
+    for (const state of ['a', 'b', 'c']) {
+      const header = siteHeaderOf(homes[state]!);
+      for (const [route, key] of Object.entries(now.pages[state]!)) {
+        if (!now.html[key]!.includes('<header class="sticky top-0 z-40')) continue;
+        expect(siteHeaderOf(now.html[key]!), `${state} ${route}`).toBe(header);
+      }
+    }
+    const header = siteHeaderOf(homes['b']!);
+    const nav = header.indexOf('aria-label="Main"');
+    const logo = header.indexOf('aria-label="Cheese O&#x27;Clock home"');
+    const order = header.indexOf('>ORDER NOW</a>');
+    expect(nav).toBeGreaterThan(0);
+    expect(logo).toBeGreaterThan(nav);
+    expect(order).toBeGreaterThan(logo);
+    // A phone: one menu button holds the links (its panel is the browser's, never in the page's first HTML).
+    expect(header).toContain('aria-label="Open the menu"');
+    expect(header).not.toContain('Menu &amp; prices');
+  });
+
+  it('the home page (2026-11-03): one screen that decides an order, then the deals, the promise, the signatures, delivery, the questions', () => {
+    const page = homes['b']!;
+    const at = (text: string) => {
+      const i = page.indexOf(text);
+      expect(i, text).toBeGreaterThan(0);
+      return i;
+    };
+    // The hero, in its order: the status line (the hours, as served), the clock, the brand line, what they searched
+    // for, the facts, Order now, the offers.
+    const order = [
+      at('Open daily · 1 pm – 1 am'),
+      at('/images/menu/crown-crust.webp'),
+      at('It’s always'),
+      at('>Pizza &amp; burgers delivered in DHA'),
+      at('At your door within 40 min'),
+      at('id="hero-order"'),
+      at('aria-label="Offers"'),
+      at('Today’s deals'),
+      at('Master-crafted premium sauces'),
+      at('Creamy, crispy &amp; authentic burgers'),
+      at('The signatures'),
+      at('Delivered hot across DHA'),
+      at('Questions, answered'),
+      at('Hungry? It’s Cheese O’Clock.'),
+    ];
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
+    // The offers: the slider's kinds, its cheapest prices; one tap to their place on /menu.
+    expect(page).toContain('>Pizza deals from Rs 2,600</a>');
+    // One H1, what they searched for; one carousel (the deals); no ticker, no turntable, no "how it works".
+    expect(page.split('<h1').length - 1).toBe(1);
+    expect(page.split('aria-roledescription="carousel"').length - 1).toBe(1);
+    expect(page).not.toContain('Oven to door');
+    expect(page).not.toContain('Show Cheesy Star');
+    // Every signature with its price and its way to order.
+    expect(page.split('>Order it</span>').length - 1).toBe(6);
+    // The phone's order bar is the browser's (nothing in the first HTML but its hidden shell).
+    expect(page).toContain('aria-hidden="true" class="fixed inset-x-0 bottom-0');
+  });
+
   it('the checkout sheet: delivery and pick-up, open and closed', () => {
     for (const [k, html] of Object.entries(golden.checkout)) expect(now.checkout[k], k).toBe(withAreaListAdditions(html));
     expect(Object.keys(now.checkout)).toEqual(Object.keys(golden.checkout));
@@ -444,16 +523,22 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
 
   it('(a) the menu unknown changes only the pages that print menu prices, and on them only the prices', () => {
     for (const [route, key] of Object.entries(golden.pages['a']!)) {
-      const was = withFooterCredit(golden.html[key]!);
+      if (route === '/') continue; // its own golden in every state (2026-11-03)
+      const was = served('a', withFooterCredit(golden.html[key]!));
       const is = now.html[now.pages['a']![route]!]!;
       expect(is === was, route).toBe(!MENU_PRICED_ROUTES.includes(route));
     }
-    // With the menu published at today's prices, those same pages are the golden exactly (plus the footer credit,
-    // and the home page's deals slider).
+    // With the menu published at today's prices, those same pages are the golden exactly (plus the footer credit and
+    // today's header; the home page: its own golden).
     for (const route of MENU_PRICED_ROUTES) {
       const want = withFooterCredit(golden.html[golden.pages['b']![route]!]!);
-      expect(now.html[now.pages['b']![route]!], route).toBe(route === '/' ? withHeroDeals(want, HERO['b']!) : want);
+      expect(now.html[now.pages['b']![route]!], route).toBe(route === '/' ? homes['b'] : served('b', want));
     }
+    // The menu unknown, the home page prints no menu price: no card's badge, no offer, no deal (the areas' fees stay).
+    expect(homes['a']).not.toContain('font-extrabold text-ink">Rs ');
+    expect(homes['a']).not.toContain('aria-label="Offers"');
+    expect(homes['a']).not.toContain('Today’s deals');
+    expect(homes['b']).toContain('font-extrabold text-ink">Rs 2,200</span>');
   });
 
   it('the golden copy is the one taken from v0.7.30 (a few of its facts, spelled out)', () => {

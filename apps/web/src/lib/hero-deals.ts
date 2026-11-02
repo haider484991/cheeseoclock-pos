@@ -17,6 +17,7 @@ import {
   splitSizedName,
   withoutDrinkBrand,
 } from './menu-view';
+import { formatCents } from './format';
 import { curatedDealWhat } from './signatures';
 
 /**
@@ -522,4 +523,35 @@ export function heroSlides(
     }
   }
   return slides;
+}
+
+/** One of the hero's offers (heroOffers): its words and where a tap goes. */
+export interface HeroOffer {
+  key: string;
+  label: string;
+  href: string;
+}
+
+/**
+ * The home hero's offers in a line (3 Nov 2026: everything in the hero, compact): one per kind the slider shows, in
+ * its order — "Burger deals from <the cheapest>", "20% off pizzas", "Pizza deals from <the cheapest>", "Buy 1 Get 1, 12–7 PM
+ * only", "10% off online" — each tapping through to its place on /menu. The slides' own prices, so never one the menu
+ * does not charge.
+ */
+export function heroOffers(slides: readonly HeroSlide[]): HeroOffer[] {
+  const out: HeroOffer[] = [];
+  for (const s of slides) {
+    if (out.some((o) => o.key === s.group)) continue;
+    const group = slides.filter((x) => x.group === s.group);
+    const prices = group.flatMap((x) => [...(x.price ? [x.price.cents] : []), ...x.rows.map((r) => r.priceCents)]);
+    const low = prices.length > 0 ? Math.min(...prices) : null;
+    const label =
+      (s.kind === 'burger-deal' || s.kind === 'pizza-deals') && low !== null
+        ? `${s.tab} from ${formatCents(low)}`
+        : s.kind === 'buy-1-get-1' && s.line
+          ? `${s.tab}, ${s.line.charAt(0).toLowerCase()}${s.line.slice(1)}`
+          : s.tab;
+    out.push({ key: s.group, label, href: s.href });
+  }
+  return out;
 }

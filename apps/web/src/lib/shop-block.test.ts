@@ -721,16 +721,16 @@ describe('every page follows the owner’s details', () => {
     // The pages' own words, with the owner's details in them.
     const home = visible(pages['/']!);
     expect(home).toContain('Pay cash or card at your door.');
-    expect(home).toContain('11 am – 11 pm · Tue–Sun');
     expect(home).toContain('Tue–Sun from 11 am to 11 pm.');
     expect(home).toContain('Cash or card on delivery. 15% tax is added on the bill');
     expect(home).toContain('Yes — message 0321 4445566 or 0333 7778899 with your order');
     expect(home).toContain('Hungry? Order now.');
-    expect(home).toContain('MADE-UP WORDS UNDER THE NAME.');
-    expect(home).toContain('OPEN 11 AM – 11 PM');
+    // (3 Nov 2026, the home page redesigned: the ticker and the "how it works" stats are gone.) The owner's tagline
+    // heads the brand promise; the owner's hours open the hero (its status line, as served) and close the page.
+    expect(home).toContain('Made-up words under the name.');
+    expect(home.split('Open Tue–Sun · 11 am – 11 pm').length - 1).toBeGreaterThanOrEqual(3);
     expect(home).not.toContain("IT'S ALWAYS");
-    expect(home).toContain('Pay at your door');
-    expect(home).toContain('open Tue–Sun');
+    expect(home).not.toContain('It’s always');
     const late = visible(pages['/late-night']!);
     expect(late).toContain('LATE-NIGHT FOOD DELIVERY IN DHA KARACHI — OPEN TILL 11 PM');
     expect(late).toContain('It is late, half of DHA’s kitchens have gone dark');
@@ -755,8 +755,10 @@ describe('every page follows the owner’s details', () => {
     // The rider and the counter take different things: each list its own (never the rider's for both).
     expect(menuText).toContain('Prices in PKR · 15% tax added on the bill · pay cash or card on delivery and cash, card or EasyPaisa at the counter');
     expect(menuText).not.toContain('on delivery or at the counter');
-    // The home page's H1: the owner's name in plain words, no pun.
-    expect(pages['/']).toContain('<h1 class="mt-5"><span class="sr-only">Test Kitchen.</span><img ');
+    // The home page's brand line: the owner's name in plain words, no pun, over the logo drawing (3 Nov 2026: the H1
+    // says what people search for).
+    expect(pages['/']).toContain('<span class="sr-only">Test Kitchen.</span><img ');
+    expect(pages['/']).toMatch(/<h1 [^>]*>Pizza &amp; burgers delivered in DHA/);
     const trackEl = await track.default({ params: { id: 'test-order' } });
     expect(propsWith(trackEl, 'orderId')!['shop']).toEqual(shopFactsFromBlock(ownerShop()));
 
@@ -862,7 +864,8 @@ describe('every page follows the owner’s details', () => {
     expect(late).toContain('The kitchen takes orders every single day until midnight — website and WhatsApp both — and opens again at 11 am.');
     expect(late).toContain("LATE CRAVING? STILL CHEESE O'CLOCK.");
     expect(visible(pages['/']!)).toContain('Every day from 11 am to midnight.');
-    expect(visible(pages['/']!)).toContain("IT'S ALWAYS CHEESE O'CLOCK");
+    // The hero's brand line (3 Nov 2026: the ticker that said it in capitals is gone).
+    expect(visible(pages['/']!)).toContain('It’s always Cheese O’Clock.');
   });
 
   it('closing at 2 am: "Open Till 2 am", the premise holds (past midnight, every night)', async () => {

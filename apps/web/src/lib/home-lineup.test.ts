@@ -4,13 +4,14 @@
  * the menu's prices and deal worth, the landing pages' price tokens, and the
  * till's photo of a featured item — on a real Postgres (PGlite, in memory,
  * with db/schema.sql), end to end through the bridge routes and the pages.
- *  - today's menu: every page is the v0.7.30 golden (pages-golden.test.ts);
- *    a price changed on the till moves only its card and its slide;
+ *  - today's menu: the home page is its golden (pages-golden.test.ts; the
+ *    page redesigned 3 Nov 2026: __fixtures__/home-page-2026-11-03.json);
+ *    a price changed on the till moves only its card;
  *  - an item not on the menu (renamed, deleted, priced at 0, off the
- *    website) hides its card, slide or deal — never "Rs 0" — and the till
- *    hears which (homeMissing);
+ *    website) hides its card or deal — never "Rs 0" — and the till hears
+ *    which (homeMissing);
  *  - a deal's saving and struck-through worth only when it is worth more;
- *    the hero's chip is the cheapest deal shown;
+ *    the hero's offers say the cheapest deal on the menu;
  *  - the owner's picks: by the till's id, else the name; his words (never a
  *    drink brand); the till's photo by link, else a plain panel;
  *  - the landing pages' {price:…} tokens and their words without a price;
@@ -37,8 +38,7 @@ import {
   type WebsiteHome,
 } from '@cheeseoclock/shared-types';
 import { buildShopBlock } from '../../../../packages/pos-domain/src/shop-block';
-import { withFooterCredit } from './__fixtures__/footer-credit';
-import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
+import { heroDealsHtml } from './__fixtures__/hero-deals';
 import { goldenMenu } from './__fixtures__/golden-menu';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
 
@@ -84,6 +84,8 @@ const { DEFAULT_FACTS, claimHolds, copyText, fillFees } = await import('@/lib/de
 const { PRICE_LINES, itemsOnMenu, priceWords } = await import('@/lib/menu-prices');
 const { dealSaveCents, dealsFromCents, resolveHome } = await import('@/lib/home-lineup');
 
+/** The home page as redesigned (3 Nov 2026), as served in pages-golden.test.ts's states: (b) is today's menu, no block. */
+const homes = JSON.parse(readFileSync(new URL('./__fixtures__/home-page-2026-11-03.json', import.meta.url), 'utf8')) as Record<string, string>;
 const golden = JSON.parse(readFileSync(new URL('./__fixtures__/pages-v0.7.30.json', import.meta.url), 'utf8')) as {
   html: Record<string, string>;
   pages: Record<string, Record<string, string>>;
@@ -152,21 +154,24 @@ function visible(html: string): string {
     .replace(/\s+/g, ' ');
 }
 
-// The golden home page as served today: plus the footer's ordering-system credit (2026-10-13). The deals
-// slider first in the hero (2026-10-14) is the published menu's: each test puts in the one for its menu
-// (servedFor), after its own edits to the rest of the page.
-const GOLDEN_HOME = () => withFooterCredit(golden.html[golden.pages['b']!['/']!]!);
-const servedFor = (m: PublishedMenu, page: string) => withHeroDeals(page, heroDealsHtml(m));
+// The home page as served today with today's menu (3 Nov 2026: __fixtures__/home-page-2026-11-03.json). Its deals
+// slider ("Today's deals") is the published menu's: each test puts in the one for its menu (servedFor), after its own
+// edits to the rest of the page.
+const GOLDEN_HOME = () => homes['b']!;
+const servedFor = (m: PublishedMenu, page: string) => {
+  const today = heroDealsHtml(goldenMenu());
+  expect(page.split(today).length - 1).toBe(1);
+  return page.replace(today, () => heroDealsHtml(m));
+};
 const GRID_BADGE = (rs: string) =>
-  `<span class="absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-sm font-extrabold text-ink">${rs}</span>`;
-const SLIDE_BADGE = (rs: string) => `<span class="rounded-full bg-cheese px-4 py-1.5 font-cond text-lg font-extrabold text-ink">${rs}</span>`;
-/** The grid cards' names, in order (each card's h3). */
-const gridNames = (html: string) => [...html.matchAll(/<h3 class="mt-1 font-display text-3xl uppercase tracking-wide">([^<]+)<\/h3>/g)].map((m) => m[1]);
-/** The carousel's dots (one per pizza), by name. */
-const carouselDots = (html: string) => [...html.matchAll(/aria-label="Show ([^"]+)"/g)].map((m) => m[1]);
+  `<span class="absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-base font-extrabold text-ink">${rs}</span>`;
+/** The signature cards' names, in order (each card's h3). */
+const gridNames = (html: string) => [...html.matchAll(/<h3 class="mt-1 font-display text-3xl uppercase leading-none tracking-wide">([^<]+)<\/h3>/g)].map((m) => m[1]);
 /** The deal cards' names, in order. */
 const dealNames = (html: string) =>
-  [...html.matchAll(/<span class="mt-1 block pr-20 font-display text-4xl uppercase leading-none tracking-wide">([^<]+)<\/span>/g)].map((m) => m[1]);
+  [...html.matchAll(/<span class="block pr-20 font-display text-4xl uppercase leading-none tracking-wide">([^<]+)<\/span>/g)].map((m) => m[1]);
+/** The hero's offers, each as its link reads (lib/hero-deals heroOffers). */
+const OFFER = (words: string) => `>${words}</a>`;
 
 beforeAll(async () => {
   process.env['BRIDGE_SECRET'] = SECRET;
@@ -187,14 +192,13 @@ describe('the home page follows the published menu', () => {
     expect(await homeHtml()).toBe(servedFor(goldenMenu(), GOLDEN_HOME()));
   });
 
-  it('a price changed on the till moves only its card and its carousel slide; a deal’s, only that deal’s price and saving', async () => {
+  it('a price changed on the till moves only its card; a deal’s, only that deal’s price and saving', async () => {
     const m = menuWith({ 'Cheesy Star — Large': { basePriceCents: 234_500 }, 'Big Two': { basePriceCents: 350_000 } });
     await publish(m);
     let want = GOLDEN_HOME();
-    // The Cheesy Star's card (the first after its photo's alt) and the front slide (the Cheesy Star's).
+    // The Cheesy Star's card (the first badge after its photo's alt).
     const card = want.indexOf(GRID_BADGE('Rs 2,200'), want.indexOf('alt="Cheesy Star from Cheese O&#x27;Clock"'));
     want = want.slice(0, card) + GRID_BADGE('Rs 2,345') + want.slice(card + GRID_BADGE('Rs 2,200').length);
-    want = want.replace(SLIDE_BADGE('Rs 2,200'), SLIDE_BADGE('Rs 2,345'));
     // Big Two: Rs 3,500, worth Rs 4,250 one by one → save Rs 750 (Family Feast and Perfect Pair as they were).
     want = want
       .replace('<span class="mt-0.5 block text-lg">Rs 650</span>', '<span class="mt-0.5 block text-lg">Rs 750</span>')
@@ -207,10 +211,10 @@ describe('the home page follows the published menu', () => {
     expect(html).toBe(servedFor(m, want));
     expect(heroDealsHtml(m)).toContain('Rs 3,500');
     expect(html.split(GRID_BADGE('Rs 2,200')).length - 1).toBe(4);
-    expect(html).toContain('Value deals from Rs 2,600 →');
+    expect(html).toContain(OFFER('Pizza deals from Rs 2,600'));
   });
 
-  it('an item not on the menu — renamed, deleted, priced at 0 — hides its card, slide or deal, never "Rs 0"; the till is told which', async () => {
+  it('an item not on the menu — renamed, deleted, priced at 0 — hides its card or deal, never "Rs 0"; the till is told which', async () => {
     const m = menuWith({
       'Cheetos — Large': { name: 'Cheetos Supreme — Large' },
       'Crown Crust — Large': { basePriceCents: 0 },
@@ -219,25 +223,20 @@ describe('the home page follows the published menu', () => {
     expect((await publish(m)).homeMissing).toEqual(['Crown Crust — Large', 'Cheetos — Large', 'Family Feast']);
     const html = await homeHtml();
     expect(gridNames(html)).toEqual(['Cheesy Star', 'Shawarma Pizza', 'Meat Lovers', 'Signature Cheese Dipped']);
-    expect(carouselDots(html)).toEqual(['Cheesy Star', 'Shawarma Pizza', 'Meat Lovers']);
     expect(dealNames(html)).toEqual(['Big Two', 'Perfect Pair']);
-    expect(visible(html)).toContain('Value deal 02');
-    expect(visible(html)).not.toContain('Value deal 03');
     for (const gone of ['Crown Crust', 'Cheetos', 'Family Feast']) expect(visible(html), gone).not.toContain(gone);
     expect(html).not.toMatch(/Rs 0(?![\d,])/);
   });
 
-  it('a featured item or deal set "Pick-up only" on the till says so on its card, its slide and its deal card, in /menu’s words — never shown as delivered; the rest as before', async () => {
+  it('a featured item or deal set "Pick-up only" on the till says so on its card and its deal card, in /menu’s words — never shown as delivered; the rest as before', async () => {
     const m = menuWith({ 'Cheesy Star — Large': { pickupOnly: true }, 'Meat Lovers — Large': { pickupOnly: true }, 'Big Two': { pickupOnly: true } });
     await publish(m);
     const html = await homeHtml();
     const chip = 'rounded-full border-2 border-dashed border-cream/30 px-3 py-1 font-cond text-xs font-bold uppercase tracking-wide text-cream/70';
     const GRID_CHIP = `<p class="mt-2 w-fit ${chip}">Pick-up only</p>`;
     const DEAL_CHIP = `<span class="mt-3 block w-fit ${chip}">Pick-up only</span>`;
-    const SLIDE_CHIP = `<span class="${chip}">Pick-up only</span>`;
     expect(html.split(GRID_CHIP).length - 1).toBe(2);
     expect(html.split(DEAL_CHIP).length - 1).toBe(1);
-    expect(html.split(SLIDE_CHIP).length - 1).toBe(1);
     const text = visible(html);
     // Each on its own card: the Cheesy Star's and the Meat Lovers' (not the Crown Crust's between them), the Big Two's.
     expect(text).toContain('Signature · Large 12" Cheesy Star Pick-up only ');
@@ -245,15 +244,13 @@ describe('the home page follows the published menu', () => {
     expect(text).not.toMatch(/Crown Crust Pick-up only|Shawarma Pizza Pick-up only|Cheetos Pick-up only|Signature Cheese Dipped Pick-up only/);
     expect(text).toMatch(/Big Two 2 Large 12" \+ 1 litre soft drink Pick-up only /);
     expect(text).not.toMatch(/(Family Feast|Perfect Pair) [^R]* Pick-up only/);
-    // The front slide (the Cheesy Star) beside its price.
-    expect(text).toContain('Rs 2,200 Pick-up only Order this →');
-    // Nothing else on the page moved: without the three notes it is today's page (its deals slider says Big Two
-    // is pick-up only too: lib/hero-deals).
-    expect(html.replaceAll(GRID_CHIP, '').replaceAll(DEAL_CHIP, '').replaceAll(SLIDE_CHIP, '')).toBe(servedFor(m, GOLDEN_HOME()));
+    // Nothing else on the page moved: without the notes it is today's page (its deals slider says Big Two is pick-up
+    // only too: lib/hero-deals).
+    expect(html.replaceAll(GRID_CHIP, '').replaceAll(DEAL_CHIP, '')).toBe(servedFor(m, GOLDEN_HOME()));
     expect(heroDealsHtml(m).split('>Pick-up only</span>').length - 1).toBe(1);
   });
 
-  it('none of the lineup on the menu: no turntable, no signatures, no deals and no deals chip — the rest of the page as before', async () => {
+  it('none of the lineup on the menu: no signatures and no deals — the rest of the page as before', async () => {
     const m = goldenMenu();
     const onlyCharges = { ...m, categories: m.categories.filter((c) => /delivery/i.test(c.name)) };
     expect((await publish(onlyCharges)).homeMissing).toEqual([...DEFAULT_WEBSITE_HOME.pizzas, DEFAULT_WEBSITE_HOME.burger!, ...DEFAULT_WEBSITE_HOME.deals].map((e) => e.itemRef.name));
@@ -263,24 +260,24 @@ describe('the home page follows the published menu', () => {
     expect(html).not.toContain('id="deals"');
     expect(visible(html)).not.toContain('Value deals');
     expect(visible(html)).toContain('Questions, answered');
-    expect(visible(html)).toContain('Oven to door in three steps');
+    expect(visible(html)).toContain('Delivered hot across DHA');
   });
 
-  it('a deal’s saving and struck-through worth only when it is worth more than it costs; the chip is the cheapest deal shown', async () => {
+  it('a deal’s saving and struck-through worth only when it is worth more than it costs; the hero’s offer is the cheapest deal', async () => {
     // Perfect Pair above its worth (Rs 3,250 one by one): its price only.
     await publish(menuWith({ 'Perfect Pair': { basePriceCents: 330_000 } }));
     let html = await homeHtml();
     expect(html.match(/>Save</g)).toHaveLength(2);
     expect(html.match(/line-through/g)).toHaveLength(2);
     expect(html).toContain('<span class="block font-display text-4xl tracking-wide text-cheese">Rs 3,300</span>');
-    expect(html).toContain('Value deals from Rs 3,100 →');
+    expect(html).toContain(OFFER('Pizza deals from Rs 3,100'));
     // No 1 litre drink on the menu: no deal can be priced one by one — prices, no saving.
     await publish(menuWith({ 'Soft Drink — 1 litre': null }));
     html = await homeHtml();
     expect(html).not.toContain('>Save<');
     expect(html).not.toContain('line-through');
     expect(dealNames(html)).toEqual(['Big Two', 'Family Feast', 'Perfect Pair']);
-    expect(html).toContain('Value deals from Rs 2,600 →');
+    expect(html).toContain(OFFER('Pizza deals from Rs 2,600'));
   });
 
   it('the owner’s picks: by the till’s id (renamed since), else the name; his words, never a drink brand; the till’s photo by link, else a plain panel', async () => {
@@ -298,7 +295,6 @@ describe('the home page follows the published menu', () => {
     expect((await publish(m, shopWith(lineup))).homeMissing).toEqual([]);
     const html = await homeHtml();
     expect(gridNames(html)).toEqual(['Fajita Pizza', 'Classic Supreme']);
-    expect(carouselDots(html)).toEqual(['Fajita Pizza', 'Classic Supreme']);
     const text = visible(html);
     // Regular pizzas, not signatures: labelled and linked by their own section on /menu.
     expect(text).toContain('Regular Pizzas · Large 12" Fajita Pizza Made-up words, with a soft drink.');
@@ -306,11 +302,7 @@ describe('the home page follows the published menu', () => {
     expect(text).not.toMatch(/Signature · /);
     expect(html).not.toContain('/menu#signature-pizzas');
     expect(html).toContain('href="/menu#regular-pizzas"');
-    // The carousel's front slide says so too, and its "Order this" goes there.
-    expect(html).toMatch(/text-cheese">Regular Pizzas · (<!-- -->)?Large 12&quot;<\/p>/);
     expect(text).not.toMatch(/pepsi/i);
-    // The front slide's line under its name: the owner's headline.
-    expect(text).toContain('Fajita Pizza A made-up line Rs 2,000 Order this →');
     // The till's photo by link (its version: the data URL's md5), never inlined; no photo → the name on a panel.
     const v = createHash('md5').update(photo).digest('hex').slice(0, 12);
     expect(html).toContain(`src="/api/menu-photo/gi-faj-l?v=${v}"`);
@@ -322,7 +314,7 @@ describe('the home page follows the published menu', () => {
     expect(text).not.toContain('Signature burger');
     expect(dealNames(html)).toEqual(['Perfect Pair']);
     expect(text).toContain('2 Medium 9" + 1 litre soft drink');
-    expect(html).toContain('Value deals from Rs 2,600 →');
+    expect(html).toContain(OFFER('Pizza deals from Rs 2,600'));
     expect((await getMenuFacts())?.photos).toEqual({ 'gi-faj-l': v });
   });
 });

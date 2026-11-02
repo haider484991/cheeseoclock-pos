@@ -1,4 +1,4 @@
-import { ALL_COMPILED_ZONE_IDS, taxed, type Copy } from './delivery-facts';
+import { ALL_COMPILED_ZONE_IDS, DELIVERY_MAX_MINUTES, taxed, type Copy } from './delivery-facts';
 
 /**
  * Page sentences that name a delivery fee or where the shop delivers — and
@@ -43,6 +43,31 @@ export const HOME_DELIVERY_NOTE: Copy = {
 
 /** Home hero chip. */
 export const HOME_HERO_FEE: Copy = { text: 'Delivery from {minFee}', when: { delivering: true }, otherwise: 'Delivery paused right now' };
+
+/**
+ * The home page's heading (3 Nov 2026: Google brings people who searched for a pizza or burger delivery in DHA,
+ * and its first screen said only the shop's name): what the shop does and where, in their words.
+ */
+export const HOME_HERO_HEADING: Copy = {
+  // "DHA & Clifton" kept on one line (no break spaces): it never ends a line on "DHA".
+  text: 'Pizza & burgers delivered in DHA & Clifton',
+  when: { areasAsBuilt: true },
+  otherwise: {
+    text: 'Pizza & burgers delivered in {where}',
+    when: { delivering: true },
+    otherwise: 'Pizza & burgers from our DHA Phase 6 kitchen',
+  },
+};
+
+/** Under it: how long a delivery takes in DHA and Clifton (the user, 24 Oct 2026: 40 minutes at most). Other areas: left out. */
+export const HOME_HERO_TIME: Copy = { text: `At your door within ${DELIVERY_MAX_MINUTES.near} min`, when: { areasAsBuilt: true } };
+
+/** The home page's delivery section heading (3 Nov 2026), over the fees by area and the shop's map. */
+export const HOME_DELIVERY_HEADING: Copy = {
+  text: 'Delivered hot across DHA & Clifton',
+  when: { areasAsBuilt: true },
+  otherwise: { text: 'Delivered hot across {where}', when: { delivering: true }, otherwise: 'Delivery' },
+};
 
 /** Home "how it works" stat. */
 export const HOME_STAT_FEE: Copy = { text: 'From {minFee}', when: { delivering: true }, otherwise: 'Paused right now' };

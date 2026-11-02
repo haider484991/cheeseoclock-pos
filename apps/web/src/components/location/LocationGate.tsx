@@ -101,11 +101,12 @@ function newEventId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
+/** English unless they chose Roman Urdu (the user, 3 Nov 2026: in English, as the site and its Google results are). */
 function readLang(): GateLang {
   try {
-    return window.localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'ur';
+    return window.localStorage.getItem(LANG_KEY) === 'ur' ? 'ur' : 'en';
   } catch {
-    return 'ur';
+    return 'en';
   }
 }
 
@@ -123,7 +124,7 @@ export function LocationGate({
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const [lang, setLang] = useState<GateLang>('ur');
+  const [lang, setLang] = useState<GateLang>('en');
   const [fulfilment, setFulfilment] = useState<WebFulfilment>('delivery');
   const [zoneId, setZoneId] = useState('');
   const [pin, setPin] = useState<{ pin: LocationPin; at: number } | null>(null);
@@ -146,14 +147,16 @@ export function LocationGate({
     setOpen(true);
   }, []);
 
-  // By itself, once per visit, a moment after the page has loaded.
+  // By itself, once per visit, a moment after a page that asks has loaded — the first such page of the visit: the
+  // home page never asks, so someone who came in there is asked when its Order button takes them to /menu (this
+  // layout stays mounted across that move, so the page's path is what changes). Once answered or closed, the choice
+  // or the dismissal is stored and no later page asks.
   useEffect(() => {
     if (!shouldAsk(pathname, readLocationChoice(), wasDismissedThisVisit())) return;
     const timer = window.setTimeout(begin, OPEN_DELAY_MS);
     return () => window.clearTimeout(timer);
-    // Only the first page of a visit asks: a later page has the dismissal or the choice stored.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [pathname]);
 
   // The header chip asks to change it.
   useEffect(() => {
@@ -291,7 +294,7 @@ export function LocationGate({
       >
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="flex overflow-hidden rounded-full border border-night-edge text-[11px] font-bold" role="group" aria-label="Language">
-            {(['ur', 'en'] as const).map((l) => (
+            {(['en', 'ur'] as const).map((l) => (
               <button
                 key={l}
                 type="button"

@@ -35,7 +35,8 @@ import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery
 import type { CartLine } from './cart';
 import type { PublicMenu } from './public-menu';
 import { withFooterCredit } from './__fixtures__/footer-credit';
-import { heroDealsHtml, withHeroDeals } from './__fixtures__/hero-deals';
+import { heroDealsHtml } from './__fixtures__/hero-deals';
+import { siteHeaderOf, withSiteHeader } from './__fixtures__/site-header';
 import { withDomainVerification } from './__fixtures__/domain-verification';
 import { withAreaListAdditions } from './__fixtures__/area-list';
 import { goldenMenu } from './__fixtures__/golden-menu';
@@ -101,6 +102,8 @@ const { pickupDiscountWords } = await import('@/lib/order-display');
 type SheetProps = Parameters<typeof CheckoutSheet>[0];
 
 const SECRET = 'test-bridge-secret-0123456789';
+/** The home page as redesigned (3 Nov 2026), as served in pages-golden.test.ts's states, today's menu unmarked. */
+const homes = JSON.parse(readFileSync(new URL('./__fixtures__/home-page-2026-11-03.json', import.meta.url), 'utf8')) as Record<string, string>;
 const golden = JSON.parse(readFileSync(new URL('./__fixtures__/pages-v0.7.30.json', import.meta.url), 'utf8')) as {
   html: Record<string, string>;
   pages: Record<string, Record<string, string>>;
@@ -317,11 +320,12 @@ describe('the value deals marked: every page as v0.7.30 but the /menu chip', () 
       const marked = dealsMarkedRoutes(state);
       expect(Object.keys(now.pages[state]!)).toEqual(Object.keys(golden.pages[state]!));
       for (const [route, key] of Object.entries(golden.pages[state]!)) {
-        // The golden as served today: plus the footer's ordering-system credit (2026-10-13), and the home
-        // page's deals slider from this menu's deals (2026-10-14; the marks change nothing on it).
-        const credited = withFooterCredit(golden.html[key]!);
-        const hero = heroDealsHtml(goldenMenuDealsMarked(), state === 'c' ? { pickup: defaultBlock(goldenMenuDealsMarked()).pickup } : {});
-        const was = route === '/' ? withHeroDeals(credited, hero) : credited;
+        // The golden as served today: plus the footer's ordering-system credit (2026-10-13) and today's header
+        // (2026-11-03). The home page: its own golden (2026-11-03), with the deals slider from this menu's deals
+        // (2026-10-14; the marks change nothing on it).
+        const credited = withSiteHeader(withFooterCredit(golden.html[key]!), siteHeaderOf(homes[state]!));
+        const slider = (m: ReturnType<typeof goldenMenu>) => heroDealsHtml(m, state === 'c' ? { pickup: defaultBlock(m).pickup } : {});
+        const was = route === '/' ? homes[state]!.replace(slider(goldenMenu()), () => slider(goldenMenuDealsMarked())) : credited;
         expect(now.pages[state]![route], `${state} ${route}`).toBe(htmlWithDealsMarked(route, was, marked));
         expect(now.pages[state]![route] === was, `${state} ${route} unchanged`).toBe(!marked.includes(route));
       }

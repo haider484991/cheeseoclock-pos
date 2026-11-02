@@ -232,9 +232,10 @@ export function HeroDealsClient({ slides }: { slides: HeroSlide[] }) {
                     style={{ objectPosition: s.photo.position }}
                   />
                 </div>
-                {/* The words: the menu's names and prices, as the printed menu sets them. */}
+                {/* The words: the menu's names and prices, as the printed menu sets them — on a phone straight under the photo,
+                    the button at the card's foot (3 Nov 2026: centred, a short slide left a gap above and below). */}
                 <div
-                  className={`flex flex-col justify-center p-6 md:p-9 ${ink ? 'bg-night-card text-cream' : 'bg-cheese text-ink'}`}
+                  className={`flex flex-col justify-start p-6 md:justify-center md:p-9 ${ink ? 'bg-night-card text-cream' : 'bg-cheese text-ink'}`}
                 >
                   <p className="font-display text-[clamp(2.5rem,5vw,3.75rem)] uppercase leading-[0.92] tracking-wide">
                     {s.title}
@@ -314,7 +315,7 @@ export function HeroDealsClient({ slides }: { slides: HeroSlide[] }) {
                       and {s.more} more on the menu
                     </p>
                   )}
-                  <div className="pt-6 md:pt-8">
+                  <div className="mt-auto pt-6 md:mt-0 md:pt-8">
                     <Link
                       href={s.href}
                       className={`inline-block rounded-full px-7 py-3 font-display text-xl uppercase tracking-wide transition-colors active:scale-95 ${ink ? 'bg-cheese text-ink hover:bg-cheese-hot' : 'bg-ink text-cheese hover:bg-ink-soft'}`}

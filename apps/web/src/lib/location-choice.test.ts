@@ -66,9 +66,11 @@ describe('freshPin', () => {
 });
 
 describe('when the popup asks', () => {
-  it('asks once, never on a tracking page or the dashboard', () => {
-    expect(shouldAsk('/', null, false)).toBe(true);
+  it('asks once, never on a tracking page or the dashboard, nor on arriving at the home page (it asks at /menu)', () => {
+    expect(shouldAsk('/', null, false)).toBe(false);
+    expect(shouldAsk('', null, false)).toBe(false);
     expect(shouldAsk('/menu', null, false)).toBe(true);
+    expect(shouldAsk('/delivery/dha-phase-6', null, false)).toBe(true);
     expect(shouldAsk('/menu', DELIVERY, false)).toBe(false);
     expect(shouldAsk('/menu', null, true)).toBe(false);
     for (const p of ['/track/abc', '/TRACK', '/dashboard', '/dashboard/orders']) expect(isQuietPath(p), p).toBe(true);

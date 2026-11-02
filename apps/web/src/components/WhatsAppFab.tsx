@@ -5,9 +5,10 @@ import { getShopFacts } from '@/lib/site-facts';
  * Sticky WhatsApp order button, bottom-right — the documented
  * highest-converting placement for WhatsApp entry in COD markets.
  * Not rendered on /menu (the cart bar owns that edge of the screen).
- * The order line and the greeting are the owner's (lib/shop-facts).
+ * The order line and the greeting are the owner's (lib/shop-facts). `className`: where it is hidden (the home
+ * page's order bar takes its corner on a phone).
  */
-export async function WhatsAppFab() {
+export async function WhatsAppFab({ className = '' }: { className?: string } = {}) {
   const shop = await getShopFacts();
   return (
     <a
@@ -15,7 +16,7 @@ export async function WhatsAppFab() {
       target="_blank"
       rel="noopener noreferrer"
       aria-label="Order on WhatsApp"
-      className="group fixed bottom-5 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-[#25D366] shadow-[0_8px_30px_rgba(37,211,102,0.4)] transition-transform hover:scale-110 active:scale-95"
+      className={`group fixed bottom-5 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-[#25D366] shadow-[0_8px_30px_rgba(37,211,102,0.4)] transition-transform hover:scale-110 active:scale-95${className ? ` ${className}` : ''}`}
     >
       <span
         aria-hidden

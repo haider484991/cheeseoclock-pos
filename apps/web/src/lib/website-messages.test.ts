@@ -19,7 +19,7 @@
  *  - the bounds, at the bridge and on a hand-edited stored row.
  * All menu items, figures and words are made up.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -35,10 +35,7 @@ import {
 import { publishedSettingsSchema } from '@cheeseoclock/shared-schemas/web-settings';
 import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery-charge';
 import golden from './__fixtures__/site-copy-v0.7.26.json';
-import homeV0729Golden from './__fixtures__/home-page-v0.7.29.json';
-import { homeTreeWithHeroDeals } from './__fixtures__/hero-deals';
 import { goldenMenu } from './__fixtures__/golden-menu';
-import { homeTreeWithMenuUnknown } from './__fixtures__/menu-unknown';
 import { DELIVERY_AREAS, getArea, renderArea } from './areas';
 import { problemFromServer, validateCheckout, type CheckoutInput } from './checkout-validation';
 import { DEFAULT_FACTS, factsFromBlock } from './delivery-facts';
@@ -234,11 +231,22 @@ const TODAY_CLOSED =
 // ---------------------------------------------------------------------------
 // A server page's element tree, as data: what React renders (a condition that
 // is off renders nothing, so it is not part of it). The golden copy
-// __fixtures__/home-page-v0.7.29.json was taken this way from v0.7.29's code.
+// __fixtures__/home-tree-2026-11-03.json was taken this way from this code
+// (WRITE_HOME_TREE=1) when the home page was redesigned (3 Nov 2026; until then
+// v0.7.29's, __fixtures__/home-page-v0.7.29.json): the page with the menu
+// unknown, and with today's menu published.
 // ---------------------------------------------------------------------------
 
-/** v0.7.29's home page as served today: the deals slider's element first in its hero (2026-10-14), nothing else. */
-const homeV0729 = homeTreeWithHeroDeals(homeV0729Golden);
+const HOME_TREE = new URL('./__fixtures__/home-tree-2026-11-03.json', import.meta.url);
+/** The home page's element tree with the menu unknown, and with today's menu (no settings block): read when used. */
+const homeGolden = {
+  get unknown(): unknown {
+    return (JSON.parse(readFileSync(HOME_TREE, 'utf8')) as { unknown: unknown }).unknown;
+  },
+  get menu(): unknown {
+    return (JSON.parse(readFileSync(HOME_TREE, 'utf8')) as { menu: unknown }).menu;
+  },
+};
 
 function typeName(t: unknown): string {
   if (typeof t === 'string') return t;
@@ -329,29 +337,30 @@ afterEach(() => {
 });
 
 describe('nothing new stored: the website exactly as v0.7.29', () => {
-  it('the home page is v0.7.29’s element for element — no database, no block, a v0.7.29 till’s block, a block at the defaults, an announcement switched off', async () => {
-    // The menu unknown (no database, nothing published): v0.7.29's without its menu prices (sweep B2)
-    // — 6 price badges, 3 deals' saving, worth and price — and the hero's chip without a price.
-    const unknown = homeTreeWithMenuUnknown(homeV0729Golden);
-    expect([unknown.removed, unknown.chips]).toEqual([15, 1]);
+  it('the home page is the same element for element with nothing new stored — no database, no block, a v0.7.29 till’s block, a block at the defaults, an announcement switched off', async () => {
+    // The menu unknown (no database, nothing published): the page without its menu's prices, offers and deals.
     const url = process.env['DATABASE_URL'];
     delete process.env['DATABASE_URL'];
+    let unknown: unknown;
     try {
-      expect(await homeTree()).toEqual(homeTreeWithHeroDeals(unknown.tree));
+      unknown = await homeTree();
     } finally {
       process.env['DATABASE_URL'] = url;
     }
-    expect(await homeTree()).toEqual(homeTreeWithHeroDeals(unknown.tree));
-    // Today's menu published: v0.7.29's exactly — with no block too.
+    expect(await homeTree()).toEqual(unknown);
+    // Today's menu published — with no block too, and with any block at the defaults.
     const m = homeMenu();
     await publish(m);
-    expect(await homeTree()).toEqual(homeV0729);
+    const today = await homeTree();
+    if (process.env['WRITE_HOME_TREE'] === '1') writeFileSync(HOME_TREE, `${JSON.stringify({ unknown, menu: today }, null, 1)}\n`);
+    expect(unknown).toEqual(homeGolden.unknown);
+    expect(today).toEqual(homeGolden.menu);
     expect((await publish(m, tillBlock(m))).json.data).toMatchObject({ settings: 'stored' });
-    expect(await homeTree()).toEqual(homeV0729);
+    expect(await homeTree()).toEqual(homeGolden.menu);
     expect((await publish(m, tillBlock(m, { rev: 2, website: {} }))).json.data).toMatchObject({ settings: 'stored' });
-    expect(await homeTree()).toEqual(homeV0729);
+    expect(await homeTree()).toEqual(homeGolden.menu);
     await publish(m, tillBlock(m, { rev: 3, website: { announcement: { on: false, text: 'Made-up words, switched off' } } }));
-    expect(await homeTree()).toEqual(homeV0729);
+    expect(await homeTree()).toEqual(homeGolden.menu);
   });
 
   it('/menu: no closed notice, no announcement, no minimum; the public menu’s block and the JSON-LD as before', async () => {
@@ -499,19 +508,17 @@ describe('the closed notice: the owner’s words through its last Karachi day, t
 describe('the announcement: page text on the home page and /menu while on', () => {
   const WORDS = 'Made-up news: a new test pizza this week';
 
-  it('on: the hero and the ticker say it (first), nowhere else; /menu gets it; the JSON-LD never', async () => {
+  it('on: the hero says it, nowhere else on the home page (3 Nov 2026: the ticker is gone); /menu gets it; the JSON-LD never', async () => {
     const m = homeMenu();
     await publish(m, tillBlock(m, { website: { announcement: { on: true, text: WORDS } } }));
     const home = await homeTree();
-    expect(occurrences(home, WORDS)).toBe(2);
-    const marquee = propsWith(await homePage.default(), 'items')!['items'] as string[];
-    expect(marquee).toEqual([WORDS, ...(propsWith(homeV0729, 'items')!['items'] as string[])]);
+    expect(occurrences(home, WORDS)).toBe(1);
     const p = await menuPageProps();
     expect(p.facts.announcement).toBe(WORDS);
     expect(JSON.stringify(p.jsonLd)).not.toContain(WORDS);
-    // Off again (the till always sends it): the home page is v0.7.29's.
+    // Off again (the till always sends it): the home page as before.
     await publish(m, tillBlock(m, { rev: 2, website: { announcement: { on: false, text: WORDS } } }));
-    expect(await homeTree()).toEqual(homeV0729);
+    expect(await homeTree()).toEqual(homeGolden.menu);
     expect((await menuPageProps()).facts.announcement).toBeNull();
   });
 
@@ -524,7 +531,7 @@ describe('the announcement: page text on the home page and /menu while on', () =
     expect(r.json.data).toMatchObject({ settings: 'stored', categories: 2, items: 8 });
     expect(revalidated).toEqual(['/ layout']);
     expect((await getSiteFacts()).announcement).toBe(WORDS);
-    expect(occurrences(await homeTree(), WORDS)).toBe(2);
+    expect(occurrences(await homeTree(), WORDS)).toBe(1);
   });
 });
 

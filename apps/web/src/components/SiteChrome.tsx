@@ -7,53 +7,56 @@ import { orderLine, shopHoursLine, shopTelUrl, whatsappLinesOf } from '@/lib/sho
 import { getCopyFacts } from '@/lib/site-facts';
 import { BrandMark } from './BrandMark';
 import { LocationChip } from './location/LocationChip';
+import { NavMenu } from './NavMenu';
 import { RecentOrderLink } from './RecentOrderLink';
 
 /**
  * The header and footer on every page, with the shop's details from the
  * owner's settings (lib/site-facts getCopyFacts — one read per page, shared
  * with the root layout and the page): today's with none stored.
+ *
+ * The header (3 Nov 2026, the user: "logo at center beautifully and order now button on right side and other nav bar
+ * links on left"): three columns of one bar — the links (a phone: the menu button, NavMenu), the logo in the middle
+ * whatever the two sides hold, and the area with Order now.
  */
 export async function SiteHeader() {
   const facts = await getCopyFacts();
   const shop = shopOf(facts);
+  const zones = facts.zones.map((z) => ({ id: z.id, shortName: z.shortName }));
+  const link = 'rounded-full px-3 py-2 font-cond text-base font-bold uppercase tracking-wide text-cream/80 transition-colors hover:bg-white/5 hover:text-cheese';
   return (
     <header className="sticky top-0 z-40 border-b border-white/10 bg-night/85 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-2 px-4 sm:h-[4.5rem]">
-        <Link href="/" aria-label={`${shop.profile.name} home`} className="shrink-0">
-          <BrandMark className="!h-9 sm:!h-10" />
-        </Link>
-        <nav aria-label="Main" className="flex items-center gap-0.5 text-sm font-semibold sm:gap-1">
-          <RecentOrderLink />
-          <Link
-            href="/menu"
-            className="rounded-lg px-2.5 py-2 text-cream/80 transition-colors hover:bg-white/5 hover:text-cheese max-[359px]:hidden sm:px-3"
-          >
+      <div className="mx-auto grid h-16 max-w-6xl grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-4 sm:h-[4.75rem]">
+        <nav aria-label="Main" className="flex min-w-0 items-center gap-0.5 justify-self-start">
+          <NavMenu whatsappUrl={orderLine(shop).url} zones={zones} />
+          <Link href="/menu" className={`hidden sm:block ${link}`}>
             Menu
           </Link>
-          <Link
-            href="/delivery"
-            className="hidden rounded-lg px-3 py-2 text-cream/80 transition-colors hover:bg-white/5 hover:text-cheese sm:block"
-          >
+          <Link href="/delivery" className={`hidden md:block ${link}`}>
             Delivery areas
           </Link>
-          <a
-            href={orderLine(shop).url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hidden rounded-lg px-3 py-2 text-cream/80 transition-colors hover:bg-white/5 hover:text-cheese md:block"
-          >
+          <a href={orderLine(shop).url} target="_blank" rel="noopener noreferrer" className={`hidden lg:block ${link}`}>
             WhatsApp
           </a>
+          <span className="hidden sm:block">
+            <RecentOrderLink />
+          </span>
+        </nav>
+        <Link href="/" aria-label={`${shop.profile.name} home`} className="justify-self-center">
+          <BrandMark className="!h-11 sm:!h-[3.25rem]" />
+        </Link>
+        <div className="flex items-center gap-2 justify-self-end">
           {/* The landing popup's area, and the way to change it (client only: nothing in the page's HTML). */}
-          <LocationChip zones={facts.zones.map((z) => ({ id: z.id, shortName: z.shortName }))} />
+          <span className="hidden sm:block">
+            <LocationChip zones={zones} />
+          </span>
           <Link
             href="/menu"
-            className="ml-1 whitespace-nowrap rounded-full bg-cheese px-4 py-2.5 font-display text-base tracking-wide text-night shadow-glow transition-all hover:bg-cheese-hot hover:shadow-glow-lg active:scale-95 sm:ml-2 sm:px-5"
+            className="whitespace-nowrap rounded-full bg-cheese px-4 py-2.5 font-display text-base tracking-wide text-night shadow-glow transition-all hover:bg-cheese-hot hover:shadow-glow-lg active:scale-95 sm:px-6 sm:text-lg"
           >
             ORDER NOW
           </Link>
-        </nav>
+        </div>
       </div>
     </header>
   );
