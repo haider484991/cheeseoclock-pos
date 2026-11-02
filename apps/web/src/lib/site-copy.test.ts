@@ -34,6 +34,7 @@ import {
   generatedFeeSummary,
   outsideZoneMessage,
   placesWords,
+  renderCopy,
   zoneOptionGroups,
   type FactZone,
   type SiteFacts,
@@ -43,9 +44,12 @@ import {
   BURGER_FAQ_AREAS,
   DELIVERY_HUB_DESCRIPTION,
   DELIVERY_HUB_INTRO,
+  HOME_DELIVERY_HEADING,
   HOME_DELIVERY_NOTE,
   HOME_FAQ_AREAS,
   HOME_HERO_FEE,
+  HOME_HERO_HEADING,
+  HOME_HERO_TIME,
   HOME_STAT_FEE,
   LATE_NIGHT_FAQ_AREAS,
   PIZZA_FAQ_AREAS,
@@ -278,6 +282,30 @@ describe('a block with other fees', () => {
     expect(outsideZoneMessage(facts)).toBe(
       'We deliver in DHA, Clifton and PECHS only. Choose your area from the list — if it is not there, we cannot deliver to it.',
     );
+  });
+
+  it('the home page names DHA and Clifton while every one of their areas is on, an area beyond them or not (3 Nov 2026: the live site’s Abysinya Lines)', () => {
+    const NAMED = 'DHA\u00a0&\u00a0Clifton';
+    // Today's areas: the heading, the 40 minutes said plainly, the delivery section's heading.
+    expect(copyText(HOME_HERO_HEADING, DEFAULT_FACTS)).toBe(`Pizza & burgers delivered in ${NAMED}`);
+    expect(renderCopy(HOME_HERO_TIME, DEFAULT_FACTS)).toBe('At your door within 40 min');
+    expect(copyText(HOME_DELIVERY_HEADING, DEFAULT_FACTS)).toBe(`Delivered hot across ${NAMED}`);
+    // A farther area on as well: still DHA and Clifton (never "only" them), the 40 minutes theirs by name.
+    const farther = factsFromBlock(
+      block((zs) => {
+        zs.push({ id: 'abysinya', name: 'Abysinya Lines', shortName: 'Abysinya', group: 'Abysinya', feeCents: 40_000, feeItemId: 'fee-400', active: true, sort: zs.length, aliases: [] });
+      }),
+    );
+    expect(copyText(HOME_HERO_HEADING, farther)).toBe(`Pizza & burgers delivered in ${NAMED}`);
+    expect(renderCopy(HOME_HERO_TIME, farther)).toBe('Within 40 min in DHA & Clifton');
+    expect(copyText(HOME_DELIVERY_HEADING, farther)).toBe(`Delivered hot across ${NAMED}`);
+    // One of theirs switched off: the areas as they are, and no time promised.
+    const oneOff = factsFromBlock(block((zs) => (zone(zs, 'dha-8').active = false)));
+    expect(copyText(HOME_HERO_HEADING, oneOff)).toBe('Pizza & burgers delivered in DHA and Clifton');
+    expect(renderCopy(HOME_HERO_TIME, oneOff)).toBeNull();
+    // Every area off: no promise of a delivery at all.
+    const off = factsFromBlock(block((zs) => zs.forEach((z) => (z.active = false))));
+    expect(copyText(HOME_HERO_HEADING, off)).toBe('Pizza & burgers from our DHA Phase 6 kitchen');
   });
 
   it('never says it delivers only to DHA and Clifton once the owner’s areas say otherwise (an area added, a group switched off, every area off)', () => {

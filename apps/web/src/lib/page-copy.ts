@@ -46,12 +46,14 @@ export const HOME_HERO_FEE: Copy = { text: 'Delivery from {minFee}', when: { del
 
 /**
  * The home page's heading (3 Nov 2026: Google brings people who searched for a pizza or burger delivery in DHA,
- * and its first screen said only the shop's name): what the shop does and where, in their words.
+ * and its first screen said only the shop's name): what the shop does and where, in their words. It names DHA and
+ * Clifton while every one of their areas is on — never "only" them, so an area added beyond them (the owner's
+ * Abysinya Lines, Brooks Chowrangi) leaves it standing; the user, 30 Oct 2026: the shop is for DHA, Clifton and Emaar.
  */
 export const HOME_HERO_HEADING: Copy = {
   // "DHA & Clifton" kept on one line (no break spaces): it never ends a line on "DHA".
   text: 'Pizza & burgers delivered in DHA & Clifton',
-  when: { areasAsBuilt: true },
+  when: { on: ALL_COMPILED_ZONE_IDS },
   otherwise: {
     text: 'Pizza & burgers delivered in {where}',
     when: { delivering: true },
@@ -59,13 +61,20 @@ export const HOME_HERO_HEADING: Copy = {
   },
 };
 
-/** Under it: how long a delivery takes in DHA and Clifton (the user, 24 Oct 2026: 40 minutes at most). Other areas: left out. */
-export const HOME_HERO_TIME: Copy = { text: `At your door within ${DELIVERY_MAX_MINUTES.near} min`, when: { areasAsBuilt: true } };
+/**
+ * Under it: how long a delivery takes in DHA and Clifton (the user, 24 Oct 2026: 40 minutes at most) — said plainly
+ * while they are the only areas, with their names once a farther one is on (it takes longer); left out otherwise.
+ */
+export const HOME_HERO_TIME: Copy = {
+  text: `At your door within ${DELIVERY_MAX_MINUTES.near} min`,
+  when: { areasAsBuilt: true },
+  otherwise: { text: `Within ${DELIVERY_MAX_MINUTES.near} min in DHA & Clifton`, when: { on: ALL_COMPILED_ZONE_IDS } },
+};
 
 /** The home page's delivery section heading (3 Nov 2026), over the fees by area and the shop's map. */
 export const HOME_DELIVERY_HEADING: Copy = {
   text: 'Delivered hot across DHA & Clifton',
-  when: { areasAsBuilt: true },
+  when: { on: ALL_COMPILED_ZONE_IDS },
   otherwise: { text: 'Delivered hot across {where}', when: { delivering: true }, otherwise: 'Delivery' },
 };
 
