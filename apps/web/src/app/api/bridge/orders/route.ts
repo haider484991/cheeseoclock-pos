@@ -5,6 +5,8 @@ import { sweepComments } from '@/lib/comment-replies';
 import { getShopFacts } from '@/lib/site-facts';
 import { unconfirmedOrderCutoff } from '@/lib/store-status';
 import { ensureWebOrderColumns } from '@/lib/web-order-columns';
+import { remindWaitingOrdersNow } from '@/lib/whatsapp-bot-run';
+import { orderInProcess } from '@/lib/whatsapp-order';
 import { readDiscountParts, type WebDiscountPart } from '@cheeseoclock/shared-types';
 
 export const dynamic = 'force-dynamic';
@@ -32,6 +34,8 @@ export async function GET(req: Request): Promise<Response> {
   // While the till is on it asks every few seconds: the comment auto-replies ride along, at most every 3 minutes,
   // after this answer has gone (lib/comment-replies).
   waitUntil(sweepComments(getShopFacts));
+  // So does the WhatsApp order a customer left waiting, shown to them again once (lib/whatsapp-bot-run).
+  waitUntil(remindWaitingOrdersNow(orderInProcess));
   try {
     await ensureWebOrderColumns();
     // Expire orders nobody confirmed in time BEFORE handing out the list, so

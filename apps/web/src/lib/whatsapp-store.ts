@@ -305,6 +305,31 @@ export async function writeSession(waId: string, state: string, data: Record<str
   return rows.length > 0;
 }
 
+/**
+ * Orders left half-built: something in the order, the bot's last step between `from` and `to` waiting on the customer
+ * (Delivery or Pick-up, the area, the address, the name, Place order), and not shown to them again yet
+ * (lib/whatsapp-bot-run remindWaitingOrders).
+ */
+export async function waitingSessions(from: Date, to: Date): Promise<Array<WaSession & { waId: string }>> {
+  await ensureWhatsappSchema();
+  const rows = (await sql()`
+    SELECT wa_id, state, data, version, updated_at FROM wa_sessions
+     WHERE state IN ('cart', 'fulfilment', 'qty', 'zones', 'address', 'name', 'confirm')
+       AND updated_at >= ${from.toISOString()} AND updated_at <= ${to.toISOString()}
+       AND jsonb_array_length(coalesce(data->'cart', '[]'::jsonb)) > 0
+       AND coalesce(data->>'reminded', '') <> 'true'
+     ORDER BY updated_at
+     LIMIT 20
+  `) as Array<{ wa_id: string; state: string; data: Record<string, unknown> | string; version: number; updated_at: string | Date }>;
+  return rows.map((r) => ({
+    waId: r.wa_id,
+    state: r.state,
+    data: typeof r.data === 'string' ? (JSON.parse(r.data) as Record<string, unknown>) : r.data,
+    version: Number(r.version),
+    updatedAt: new Date(r.updated_at),
+  }));
+}
+
 /** Staff wrote to this customer from the phone app since then: the chat is theirs, and the bot keeps out of it. */
 export async function staffWroteSince(waId: string, since: Date): Promise<boolean> {
   const rows = (await sql()`

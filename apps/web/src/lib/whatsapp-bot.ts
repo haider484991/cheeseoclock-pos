@@ -8,7 +8,7 @@ import {
   type PublishedMenuItem,
   type PublishedModifierGroup,
 } from '@cheeseoclock/shared-types';
-import { feeRangeOfFees, zoneNameWithLocalNames, type FactZone } from './delivery-facts';
+import { DELIVERY_MAX_MINUTES, feeRangeOfFees, zoneNameWithLocalNames, type FactZone } from './delivery-facts';
 import { formatCents } from './format';
 import { isDealSection, isPickupOnly } from './menu-view';
 import { validateModifierSelection } from './order-validation';
@@ -91,6 +91,8 @@ export interface BotData {
   choices?: string[];
   /** A location they shared for the delivery: on the order's notes as a map link (api/orders locationPin). */
   pin?: { lat: number; lng: number } | null;
+  /** This order was shown to them again once after they left it waiting (BotTurn.remind): never a second time. */
+  reminded?: boolean;
 }
 
 /** Where the shop is (lib/business, lib/shop-facts): said in the welcome, sent as a map pin for a pick-up. */
@@ -184,8 +186,16 @@ export interface BotTurn {
   reply: { id: string; title: string } | null;
   /** A cart sent from the WhatsApp catalog (lib/meta-catalog). */
   order?: Array<{ posItemId: string; quantity: number }> | null;
-  /** The day's hello (helloLine), when this message is the customer's first of the day: put over the menu if it is shown. */
+  /**
+   * The day's hello (helloLine), when this message is the customer's first of the day: put over the first thing shown
+   * (the menu, an item's question, or the order when an ad's words named a deal).
+   */
   hello?: string | null;
+  /**
+   * Not a message: the order they left half-built, shown again once to finish it (lib/whatsapp-bot-run
+   * remindWaitingOrders).
+   */
+  remind?: boolean;
   /** A location they shared (lib/whatsapp-webhook): their pin, and the place's name and address when it has them. */
   location?: { lat: number; lng: number; name: string | null; address: string | null } | null;
 }
@@ -308,16 +318,31 @@ export function helloLine(o: { shopName: string; profileName: string | null }): 
   return `Hi${name ? ` ${name}` : ''}! Welcome to ${o.shopName} 🧀`;
 }
 
+/**
+ * The WhatsApp name with what is not a name taken out: emoji, digits, signs, an e-mail's domain, fancy letters made
+ * plain ("QUMBER ALI SHIGRI*", "asif😊", "mustafanayani40", "𝕸𝖔𝖍𝖘𝖎𝖓"). 2 Nov 2026: a third of the chats' names
+ * were refused whole for one such sign, and a customer an ad brought, asked for a name, went quiet at that question.
+ */
+function cleanName(profileName: string | null): string {
+  return (profileName ?? '')
+    .normalize('NFKC')
+    .split('@')[0]!
+    .replace(/[^\p{L}\p{M} .'’-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[ .'’-]+|[ .'’-]+$/g, '');
+}
+
 /** "Ali" from "Ali Raza": a first name of letters only, else nothing. */
 function firstName(profileName: string | null): string | null {
-  const first = profileName?.trim().split(/\s+/)[0] ?? '';
+  const first = cleanName(profileName).split(' ')[0] ?? '';
   return /^\p{L}{2,20}$/u.test(first) ? first : null;
 }
 
-/** The WhatsApp name as an order's name: letters, spaces and dots, 2–40 long; else none. */
+/** The WhatsApp name as an order's name (cleanName): two letters at least, 40 long at most (whole words); else none. */
 function orderName(profileName: string | null): string | null {
-  const n = profileName?.replace(/\s+/g, ' ').trim() ?? '';
-  return /^[\p{L} .'-]{2,40}$/u.test(n) && /\p{L}/u.test(n) ? n : null;
+  const n = cleanName(profileName);
+  if ((n.match(/\p{L}/gu) ?? []).length < 2) return null;
+  return n.length <= 40 ? n : n.slice(0, 41).replace(/\s+\S*$/, '') || n.slice(0, 40);
 }
 
 // ---------------------------------------------------------------------------
@@ -899,14 +924,22 @@ function foundView(shop: BotShop, items: readonly PublishedMenuItem[]): View {
   );
 }
 
-/** One choice an item needs, the item and its price on top (so "Price?" at this step is answered too). */
-function choiceView(shop: BotShop, item: PublishedMenuItem, group: PublishedModifierGroup, step: number, of: number, picked: readonly string[]): View {
+/**
+ * One choice an item needs, the item and its price on top (so "Price?" at this step is answered too). `first`: the
+ * day's hello over it.
+ */
+function choiceView(shop: BotShop, item: PublishedMenuItem, group: PublishedModifierGroup, step: number, of: number, picked: readonly string[], first?: string): View {
   const left = group.modifiers.filter((m) => !picked.includes(m.posModifierId));
   const need = Math.max(1, group.minSelect) - picked.length;
   const label = groupLabelOf(group);
   const ask = need > 1 ? `${label}: choose any *${need}* (one at a time)` : /^choose\b/i.test(label) ? `${label}:` : `Which ${label.toLowerCase()}?`;
   return tapView(
-    [`${emojiOf(item.name)} *${item.name}* — ${priceShown(item.basePriceCents, offPercent(shop, item))}${item.taxIncluded ? '' : ' + tax'} ✅`, '', `${ask}${of > 1 ? ` (${step + 1}/${of})` : ''}`],
+    [
+      ...(first ? [first, ''] : []),
+      `${emojiOf(item.name)} *${item.name}* — ${priceShown(item.basePriceCents, offPercent(shop, item))}${item.taxIncluded ? '' : ' + tax'} ✅`,
+      '',
+      `${ask}${of > 1 ? ` (${step + 1}/${of})` : ''}`,
+    ],
     left.map((m) => ({ id: `m:${m.posModifierId}`, title: choiceName(m.name), ...(m.priceDeltaCents > 0 ? { description: `+${formatCents(m.priceDeltaCents)}` } : {}) })),
     chooseLabel(label),
   );
@@ -923,14 +956,54 @@ function orderLines(shop: BotShop, line: CartLine): string[] {
   ];
 }
 
-/** The order so far, then Delivery, Pick-up or more as tap buttons. `note`: "added", "changed" on top. */
+/**
+ * The order so far, what a delivery adds, then Delivery, Pick-up or more as tap buttons. `note`: "added", "changed"
+ * on top.
+ */
 function cartView(shop: BotShop, data: BotData, note?: string): View {
   const options: Option[] = shop.pickupAvailable
     ? [{ id: 'f:delivery', title: '🛵 Delivery' }, { id: 'f:pickup', title: pickupTitle(shop) }, { id: 'k:add', title: '➕ Add more' }]
     : [{ id: 'f:delivery', title: '🛵 Delivery' }, { id: 'k:add', title: '➕ Add more' }, { id: 'k:clear', title: '🗑️ Clear order' }];
+  const delivery = deliveryLine(shop);
   return tapView(
-    [...(note ? [note, ''] : []), ...data.cart.flatMap((l) => orderLines(shop, l)), '', shop.pickupAvailable ? '*Delivery or pick-up?*' : 'Tap *Delivery* to go on'],
+    [
+      ...(note ? [note, ''] : []),
+      ...data.cart.flatMap((l) => orderLines(shop, l)),
+      ...(delivery ? ['', delivery] : []),
+      '',
+      shop.pickupAvailable ? '*Delivery or pick-up?*' : 'Tap *Delivery* to go on',
+    ],
     options,
+    'Choose',
+  );
+}
+
+/**
+ * What a delivery to the named areas adds and how long it takes, said with the order before Delivery or Pick-up is
+ * chosen (2 Nov 2026: two of the four people an ad brought 31 Oct–1 Nov got as far as their order with its deal's
+ * price and stopped there; the charge was said only at the end).
+ */
+function deliveryLine(shop: BotShop): string | null {
+  const areas = areaGroupsWords(shop);
+  const charge = chargeWords(shop);
+  if (!areas || !charge) return null;
+  return `🛵 Delivery ${charge === 'free' ? 'free' : charge} · within ${DELIVERY_MAX_MINUTES.near} min (${areas})`;
+}
+
+/**
+ * "Add more": what can be added, the order so far on top, and "That's all" back to it (2 Nov 2026: a customer with a
+ * deal in the order tapped Add more, got the whole deal menu picture again as if starting over, and left).
+ */
+function addMoreView(shop: BotShop, data: BotData): View {
+  return tapView(
+    ['➕ *What would you like to add?*', '', '🛒 *In your order:*', ...data.cart.flatMap((l) => orderLines(shop, l))],
+    [
+      { id: 'o:deals', title: '🔥 Deals' },
+      ...(buy1Get1Now(shop) && buy1Get1Items(shop).length > 0 ? [{ id: 'o:b1g1', title: '🎁 Buy 1 Get 1' }] : []),
+      { id: 'o:pizza', title: '🍕 Pizza' },
+      { id: 'o:burger', title: '🍔 Burger' },
+      { id: 'k:cart', title: '✅ That’s all', description: 'Back to my order' },
+    ],
     'Choose',
   );
 }
@@ -1053,7 +1126,8 @@ function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: numb
   return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-function confirmView(shop: BotShop, data: BotData, q: Extract<OrderAnswer, { ok: true }>, phone: string): View {
+/** The order as the website prices it, to place, change or cancel. `note`: a line over it (the reminder's). */
+function confirmView(shop: BotShop, data: BotData, q: Extract<OrderAnswer, { ok: true }>, phone: string, note?: string): View {
   const fees = feeIds(shop);
   const lines = (q.lines ?? []).flatMap((l) => {
     if (fees.has(l.posItemId) || /delivery charge/i.test(l.name)) return [`🛵 Delivery — ${formatCents(l.unitPriceCents * l.quantity)}`];
@@ -1066,6 +1140,7 @@ function confirmView(shop: BotShop, data: BotData, q: Extract<OrderAnswer, { ok:
   const area = zone && !normalizeAreaText(data.address ?? '').includes(normalizeAreaText(zone.name)) ? ` (${zone.name})` : '';
   return tapView(
     [
+      ...(note ? [note, ''] : []),
       '🧾 *Your order*',
       '',
       ...lines,
@@ -1088,6 +1163,9 @@ function confirmView(shop: BotShop, data: BotData, q: Extract<OrderAnswer, { ok:
 
 /** A delivery's address when it is a shared location with no name: the pin itself goes on the order as a map link. */
 const PIN_ADDRESS = 'Location pin (map)';
+
+/** Over the order shown again to someone who left it waiting (BotTurn.remind). */
+const REMINDER = '👋 *Your order is still waiting!* 🧀';
 
 /** A message the step could not use (said once; after that the chat is staff's), or a tap from no list we know. */
 const HELP: WaOut = {
@@ -1136,6 +1214,16 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     id = pick;
   }
 
+  /** The day's hello, said once: over the first thing shown (the menu, an item's question, the order). */
+  let hello = turn.hello ?? null;
+  const takeHello = (): string | undefined => {
+    const h = hello ?? undefined;
+    hello = null;
+    return h;
+  };
+  /** "✅ Added to your order!", under the day's hello when an ad's words named the deal. */
+  const added = (): string => [takeHello(), '✅ *Added to your order!*'].filter(Boolean).join('\n\n');
+
   /** Where an order starts: the deal menu picture (with the day's hello on top when there is one). */
   const showStart = (first?: string) => {
     offer(startView(shop, first));
@@ -1178,7 +1266,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
         p.step += 1;
         continue;
       }
-      offer(choiceView(shop, item, g, p.step, groups.length, inGroup));
+      offer(choiceView(shop, item, g, p.step, groups.length, inGroup, takeHello()));
       return go('choice');
     }
     // The usual drink and dip (an item started before they were the bot's to pick gets them now).
@@ -1194,7 +1282,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     addPending(p.quantity ?? 1);
     // From a catalog cart (or several numbers typed): on to its next item (the order once none are left).
     if (data.queue) return nextFromQueue();
-    showCart('✅ *Added to your order!*');
+    showCart(added());
   };
 
   /** The pending item into the order (the same item with the same choices adds up). */
@@ -1274,7 +1362,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       return askNext();
     }
     delete data.queue;
-    showCart('✅ *Added to your order!*');
+    showCart(added());
   }
 
   const orderBody = (): Record<string, unknown> => {
@@ -1312,14 +1400,15 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
     showCart();
   };
 
-  const quote = async () => {
+  /** The order priced as the website would, to place. `note`: a line over it (the reminder's). */
+  const quote = async (note?: string) => {
     // Nothing to price (Confirm sent again after the order went through): back to the menu.
     if (data.cart.length === 0) return showStart();
     data.token ??= await deps.link();
     const q = await deps.order({ ...orderBody(), dryRun: true });
     if (!q.ok) return refused(q);
     data.orderId ??= deps.newId();
-    offer(confirmView(shop, data, q, localOf(turn.waId)));
+    offer(confirmView(shop, data, q, localOf(turn.waId), note));
     go('confirm');
   };
 
@@ -1484,11 +1573,20 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       return true;
     }
     if (priced || (greet && asksForMenu(said))) {
-      showStart(turn.hello ?? undefined);
+      showStart(takeHello());
       return true;
     }
     return false;
   };
+
+  // Not a message: the order they left waiting, once, ready to go on (lib/whatsapp-bot-run remindWaitingOrders). Its
+  // price to place when it got that far; else the order with Delivery or Pick-up.
+  if (turn.remind) {
+    data.reminded = true;
+    if (state === 'confirm' && data.fulfilment) await quote(REMINDER);
+    else showCart(REMINDER);
+    return { state, data, out };
+  }
 
   // Whatever the step: start over, stop, or ask for a person.
   if (id === 'o:staff' || (!id && STAFF.test(text))) {
@@ -1512,7 +1610,7 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
   }
   if (starting) {
     // The deal menu (an order already started stays: "cart" shows it).
-    showStart(turn.hello ?? undefined);
+    showStart(takeHello());
     return { state, data, out };
   }
   if (!id && CART_WORDS.test(text)) {
@@ -1587,10 +1685,16 @@ export async function runBot(turn: BotTurn, saved: { state: BotState; data: BotD
       case 'q':
         // The old bot's "how many" buttons.
         if (data.pending) addPending(Math.min(9, Math.max(1, Number(a) || 1)));
-        showCart('✅ *Added to your order!*');
+        showCart(added());
         break;
       case 'k':
-        if (a === 'add') showMenu();
+        if (a === 'add') {
+          if (data.cart.length === 0) showMenu();
+          else {
+            offer(addMoreView(shop, data));
+            go('menu');
+          }
+        }
         else if (a === 'clear') {
           data = { cart: [], ...(data.token ? { token: data.token } : {}) };
           say({ type: 'text', body: 'Order cleared 🗑️' });

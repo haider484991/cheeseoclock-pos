@@ -24,13 +24,15 @@ const TESTER = '923088440608';
 const TESTER_2 = '923001110000';
 const TESTER_3 = '923001110003';
 const TESTER_4 = '923001110004';
+const TESTER_5 = '923001110005';
+const TESTER_6 = '923001110006';
 Object.assign(process.env, {
   META_APP_SECRET: SECRET,
   BRIDGE_SECRET: BRIDGE,
   WHATSAPP_ACCESS_TOKEN: 'test-token',
   WHATSAPP_PHONE_NUMBER_ID: PHONE_ID,
   WHATSAPP_ORDER_BOT: 'test',
-  WHATSAPP_BOT_TESTERS: `+${TESTER},+${TESTER_2},+${TESTER_3},+${TESTER_4}`,
+  WHATSAPP_BOT_TESTERS: `+${TESTER},+${TESTER_2},+${TESTER_3},+${TESTER_4},+${TESTER_5},+${TESTER_6}`,
   WHATSAPP_AUTO_REPLY: 'on',
 });
 
@@ -39,6 +41,8 @@ const bridgeStatus = await import('@/app/api/bridge/status/route');
 const bridgeOrders = await import('@/app/api/bridge/orders/route');
 const ack = await import('@/app/api/bridge/orders/[id]/ack/route');
 const status = await import('@/app/api/bridge/orders/[id]/status/route');
+const { remindWaitingOrders } = await import('@/lib/whatsapp-bot-run');
+const { orderInProcess } = await import('@/lib/whatsapp-order');
 
 /** Meta's Cloud API: every message the shop sends, as sent. */
 const sent: Array<{ to: string; type: string; text?: { body: string }; interactive?: { type: string; body: { text: string }; action: Record<string, unknown> } }> = [];
@@ -284,6 +288,44 @@ describe('WhatsApp ordering bot, end to end', () => {
       delete process.env['WHATSAPP_DATASET_ID'];
       delete process.env['WHATSAPP_BUSINESS_ACCOUNT_ID'];
     }
+  });
+
+  it('an order left waiting 10 minutes is shown to its customer again, once; its buttons go on as before (2 Nov 2026)', async () => {
+    /** The bot's last step in this chat, so many minutes ago. */
+    const lastStepAgo = (waId: string, minutes: number) => db.pg.query(`UPDATE wa_sessions SET updated_at = now() - make_interval(mins => $2) WHERE wa_id = $1`, [waId, minutes]);
+    await customer(TESTER_5, { text: 'Salam' });
+    expect(rowIds((await customer(TESTER_5, { tap: 'i:burger' }))[0])).toEqual(['f:delivery', 'f:pickup', 'k:add']);
+    await lastStepAgo(TESTER_5, 5);
+    expect(await remindWaitingOrders(orderInProcess)).toBe(0); // too soon
+    await lastStepAgo(TESTER_5, 15);
+    const from = sent.length;
+    expect(await remindWaitingOrders(orderInProcess)).toBe(1);
+    const reminder = sent.slice(from);
+    expect(reminder).toHaveLength(1);
+    expect(reminder[0]!.to).toBe(TESTER_5);
+    expect(words(reminder[0])).toMatch(/^👋 \*Your order is still waiting!\* 🧀\n\n🍔 \*Classic Crispy Chicken\*/);
+    expect(rowIds(reminder[0])).toEqual(['f:delivery', 'f:pickup', 'k:add']);
+    // Once: not again however long it waits after that.
+    await lastStepAgo(TESTER_5, 20);
+    expect(await remindWaitingOrders(orderInProcess)).toBe(0);
+    // Its buttons are the order's: Pick-up, then Place order.
+    expect(rowIds((await customer(TESTER_5, { tap: 'f:pickup' }))[0])).toEqual(['y:confirm', 'y:edit', 'y:cancel']);
+  });
+
+  it('no reminder when staff are in the chat, the order was left over an hour ago, or the shop is closed', async () => {
+    const lastStepAgo = (minutes: number) => db.pg.query(`UPDATE wa_sessions SET updated_at = now() - make_interval(mins => $2) WHERE wa_id = $1`, [TESTER_6, minutes]);
+    await customer(TESTER_6, { text: 'Salam' });
+    await customer(TESTER_6, { tap: 'i:burger' });
+    await lastStepAgo(90);
+    expect(await remindWaitingOrders(orderInProcess)).toBe(0);
+    await lastStepAgo(15);
+    await bridgeStatus.PUT(bridge('/api/bridge/status', { acceptingOrders: false, deviceId: 'till-1', features: ['pickup'] }, 'PUT'));
+    expect(await remindWaitingOrders(orderInProcess)).toBe(0);
+    await bridgeStatus.PUT(bridge('/api/bridge/status', { acceptingOrders: true, deviceId: 'till-1', features: ['pickup'] }, 'PUT'));
+    await staffWrites(TESTER_6, new Date(Date.now() - 5 * 60_000));
+    expect(await remindWaitingOrders(orderInProcess)).toBe(0);
+    // Left as it was: the chat is staff's.
+    expect(((await db.pg.query(`SELECT data FROM wa_sessions WHERE wa_id = $1`, [TESTER_6])).rows as Array<{ data: { reminded?: boolean } }>)[0]?.data.reminded).toBeUndefined();
   });
 
   it('a customer who is not a tester still gets the day’s order link, not the bot', async () => {

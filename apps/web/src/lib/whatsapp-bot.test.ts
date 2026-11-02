@@ -195,7 +195,9 @@ describe('the WhatsApp ordering bot', () => {
     expect(cart.state).toBe('cart');
     expect(ids(cart.out[0])).toEqual(['f:delivery', 'f:pickup', 'k:add']);
     expect(titles(cart.out[0])).toEqual(['🛵 Delivery', '🏃 Pick-up 10% off', '➕ Add more']);
-    expect(textOf(cart.out[0])).toBe(`✅ *Added to your order!*\n\n🍕 *Large & Chilled* — Rs 1,800\n      Chicken Tikka · Cola 1 litre\n\n*Delivery or pick-up?*\n\n${TAP}`);
+    expect(textOf(cart.out[0])).toBe(
+      `✅ *Added to your order!*\n\n🍕 *Large & Chilled* — Rs 1,800\n      Chicken Tikka · Cola 1 litre\n\n🛵 Delivery Rs 200–250 · within 40 min (DHA and Clifton)\n\n*Delivery or pick-up?*\n\n${TAP}`,
+    );
     expect(cart.data.cart).toEqual([{ posItemId: 'deal-lc', quantity: 1, modifierIds: ['dr-cola', 'fx-fries', 'pz-tikka'] }]);
 
     const address = await c.send({ tap: 'f:delivery' });
@@ -757,6 +759,98 @@ describe('the WhatsApp ordering bot', () => {
     const again = await c.send({ tap: 'y:confirm' });
     expect(again.state).toBe('menu');
     expect(bodies.filter((b) => !b['dryRun'])).toHaveLength(1);
+  });
+
+  it('an ad’s words naming a deal (2 Nov 2026): the day’s hello over the order, the delivery charge and time with it', async () => {
+    const step = await runBot(
+      { waId: '923088440608', profileName: 'Ali', text: 'I want to order the Cheese Dipped Deal', reply: null, hello: 'Hi Ali! Welcome to Shop 🧀' },
+      { state: 'menu', data: { cart: [] } },
+      shop({ menu: { ...MENU, categories: [{ posCategoryId: 'c-deals', name: 'Value Deals', displayOrder: 1, items: [item('cd', 'Cheese Dipped Deal', 1050, [], { taxIncluded: true, noDiscount: true })] }] } }),
+      fakeDeps().deps,
+    );
+    expect(step.state).toBe('cart');
+    expect(step.out).toHaveLength(1);
+    expect(textOf(step.out[0])).toBe(
+      `Hi Ali! Welcome to Shop 🧀\n\n✅ *Added to your order!*\n\n🍔 *Cheese Dipped Deal* — Rs 1,050\n\n🛵 Delivery Rs 200–250 · within 40 min (DHA and Clifton)\n\n*Delivery or pick-up?*\n\n${TAP}`,
+    );
+    expect(ids(step.out[0])).toEqual(['f:delivery', 'f:pickup', 'k:add']);
+    // A deal with a choice to make: the hello over its question instead, and not again over the order.
+    const c = chat(shop(), fakeDeps().deps, 'Ali', { state: 'menu', data: { cart: [] } });
+    const asked = await c.step(runBot({ waId: '923088440608', profileName: 'Ali', text: 'Large & Chilled', reply: null, hello: 'Hi Ali!' }, c.saved(), shop(), fakeDeps().deps));
+    expect(textOf(asked.out[0])).toMatch(/^Hi Ali!\n\n🍕 \*Large & Chilled\*/);
+    expect(textOf((await c.send({ tap: 'm:pz-tikka' })).out[0])).toMatch(/^✅ \*Added to your order!\*/);
+  });
+
+  it('“Add more” (2 Nov 2026): what can be added with the order on top, and “That’s all” back to the order — not the deal picture again', async () => {
+    const c = chat(shop({ ...LIVE_OFFERS, buy1Get1Open: false }));
+    await c.send({ tap: 'i:burger' });
+    const more = await c.send({ tap: 'k:add' });
+    expect(more.state).toBe('menu');
+    expect(more.out).toHaveLength(1);
+    expect(more.out[0]!.type).toBe('list');
+    expect(ids(more.out[0])).toEqual(['o:deals', 'o:pizza', 'o:burger', 'k:cart']);
+    expect(textOf(more.out[0])).toMatch(/^➕ \*What would you like to add\?\*\n\n🛒 \*In your order:\*\n🍔 \*Classic Crispy Chicken\*/);
+    expect(textOf(more.out[0])).toContain('4️⃣ ✅ That’s all — Back to my order');
+    // "That's all" (tapped or its number typed): the order again, Delivery or Pick-up.
+    const back = await c.send({ text: '4' });
+    expect(back.state).toBe('cart');
+    expect(ids(back.out[0])).toEqual(['f:delivery', 'f:pickup', 'k:add']);
+    // During Buy 1 Get 1 hours it is offered too; with nothing in the order yet, Add more is the menu.
+    const b1 = chat(shop(LIVE_OFFERS));
+    await b1.send({ tap: 'i:burger' });
+    expect(ids((await b1.send({ tap: 'k:add' })).out[0])).toEqual(['o:deals', 'o:b1g1', 'o:pizza', 'o:burger', 'k:cart']);
+    expect((await chat(shop(LIVE_OFFERS)).send({ tap: 'k:add' })).out[0]!.type).toBe('buttons');
+  });
+
+  it('a WhatsApp name with emoji, digits or signs in it is still the order’s name (2 Nov 2026: “QUMBER ALI SHIGRI*” was asked his name and left)', async () => {
+    const nameOf = async (profileName: string | null) => {
+      const c = chat(shop(), fakeDeps().deps, profileName);
+      await c.send({ tap: 'i:burger' });
+      const s = await c.send({ tap: 'f:pickup' });
+      return s.state === 'name' ? null : (s.data.name ?? null);
+    };
+    expect(await nameOf('QUMBER ALI SHIGRI*')).toBe('QUMBER ALI SHIGRI');
+    expect(await nameOf('asif😊')).toBe('asif');
+    expect(await nameOf('Muhammad Hanif 🙂🎭💕')).toBe('Muhammad Hanif');
+    expect(await nameOf('mustafanayani40')).toBe('mustafanayani');
+    expect(await nameOf('shahzaib 17031995')).toBe('shahzaib');
+    expect(await nameOf('ghulamqadirsahito@gmail.c')).toBe('ghulamqadirsahito');
+    expect(await nameOf('𝕴𝖙’𝖘 𝕸𝖔𝖍𝖘𝖎𝖓 𝕬𝖟𝖊𝖊𝖒✍')).toBe('It’s Mohsin Azeem');
+    expect(await nameOf('عمر فاروق')).toBe('عمر فاروق');
+    // nothing like a name left: asked
+    for (const n of ['...', '😼😼', '〽️🪬', 'A1', null]) expect(await nameOf(n)).toBeNull();
+    // the hello uses the first name the same way
+    expect(textOf(welcomeStep({ shopName: 'Shop', profileName: 'Nimra Umair♥️😍', shop: shop() }).out[0])).toMatch(/^Hi Nimra! /);
+  });
+
+  it('an order left waiting is shown again once (2 Nov 2026): the order with Delivery or Pick-up, or its price to place', async () => {
+    const remind = (from: { state: BotState; data: BotData }, deps = fakeDeps().deps) =>
+      runBot({ waId: '923088440608', profileName: null, text: null, reply: null, remind: true }, from, shop(), deps);
+    const c = chat();
+    await c.send({ tap: 'i:burger' });
+    const atCart = await remind(c.saved()!);
+    expect(atCart.state).toBe('cart');
+    expect(atCart.data.reminded).toBe(true);
+    expect(textOf(atCart.out[0])).toMatch(/^👋 \*Your order is still waiting!\* 🧀\n\n🍔 \*Classic Crispy Chicken\*/);
+    expect(ids(atCart.out[0])).toEqual(['f:delivery', 'f:pickup', 'k:add']);
+    // At the address, the area or the name: the order again (Delivery goes on from what they gave).
+    await c.send({ tap: 'f:delivery' });
+    expect(c.saved()!.state).toBe('address');
+    expect((await remind(c.saved()!)).state).toBe('cart');
+    // At Place order: priced again, Place order under it.
+    const { deps, bodies } = fakeDeps();
+    const d = chat(shop(), deps);
+    await d.send({ tap: 'i:burger' });
+    await d.send({ tap: 'f:pickup' });
+    expect(d.saved()!.state).toBe('confirm');
+    const atConfirm = await remind(d.saved()!, deps);
+    expect(atConfirm.state).toBe('confirm');
+    expect(textOf(atConfirm.out[0])).toMatch(/^👋 \*Your order is still waiting!\* 🧀\n\n🧾 \*Your order\*/);
+    expect(ids(atConfirm.out[0])).toEqual(['y:confirm', 'y:edit', 'y:cancel']);
+    expect(bodies.every((b) => b['dryRun'] === true)).toBe(true);
+    // Placing it starts the next order afresh: it may be reminded again.
+    expect((await d.step(Promise.resolve(atConfirm))).data.reminded).toBe(true);
+    expect((await d.send({ tap: 'y:confirm' })).data.reminded).toBeUndefined();
   });
 
   it('the deals list greets by name, and keeps to WhatsApp’s ten rows however many deals there are', () => {

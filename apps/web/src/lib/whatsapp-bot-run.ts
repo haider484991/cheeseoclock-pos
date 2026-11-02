@@ -10,7 +10,7 @@ import { SITE_URL } from './seo';
 import { shopHoursInSentence, shopNameProse } from './shop-facts';
 import { getShopFacts, parseStoredSettings } from './site-facts';
 import { getStoreStatus } from './store-status';
-import { asksBot, helloLine, isBotCommand, runBot, welcomeStep, type BotData, type BotShop, type BotState, type OrderAnswer } from './whatsapp-bot';
+import { asksBot, helloLine, isBotCommand, runBot, welcomeStep, type BotData, type BotDeps, type BotShop, type BotState, type OrderAnswer } from './whatsapp-bot';
 import { sendBotOrderToMeta } from './whatsapp-conversions';
 import { autoReplyText, orderLinkUrl, sendMessage, type WaOut } from './whatsapp-send';
 import {
@@ -21,6 +21,7 @@ import {
   recordBotMessage,
   releaseAutoReply,
   staffWroteSince,
+  waitingSessions,
   writeSession,
   type WaInbound,
 } from './whatsapp-store';
@@ -106,6 +107,76 @@ async function botShop(): Promise<BotShop> {
  * Brooks Chowrangi) stay on the areas' list for anyone who lives there.
  */
 export const NAMED_AREAS = { words: 'DHA, Clifton and Emaar', groups: ['DHA', 'Clifton'] } as const;
+
+/** What the bot does outside itself for one customer: price or place their order, their link, the tracking page. */
+function botDeps(waId: string, order: BotDeps['order'], placed?: BotDeps['placed']): BotDeps {
+  return {
+    order,
+    link: () => createLink(waId),
+    newId: () => uuidv7(),
+    trackUrl: (orderId, phone) => `${SITE_URL}${trackPath(orderId, phone)}`,
+    websiteText: (t) => `🌐 Order on our website — your name and number are filled in for you:\n${orderLinkUrl(t)}`,
+    ...(placed ? { placed } : {}),
+  };
+}
+
+/**
+ * A half-built order is shown again to its customer this long after the bot's last step went unanswered — once
+ * (2 Nov 2026, "fix cart first": of the four people the WhatsApp ad brought 31 Oct–1 Nov, two stopped with a deal in
+ * their order at "Delivery or pick-up?", one at the name, one after "Add more"; none ordered another way).
+ */
+export const REMIND_AFTER_MS = 10 * 60_000;
+/** Left longer than this, no reminder: they have moved on (and a deploy never wakes yesterday's chats). */
+export const REMIND_WITHIN_MS = 60 * 60_000;
+
+/**
+ * Every order left waiting REMIND_AFTER_MS (lib/whatsapp-store waitingSessions) shown again to its customer, once:
+ * only while the shop takes orders, only to the bot's customers (botFor), never when staff wrote to them in the last
+ * hour (the chat is theirs), and well inside WhatsApp's 24 hours (they wrote within the hour). The till's order pull
+ * runs it (api/bridge/orders: every few seconds while the till is on); a customer who answers at the same moment wins
+ * (the session's version). The number of reminders sent.
+ */
+export async function remindWaitingOrders(order: BotDeps['order'], now: Date = new Date()): Promise<number> {
+  const token = process.env['WHATSAPP_ACCESS_TOKEN'];
+  const phoneNumberId = process.env['WHATSAPP_PHONE_NUMBER_ID'];
+  if (!token || !phoneNumberId) return 0;
+  const waiting = await waitingSessions(new Date(now.getTime() - REMIND_WITHIN_MS), new Date(now.getTime() - REMIND_AFTER_MS));
+  if (waiting.length === 0) return 0;
+  const shop = await botShop();
+  if (!shop.open) return 0;
+  let reminded = 0;
+  for (const s of waiting) {
+    if (!botFor(s.waId) || (await staffWroteSince(s.waId, new Date(now.getTime() - STAFF_QUIET_MS)))) continue;
+    const step = await runBot(
+      { waId: s.waId, profileName: null, text: null, reply: null, remind: true },
+      { state: s.state as BotState, data: s.data as unknown as BotData },
+      shop,
+      botDeps(s.waId, order),
+    );
+    if (!(await writeSession(s.waId, step.state, step.data as unknown as Record<string, unknown>, s.version))) continue;
+    for (const message of step.out) {
+      const r = await sendMessage({ phoneNumberId, to: s.waId, message, token });
+      if (r.ok) await recordBotMessage({ messageId: r.messageId, waId: s.waId, at: new Date() });
+      else console.error('whatsapp reminder not sent', r.error);
+    }
+    reminded++;
+  }
+  return reminded;
+}
+
+/** When this instance last looked for orders left waiting: the till asks every few seconds, a look a minute is plenty. */
+let lastReminderLook = 0;
+
+/** remindWaitingOrders at most once a minute, never failing the till's call it rides along with. */
+export async function remindWaitingOrdersNow(order: BotDeps['order'], now: Date = new Date()): Promise<void> {
+  if (now.getTime() - lastReminderLook < 60_000) return;
+  lastReminderLook = now.getTime();
+  try {
+    await remindWaitingOrders(order, now);
+  } catch (e) {
+    console.error('whatsapp reminders failed', e);
+  }
+}
 
 /**
  * One customer message for the bot. `order` places (or, with dryRun, prices) an order exactly as the website's
@@ -198,16 +269,9 @@ export async function handleBotMessage(
     { waId: m.waId, profileName: m.profileName, text: m.text, reply: m.reply, order: m.order, hello, location: m.location ?? null },
     saved,
     await bot(),
-    {
-      order,
-      link: () => createLink(m.waId),
-      newId: () => uuidv7(),
-      trackUrl: (orderId, phone) => `${SITE_URL}${trackPath(orderId, phone)}`,
-      websiteText: (t) => `🌐 Order on our website — your name and number are filled in for you:\n${orderLinkUrl(t)}`,
-      placed: (o) => {
-        placed.order = o;
-      },
-    },
+    botDeps(m.waId, order, (o) => {
+      placed.order = o;
+    }),
   );
   // Another message for this customer saved first (two taps at once): its answer stands, this one is dropped.
   if (!(await writeSession(m.waId, step.state, step.data as unknown as Record<string, unknown>, session ? session.version : null))) return;
