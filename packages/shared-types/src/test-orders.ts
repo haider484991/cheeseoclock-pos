@@ -126,3 +126,58 @@ export const TEST_DELETE_REASON_CHIPS = [
   'Menu or price test',
   'Rung up by mistake while testing',
 ] as const;
+
+/**
+ * Settings → About → "Clear practice orders" (owner, 5 Nov 2026: "we want
+ * only the logs to clear nothing else menu and items should be there" —
+ * with "give option to delete customer and drawer logs"; only during the
+ * trial). Every order goes the way of a deleted test order, but as
+ * delete_kind 'practice', so it never fills the owner's list of deleted test
+ * orders; the closed shifts and their cash in / out go too. The menu, items,
+ * choices, tax, staff, printers and settings are never touched. Only while
+ * the till has no licence key, never with FBR live, never with a shift open
+ * or a second till connected.
+ */
+export type PracticeClearBlockCode = 'licensed' | 'fbr_live' | 'shift_open' | 'second_till' | 'order_refused';
+
+export interface PracticeClearBlock {
+  code: PracticeClearBlockCode;
+  /** In plain words, for the owner. */
+  message: string;
+}
+
+/** What is on the till now (practice:preview). Nothing is written. */
+export interface PracticeClearPreview {
+  /** Orders still in the history, unfinished carts included. */
+  orders: number;
+  /** Closed shifts. */
+  shifts: number;
+  /** Cash in / cash out / rider payouts. */
+  cashMovements: number;
+  /** Rows of the cash drawer log. */
+  drawerLog: number;
+  /** Saved customers. */
+  customers: number;
+  /** Why it can't be done now; empty when it can. */
+  blocks: PracticeClearBlock[];
+}
+
+export interface PracticeClearRequest {
+  /** The owner's PIN or password, typed again. */
+  ownerSecret: string;
+  /** Also delete the saved customers (names, phone numbers, addresses). */
+  customers: boolean;
+  /** Also delete the cash drawer log. */
+  drawerLog: boolean;
+}
+
+/** What it cleared (practice:clear). */
+export interface PracticeClearResult {
+  orders: number;
+  shifts: number;
+  cashMovements: number;
+  drawerLog: number;
+  customers: number;
+  /** The safety copy made first (Settings → Backups). */
+  backupFileName: string;
+}

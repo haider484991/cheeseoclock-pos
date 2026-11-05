@@ -40,16 +40,19 @@ const MANUAL_BACKUP_PREFIX = 'manual-';
  * few — so a busy week of menu files never pushes out a daily copy.
  */
 const BEFORE_MENU_BACKUP_PREFIX = 'before-menu-';
+/** The copy taken just before the owner clears the practice orders (practice-clear-repo.ts). Kept until deleted by hand. */
+const BEFORE_CLEAR_BACKUP_PREFIX = 'before-clear-';
 const KEEP_AUTO_BACKUPS = 14;
 export const KEEP_BEFORE_MENU_BACKUPS = 5;
 
-/** 'auto' = the daily rotation; 'manual' = on demand; 'before-menu' = before a menu file from the costing PC. */
-export type BackupKind = 'auto' | 'manual' | 'before-menu';
+/** 'auto' = the daily rotation; 'manual' = on demand; 'before-menu' = before a menu file from the costing PC; 'before-clear' = before the practice orders were cleared. */
+export type BackupKind = 'auto' | 'manual' | 'before-menu' | 'before-clear';
 
 const PREFIX: Record<BackupKind, string> = {
   auto: AUTO_BACKUP_PREFIX,
   manual: MANUAL_BACKUP_PREFIX,
   'before-menu': BEFORE_MENU_BACKUP_PREFIX,
+  'before-clear': BEFORE_CLEAR_BACKUP_PREFIX,
 };
 /**
  * The daily copy is checked for this long after boot, then hourly (it is made
@@ -201,7 +204,7 @@ function backupCreated(kind: BackupKind, fileName: string, fullPath: string): Cr
   if (kind === 'before-menu') rotateBeforeMenuBackups();
   // The owner's second-copy folder (USB, cloud folder, network share), when
   // one is set: copied in the background, recorded, never fails the backup.
-  if (kind !== 'before-menu' && dbRef) void copyBackupToSecondFolder(dbRef, fullPath, fileName);
+  if (kind !== 'before-menu' && kind !== 'before-clear' && dbRef) void copyBackupToSecondFolder(dbRef, fullPath, fileName);
   return { fileName, fullPath, sizeBytes };
 }
 

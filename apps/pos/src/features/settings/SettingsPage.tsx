@@ -35,6 +35,7 @@ import { useBackupSummary } from './useBackupSummary';
 import { WebsiteSettings } from './WebsiteSettings';
 import { AboutCard } from './AboutCard';
 import { LicenceCard } from './LicenceCard';
+import { ClearPracticeCard } from './ClearPracticeCard';
 import { DeliveryCityCard } from './DeliveryCityCard';
 import { FoodpandaSettings } from './FoodpandaSettings';
 import { MoneySettings } from './MoneySettings';
@@ -217,6 +218,7 @@ export function SettingsPage() {
         {tab === 'about' && (
           <>
             <LicenceCard />
+            {full && <ClearPracticeCard />}
             <AboutCard />
           </>
         )}

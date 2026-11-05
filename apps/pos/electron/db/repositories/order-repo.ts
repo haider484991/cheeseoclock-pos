@@ -6423,6 +6423,13 @@ export interface DeleteTestOrderInput {
   expectStatus: OrderStatus;
   /** The owner whose PIN or password confirmed it (deleted_by). */
   ownerUserId: string;
+  /**
+   * 'test' (the default): one order, kept in the owner's list of deleted
+   * test orders. 'practice': cleared with every other order before the till
+   * went live (practice-clear-repo.ts) — out of that list, audited as
+   * 'clear_practice_orders'. Everything else about the delete is the same.
+   */
+  kind?: 'test' | 'practice';
 }
 
 /**
@@ -6432,7 +6439,13 @@ export interface DeleteTestOrderInput {
  * transaction. Returns the ids deleted (none for a non-foodpanda order, or
  * one paid before the terms were kept).
  */
-function softDeleteChannelTerms(db: AppDatabase, orderId: string, now: string, actorUserId: string): string[] {
+function softDeleteChannelTerms(
+  db: AppDatabase,
+  orderId: string,
+  now: string,
+  actorUserId: string,
+  action: string = 'delete_test_order',
+): string[] {
   const rows = db
     .prepare(`SELECT * FROM order_channel_terms WHERE order_id = ? AND deleted_at IS NULL ORDER BY id`)
     .all(orderId) as Array<Record<string, unknown> & { id: string }>;
@@ -6444,7 +6457,7 @@ function softDeleteChannelTerms(db: AppDatabase, orderId: string, now: string, a
     writeAudit(db, {
       entityType: 'order_channel_terms',
       entityId: row.id,
-      action: 'delete_test_order',
+      action,
       actorUserId,
       before: row,
       after: { deletedAt: now },
@@ -6489,6 +6502,8 @@ export function deleteTestOrder(
     if (f.stockState === 'holds' && typeof input.restock !== 'boolean') throw new Error(TEST_DELETE_REFUSED.restock);
     const reason = (input.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
     if (!reason) throw new Error(TEST_DELETE_REFUSED.reason);
+    const kind = input.kind === 'practice' ? 'practice' : 'test';
+    const action = kind === 'practice' ? 'clear_practice_orders' : 'delete_test_order';
     const before = getOrderSnapshot(db, input.orderId)!;
     const now = nowIso();
 
@@ -6526,7 +6541,7 @@ export function deleteTestOrder(
       writeAudit(db, {
         entityType: 'payments',
         entityId: p.id,
-        action: 'delete_test_order',
+        action,
         actorUserId: actor.userId,
         before: row,
         after: { deletedAt: now },
@@ -6537,7 +6552,7 @@ export function deleteTestOrder(
     // 0040): its commission and expected payout are money of their own, like
     // its payments, so they go with them — soft-deleted, synced and audited —
     // and nothing that reads the table by itself can count a test.
-    const channelTermsIds = softDeleteChannelTerms(db, input.orderId, now, actor.userId);
+    const channelTermsIds = softDeleteChannelTerms(db, input.orderId, now, actor.userId, action);
 
     // c3. What the drawer paid its outside rider (0049: a kept charge, a
     // wasted trip) is money of the order too: soft-deleted, synced and
@@ -6554,7 +6569,7 @@ export function deleteTestOrder(
       writeAudit(db, {
         entityType: 'cash_movements',
         entityId: m.id,
-        action: 'delete_test_order',
+        action,
         actorUserId: actor.userId,
         before: row,
         after: { deletedAt: now },
@@ -6569,17 +6584,17 @@ export function deleteTestOrder(
     const upd = db
       .prepare(
         `UPDATE orders
-            SET deleted_at = ?, deleted_by = ?, delete_reason = ?, delete_kind = 'test', delete_stock = ?,
+            SET deleted_at = ?, deleted_by = ?, delete_reason = ?, delete_kind = ?, delete_stock = ?,
                 updated_at = ?, version = version + 1
           WHERE id = ? AND deleted_at IS NULL`,
       )
-      .run(now, input.ownerUserId, reason, deleteStock, now, input.orderId);
+      .run(now, input.ownerUserId, reason, kind, deleteStock, now, input.orderId);
     if (Number(upd.changes) === 0) throw new Error(TEST_DELETE_REFUSED.gone);
     enqueueSync(db, { entityType: 'orders', entityId: input.orderId, op: 'delete', payload: { id: input.orderId, deletedAt: now } });
     writeAudit(db, {
       entityType: 'orders',
       entityId: input.orderId,
-      action: 'delete_test_order',
+      action,
       actorUserId: actor.userId,
       before,
       after: {
@@ -6597,7 +6612,7 @@ export function deleteTestOrder(
         web: f.web,
       },
     });
-    log.info('Test order deleted', { id: input.orderId, deleteStock, payments: f.payments.length });
+    log.info(kind === 'practice' ? 'Practice order cleared' : 'Test order deleted', { id: input.orderId, deleteStock, payments: f.payments.length });
     return {
       orderId: input.orderId,
       orderNumber: f.order.orderNumber,

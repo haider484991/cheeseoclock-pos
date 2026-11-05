@@ -54,6 +54,10 @@ export const ipc = {
     activate: (token: string) => unwrap(window.api.licence.activate({ token })),
     resetClock: () => unwrap(window.api.licence.resetClock()),
   },
+  practice: {
+    preview: () => unwrap(window.api.practice.preview()),
+    clear: (req: IpcRequest<'practice:clear'>) => unwrap(window.api.practice.clear(req)),
+  },
   system: {
     getVersion: () => unwrap(window.api.system.getVersion()),
     getDeviceInfo: () => unwrap(window.api.system.getDeviceInfo()),

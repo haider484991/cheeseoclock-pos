@@ -167,6 +167,7 @@ export function localCopyLabel(fileName: string): string {
   if (fileName.startsWith('manual-')) return 'Saved with “Back up now”';
   if (fileName.startsWith('before-restore-')) return 'Safety copy, made before a restore';
   if (fileName.startsWith('before-menu-')) return 'Safety copy, made before a menu file from the costing PC went in';
+  if (fileName.startsWith('before-clear-')) return 'Safety copy, made before the practice orders were cleared';
   return 'Copy';
 }
 

@@ -29,6 +29,10 @@ const api: RendererApi = {
     activate: (req) => invoke('licence:activate', req),
     resetClock: () => invoke('licence:resetClock', undefined),
   },
+  practice: {
+    preview: () => invoke('practice:preview', undefined),
+    clear: (req) => invoke('practice:clear', req),
+  },
   system: {
     getVersion: () => invoke('system:getVersion', undefined),
     getDeviceInfo: () => invoke('system:getDeviceInfo', undefined),

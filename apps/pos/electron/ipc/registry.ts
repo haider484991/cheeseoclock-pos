@@ -35,6 +35,7 @@ import { registerPowerHandlers } from './handlers/power-handlers.js';
 import { registerMenuDeployHandlers } from './handlers/menu-deploy-handlers.js';
 import { registerDashboardHandlers } from './handlers/dashboard-handlers.js';
 import { registerLicenceHandlers } from './handlers/licence-handlers.js';
+import { registerPracticeHandlers } from './handlers/practice-handlers.js';
 import { reapStaleSessions } from '../services/auth-service.js';
 import { markHeldStepIn } from './step-in-hold.js';
 import { startHousekeeping } from '../services/housekeeping.js';
@@ -147,6 +148,7 @@ export function registerAllIpcHandlers(ctx: HandlerContext): void {
   startHousekeeping(ctx.db, { fbrNoopDir: path.join(app.getPath('userData'), 'fbr-noop') });
   registerSystemHandlers(ctx);
   registerLicenceHandlers(ctx);
+  registerPracticeHandlers(ctx);
   registerAuthHandlers(ctx);
   registerUsersHandlers(ctx);
   registerMenuHandlers(ctx);

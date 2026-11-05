@@ -63,6 +63,9 @@ import type {
   DeletedTestsPage,
   DeleteTestOrderRequest,
   ListDeletedTestsRequest,
+  PracticeClearPreview,
+  PracticeClearRequest,
+  PracticeClearResult,
   TestDeletePreview,
   TestDeleteResult,
 } from './test-orders.js';
@@ -254,6 +257,23 @@ export interface IpcContract {
   'licence:resetClock': {
     request: undefined;
     response: ApiResult<LicenceStatus>;
+  };
+
+  // Clear practice orders (Settings → About; test-orders.ts): the owner (admin) only, during the trial.
+  /** What is on the till now and why it can't be cleared yet. Nothing is written. */
+  'practice:preview': {
+    request: undefined;
+    response: ApiResult<PracticeClearPreview>;
+  };
+  /**
+   * Clear them, with the owner's PIN or password typed again: a safety copy
+   * first, then every order, closed shift and cash in / out (and, when ticked,
+   * the customers and the drawer log) soft-deleted in one transaction, synced
+   * and audited. The menu, staff and settings stay. It can't be undone.
+   */
+  'practice:clear': {
+    request: PracticeClearRequest;
+    response: ApiResult<PracticeClearResult>;
   };
 
   // System
